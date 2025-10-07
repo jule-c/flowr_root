@@ -1,9 +1,9 @@
 # Flowr.root -- A flow matching based foundation model for joint multi-purpose structure-aware 3D ligand generation and affinity prediction
 ![FLOWR.root Overview](flowr_root.png)
 
-This is a research (!) repository introducing FLOWR.root. 
-Please note, for now we only provide model weights for ligand generation and affinity prediction.
-We will add full training details, different generation modes and also details about (LoRA-)finetuning over time.
+This is a research repository introducing FLOWR.root. 
+
+**⚠️ PLEASE NOTE:** This is an early release. Currently, only ligand generation and affinity prediction scripts are provided alongside the model weights. Full training details, additional generation modes, and (LoRA-)finetuning documentation will be added progressively over time.
 
 ---
 
@@ -23,7 +23,7 @@ We will add full training details, different generation modes and also details a
 
 ## Installation
 
-- **GPU**: CUDA-compatible GPU with at least 40GB VRAM recommended for training and generation
+- **GPU**: CUDA-compatible GPU with at least 40GB VRAM recommended for generation
 
 - **Package Manager**: [mamba](https://mamba.readthedocs.io)  
   Install via:
