@@ -1,0 +1,29 @@
+# Gitignore file
+
+# Editors
+.vscode/
+.DS_Store
+.virtual_documents/
+
+# Jupyter notebook checkpoints
+notebooks/.ipynb_checkpoints/
+
+# Python cache files
+__pycache__/
+*/__pycache__/
+**/__pycache__/
+*.pyc
+
+# Log files
+molproc_logs/
+lightning_logs/
+notebooks/lightning_logs/
+wandb/
+nohup.out
+
+# Slurm submission scripts and logs
+subslurm/
+slurm-*
+
+# Local data
+.data/
