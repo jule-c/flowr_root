@@ -15,8 +15,6 @@ import numpy as np
 import prolif as plf
 import torch
 from biopandas.pdb import PandasPdb
-from forge.data import MoleculeData
-from forge.property.docking import ADVinaOracle
 from rdkit import Chem
 from rdkit.Chem import (
     QED,
@@ -53,7 +51,6 @@ from flowr.util.sampling.utils import (
     number_nodes_distance,
     valency_distance,
 )
-
 from posebusters import PoseBusters
 from posecheck import PoseCheck
 
@@ -1522,106 +1519,6 @@ def evaluate_posecheck_list(
         return pc_dict
     pc_dict = {k: np.nanmean(v) for k, v in pc_dict.items()}
     return pc_dict
-
-
-def evaluate_vina(
-    gen_ligs: list[Chem.Mol],
-    ref_lig: Chem.Mol,
-    pdb_file: str,
-    mode: str = "score",
-    n_poses: int = 10,
-    exhaustiveness: int = 16,
-    only_best: bool = True,
-    seed: int = 42,
-    return_list: bool = False,
-    return_ids: bool = False,
-    return_optim_mols: bool = False,
-):
-    if isinstance(gen_ligs, Chem.Mol):
-        gen_ligs = [gen_ligs]
-
-    assert mode in [
-        "score",
-        "optimize",
-    ], "Invalid Vina mode. Choose from 'score' or 'optimize'"
-    vina_oracle = ADVinaOracle(
-        sf_name="vina",
-        mode=mode,
-        exhaustiveness=exhaustiveness,
-        n_poses=n_poses,
-        only_best=only_best,
-        seed=seed,
-        num_workers=len(os.sched_getaffinity(0)),
-        verbosity=0,
-    )
-    ligs = [
-        Chem.AddHs(mol, addCoords=True)
-        for mol in gen_ligs
-        if smolRD.mol_is_valid(mol, connected=True)
-    ]
-    molecule_data = MoleculeData(ligs)
-    molecule_data.filter_mol_and_pdbqt_validity()
-    if return_ids:
-        valid_ids = molecule_data.valid_ids
-    if len(molecule_data.rdkit_mols) == 0:
-        return {f"Vina-{mode}": []} if return_list else {f"Vina-{mode}": np.nan}
-    receptor = PandasPdb().read_pdb(pdb_file)
-    molecule_data = vina_oracle.compute(
-        molecule_data, receptor, defining_ligand=ref_lig
-    )
-    if len(molecule_data.rdkit_mols) == 0:
-        return {f"Vina-{mode}": []} if return_list else {f"Vina-{mode}": np.nan}
-    gen_scores = molecule_data.properties["docking_score"]
-    if return_list:
-        result = {f"Vina-{mode}": gen_scores}
-        if return_optim_mols:
-            assert (
-                mode == "optimize"
-            ), "Returning optimised molecules is only available in 'optimize' mode"
-            result["rdkit_mols"] = molecule_data.rdkit_mols
-        if return_ids:
-            result["valid_ids"] = valid_ids
-        return result
-    return {
-        f"Vina-{mode} (mean)": np.nanmean(gen_scores),
-        f"Vina-{mode} (std)": np.nanstd(gen_scores),
-    }
-
-
-def evaluate_vina_list(
-    gen_ligs: list[list[Chem.Mol]],
-    ref_ligs: list[Chem.Mol],
-    pdb_files: list[str],
-    mode: str = "score",
-    exhaustiveness: int = 16,
-    only_best: bool = True,
-    seed: int = 42,
-    return_list: bool = False,
-):
-    vina_scores = [] if return_list else defaultdict(list)
-    for gen_lig, ref_lig, pdb_file in tqdm(
-        zip(gen_ligs, ref_ligs, pdb_files), total=len(gen_ligs)
-    ):
-        results = evaluate_vina(
-            gen_lig,
-            ref_lig,
-            pdb_file,
-            mode=mode,
-            exhaustiveness=exhaustiveness,
-            only_best=only_best,
-            seed=seed,
-            return_list=return_list,
-        )
-        if return_list:
-            vina_scores.append(results)
-        else:
-            for metric_name, value in results.items():
-                vina_scores[metric_name].append(value)
-
-    if return_list:
-        return vina_scores
-    vina_scores = {k: np.nanmean(v) for k, v in vina_scores.items()}
-    return vina_scores
 
 
 def evaluate_strain(
