@@ -89,6 +89,8 @@ def load_util(
         coord_std=coord_std,
         pocket_noise=args.pocket_noise,
         pocket_noise_std=args.pocket_coord_noise_std,
+        use_interactions=args.interaction_inpainting,
+        rotate_complex=args.arch == "transformer",
     )
     # Initialize conformer generator if graph inpainting is enabled and set to conformer
     conformer_generator = (
