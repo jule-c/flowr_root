@@ -1899,11 +1899,11 @@ def _get_plif_recovery(
             recovery_rate = [recovery_rate]
 
     # Get Tanimoto similarity
-    tanimoto_sim = interaction_fingerprint.get_plif_recovery_rates(
-        true_fp=native_plif,
-        pred_fp=gen_plif,
-        recovery_type="similarity",
-    )
+    tanimoto_sim = None  # interaction_fingerprint.get_plif_recovery_rates(
+    #     true_fp=native_plif,
+    #     pred_fp=gen_plif,
+    #     recovery_type="similarity",
+    # )
     if tanimoto_sim is not None:
         tanimoto_sim = [sim for sim in tanimoto_sim if sim is not None]
     if not return_list:
