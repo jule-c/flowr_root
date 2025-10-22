@@ -25,6 +25,12 @@ from flowr.data.interpolate import (
     ComplexInterpolant,
     GeometricInterpolant,
     GeometricNoiseSampler,
+    extract_cores,
+    extract_fragments,
+    extract_func_groups,
+    extract_linkers,
+    extract_scaffolds,
+    extract_substructure,
 )
 from flowr.data.preprocess_pdbs import process_complex
 from flowr.util.functional import (
@@ -46,6 +52,136 @@ class dotdict(dict):
     __getattr__ = dict.get
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
+
+
+def get_conditional_mode(args):
+    return (
+        "scaffold"
+        if args.scaffold_inpainting
+        else (
+            "func_group"
+            if args.func_group_inpainting
+            else (
+                "linker"
+                if args.linker_inpainting
+                else (
+                    "core"
+                    if args.core_inpainting
+                    else (
+                        "fragment"
+                        if args.fragment_inpainting
+                        else "substructure" if args.substructure_inpainting else None
+                    )
+                )
+            )
+        )
+    )
+
+
+def filter_substructure(
+    gen_ligs: list[Chem.Mol],
+    ref_mol: Chem.Mol,
+    inpainting_mode: str,
+    substructure_query: Optional[str] = None,
+    max_fragment_cuts: int = 3,
+):
+    """
+    Filter a list of generated molecules to only those that match the required substructure.
+
+    Args:
+        gen_ligs: List of generated RDKit molecules
+        ref_mols: List of reference RDKit molecules
+        inpainting_mode: One of ['scaffold', 'func_group', 'linker', 'core',
+                        'fragment', 'substructure', 'interaction']
+        substructure_query: SMILES/SMARTS string for substructure mode
+        max_fragment_cuts: Maximum cuts for fragment mode
+    Returns:
+        Filtered list of generated molecules
+    """
+    filtered_ligs = []
+    for gen_mol in gen_ligs:
+        if check_substructure_match(
+            gen_mol,
+            ref_mol,
+            inpainting_mode,
+            substructure_query=substructure_query,
+            max_fragment_cuts=max_fragment_cuts,
+        ):
+            filtered_ligs.append(gen_mol)
+    return filtered_ligs
+
+
+def check_substructure_match(
+    gen_mol: Chem.Mol,
+    ref_mol: Chem.Mol,
+    inpainting_mode: str,
+    substructure_query: Optional[str] = None,
+    max_fragment_cuts: int = 3,
+) -> bool:
+    """
+    Check if a generated molecule contains the required substructure based on the inpainting mode.
+
+    Args:
+        gen_mol: Generated RDKit molecule
+        ref_mol: Reference RDKit molecule
+        inpainting_mode: One of ['scaffold', 'func_group', 'linker', 'core',
+                        'fragment', 'substructure', 'interaction']
+        substructure_query: SMILES/SMARTS string for substructure mode or list of atom IDs
+        max_fragment_cuts: Maximum cuts for fragment mode
+
+    Returns:
+        True if the generated molecule contains the required substructure, False otherwise
+    """
+
+    # Extract the expected substructure mask based on mode
+    if inpainting_mode == "scaffold":
+        expected_mask = extract_scaffolds([ref_mol])[0]
+    elif inpainting_mode == "func_group":
+        expected_mask = extract_func_groups([ref_mol], includeHs=True)[0]
+    elif inpainting_mode == "linker":
+        expected_mask = extract_linkers([ref_mol])[0]
+    elif inpainting_mode == "core":
+        expected_mask = extract_cores([ref_mol])[0]
+    elif inpainting_mode == "fragment":
+        expected_mask = extract_fragments([ref_mol], maxCuts=max_fragment_cuts)[0]
+    elif inpainting_mode == "substructure":
+        if substructure_query is None:
+            raise ValueError(
+                "substructure_query must be provided for substructure mode"
+            )
+        expected_mask = extract_substructure(
+            [ref_mol], substructure_query=substructure_query, invert_mask=True
+        )[0]
+    elif inpainting_mode == "interaction":
+        # For interaction mode, we can't check from ref_mol alone
+        print("Warning: Interaction mode validation not implemented")
+        return True
+    else:
+        raise ValueError(f"Unknown inpainting mode: {inpainting_mode}")
+
+    # If no atoms should be fixed, accept any molecule
+    if not expected_mask.any():
+        raise ValueError(
+            f"No substructure found for inpainting mode: {inpainting_mode}"
+        )
+
+    # Get the atom indices that should be preserved
+    expected_indices = expected_mask.nonzero(as_tuple=False).squeeze().tolist()
+
+    if isinstance(expected_indices, int):
+        expected_indices = [expected_indices]
+
+    # Create substructure molecule from reference
+    expected_submol = Chem.RWMol(ref_mol)
+    atoms_to_remove = [
+        i for i in range(ref_mol.GetNumAtoms()) if i not in expected_indices
+    ]
+    for idx in sorted(atoms_to_remove, reverse=True):
+        expected_submol.RemoveAtom(idx)
+    expected_submol = expected_submol.GetMol()
+
+    # Check if generated molecule contains the substructure
+    return gen_mol.HasSubstructMatch(expected_submol)
 
 
 def split_list(data, num_chunks):

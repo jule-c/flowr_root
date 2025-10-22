@@ -12,27 +12,18 @@ import torch
 from rdkit import Chem
 from tqdm import tqdm
 
+import flowr.gen.utils as util
 import flowr.util.rdkit as smolRD
 from flowr.data.dataset import GeometricDataset
 from flowr.gen.generate import generate_ligands_per_target
 from flowr.gen.generate_from_lmdb import get_guidance_params
-from flowr.gen.utils import (
-    filter_diverse_ligands_bulk,
-    get_dataloader,
-    load_data_from_pdb,
-    load_util,
-    process_interaction,
-    process_lig,
-    process_lig_wrapper,
-    write_ligand_pocket_complex_pdb,
-)
 from flowr.scriptutil import (
     load_model,
 )
 from flowr.util.functional import (
     LigandPocketOptimization,
 )
-from flowr.util.metrics import evaluate_pb_validity
+from flowr.util.metrics import calc_strain, evaluate_pb_validity, evaluate_strain
 from flowr.util.pocket import PocketComplexBatch
 from flowr.util.rdkit import write_sdf_file
 
@@ -89,7 +80,7 @@ def evaluate(args):
     print("Model complete.")
 
     # load util
-    transform, interpolant = load_util(
+    transform, interpolant = util.load_util(
         args,
         hparams,
         vocab,
@@ -101,7 +92,7 @@ def evaluate(args):
     guidance_params = get_guidance_params(args)
 
     # Load the data
-    system = load_data_from_pdb(
+    system = util.load_data_from_pdb(
         args,
         remove_hs=hparams["remove_hs"],
         remove_aromaticity=hparams["remove_aromaticity"],
@@ -113,22 +104,28 @@ def evaluate(args):
     else:
         sample_n_molecules_per_target = args.sample_n_molecules_per_target
 
-    print("\nStarting sampling...\n")
+    # Sampling variables
     k = 0
     num_ligands = 0
     all_gen_ligs = []
     all_gen_pdbs = []
     gen_pdbs = None
-    start = time.time()
+    inpainting_mode = util.get_conditional_mode(args)
     out_dict = defaultdict(list)
+
+    print("\nStarting sampling...\n")
+    start = time.time()
     while num_ligands < sample_n_molecules_per_target and k <= args.max_sample_iter:
         print(
             f"...Sampling iteration {k + 1}...",
             end="\r",
         )
-        dataloader = get_dataloader(args, dataset, interpolant, iter=k)
+        dataloader = util.get_dataloader(args, dataset, interpolant, iter=k)
         for i, batch in enumerate(tqdm(dataloader, desc="Sampling", leave=False)):
             prior, data, _, _ = batch
+            ref_lig = model._generate_ligs(
+                data, lig_mask=data["lig_mask"].bool(), scale=model.coord_scale
+            )[0]
             if args.arch == "pocket_flex":
                 gen_ligs, gen_pdbs = generate_ligands_per_target(
                     args,
@@ -152,6 +149,7 @@ def evaluate(args):
                     guidance_params=guidance_params,
                 )
             if args.filter_valid_unique:
+                num_sampled = len(gen_ligs)
                 if gen_pdbs:
                     gen_ligs, gen_pdbs = smolRD.sanitize_list(
                         gen_ligs,
@@ -166,14 +164,29 @@ def evaluate(args):
                         filter_uniqueness=True,
                         sanitize=True,
                     )
+                print(f"Validity rate: {round(len(gen_ligs) / num_sampled, 2)}")
+            if args.filter_cond_substructure:
+                assert (
+                    inpainting_mode is not None
+                ), "filter_cond_substructure expected to be set in combination with inpainting mode"
+                num_sampled = len(gen_ligs)
+                gen_ligs = util.filter_substructure(
+                    gen_ligs,
+                    ref_lig,
+                    inpainting_mode=inpainting_mode,
+                    substructure_query=args.substructure,
+                    max_fragment_cuts=3,
+                )
+                print(
+                    f"Substructure match rate: {round(len(gen_ligs) / num_sampled, 2)}"
+                )
+
+            # Add to global ligand list
             all_gen_ligs.extend(gen_ligs)
             if gen_pdbs:
                 all_gen_pdbs.extend(gen_pdbs)
             num_ligands += len(gen_ligs)
-        if args.filter_valid_unique:
-            print(
-                f"Validity rate: {round(len(all_gen_ligs) / sample_n_molecules_per_target, 2)}"
-            )
+
         k += 1
 
     run_time = time.time() - start
@@ -207,9 +220,6 @@ def evaluate(args):
                 sanitize=True,
             )
 
-    ref_ligs = model._generate_ligs(
-        data, lig_mask=data["lig_mask"].bool(), scale=model.coord_scale
-    )[0]
     ref_lig_with_hs = model.retrieve_ligs_with_hs(data, save_idx=0)
     ref_pdb = model.retrieve_pdbs(
         data, save_dir=Path(args.save_dir) / "ref_pdbs", save_idx=0
@@ -222,7 +232,7 @@ def evaluate(args):
     if args.arch == "pocket_flex":
         assert len(all_gen_pdbs) == len(all_gen_ligs)
         out_dict["gen_pdbs"] = all_gen_pdbs
-    out_dict["ref_lig"] = ref_ligs
+    out_dict["ref_lig"] = ref_lig
     out_dict["ref_lig_with_hs"] = ref_lig_with_hs
     out_dict["ref_pdb"] = ref_pdb
     out_dict["ref_pdb_with_hs"] = ref_pdb_with_hs
@@ -235,11 +245,11 @@ def evaluate(args):
     # Filter by diversity
     print("Filtering ligands by diversity...")
     if args.arch == "pocket_flex":
-        all_gen_ligs, all_gen_pdbs = filter_diverse_ligands_bulk(
+        all_gen_ligs, all_gen_pdbs = util.filter_diverse_ligands_bulk(
             all_gen_ligs, all_gen_pdbs, threshold=0.9
         )
     else:
-        all_gen_ligs = filter_diverse_ligands_bulk(all_gen_ligs, threshold=0.9)
+        all_gen_ligs = util.filter_diverse_ligands_bulk(all_gen_ligs, threshold=0.9)
     print(
         f"Number of ligands after filtering by diversity: {len(all_gen_ligs)} ligands ({args.sample_n_molecules_per_target - len(all_gen_ligs)} removed)"
     )
@@ -269,7 +279,7 @@ def evaluate(args):
         # Create a partial function binding pdb_file and optimizer
         if args.arch == "pocket_flex":
             process_lig_partial = partial(
-                process_lig_wrapper,
+                util.process_lig_wrapper,
                 optimizer=optimizer,
                 optimize_pocket_hs=True,
                 process_pocket=True,
@@ -280,7 +290,7 @@ def evaluate(args):
                 )
         else:
             process_lig_partial = partial(
-                process_lig,
+                util.process_lig,
                 pdb_file=ref_pdb_with_hs,
                 optimizer=optimizer,
                 process_pocket=True,
@@ -291,6 +301,24 @@ def evaluate(args):
         all_gen_ligs_hs = [Chem.Mol(lig) for lig in all_gen_ligs_hs]
         out_dict["gen_ligs_hs"] = all_gen_ligs_hs
         print("Done!")
+
+    if args.calc_strain:
+        # Calculate strain energies
+        print("Calculating strain energies...")
+        ref_strain_energy = calc_strain(
+            ref_lig_with_hs,
+            add_hs=False,
+        )
+        gen_strain_energies = evaluate_strain(
+            all_gen_ligs_hs if args.add_hs_and_optimize_gen_ligs else all_gen_ligs,
+            add_hs=(
+                False
+                if args.add_hs_and_optimize_gen_ligs
+                else True if hparams["remove_hs"] else False
+            ),
+        )
+        print(f"Reference ligand strain energy: {round(ref_strain_energy, 2)}")
+        print(f"Generated ligands strain energy: {gen_strain_energies}")
 
     # Save out_dict as pickle file
     target_name = Path(args.pdb_file).stem if args.pdb_file else args.pdb_id
@@ -313,13 +341,13 @@ def evaluate(args):
         if not gen_complexes_dir.exists():
             gen_complexes_dir.mkdir(parents=True, exist_ok=True)
         if args.add_hs_and_optimize_gen_ligs:
-            write_ligand_pocket_complex_pdb(
+            util.write_ligand_pocket_complex_pdb(
                 all_gen_ligs_hs,
                 all_gen_pdbs,
                 gen_complexes_dir,
                 complex_name=target_name,
             )
-        write_ligand_pocket_complex_pdb(
+        util.write_ligand_pocket_complex_pdb(
             all_gen_ligs,
             all_gen_pdbs,
             gen_complexes_dir,
@@ -338,7 +366,7 @@ def evaluate(args):
             for i in range(0, len(all_gen_ligs_hs), args.num_workers)
         ]
         process_interaction_partial = partial(
-            process_interaction,
+            util.process_interaction,
             ref_lig=ref_lig_with_hs,
             pdb_file=ref_pdb_with_hs,
             pocket_cutoff=args.pocket_cutoff,
@@ -348,7 +376,7 @@ def evaluate(args):
         )
         recovery_rates = []
         tanimoto_sims = []
-        with Pool(processes=args.num_workers) as pool:
+        with Pool(processes=1) as pool:
             for chunk in chunks:
                 # Process each chunk in parallel.
                 chunk_results = pool.map(process_interaction_partial, chunk)
@@ -363,14 +391,13 @@ def evaluate(args):
         print(f"Interaction Tanimoto similarity: {np.nanmean(tanimoto_sims)}")
 
 
-
 def parse_substructure(value):
     """
     Parse substructure argument as either a SMILES/SMARTS string or an integer.
-    
+
     Args:
         value: String input from argparse
-        
+
     Returns:
         str or int: SMILES/SMARTS string or atom index as integer
     """
@@ -437,6 +464,8 @@ def get_args():
 
     parser.add_argument("--filter_valid_unique", action="store_true")
     parser.add_argument("--filter_pb_valid", action="store_true")
+    parser.add_argument("--filter_cond_substructure", action="store_true")
+    parser.add_argument("--calc_strain", action="store_true")
 
     parser.add_argument("--batch_cost", type=int)
     parser.add_argument("--dataset_split", type=str, default=None)

@@ -1916,6 +1916,46 @@ def _get_plif_recovery(
     return recovery_rate, tanimoto_sim
 
 
+def calc_strain(
+    mol: Chem.Mol,
+    add_hs: bool = True,
+    n_steps: int = 1000,
+    force_field_name: str = "MMFF94s",
+):
+    if add_hs:
+        mol = Chem.AddHs(mol, addCoords=True)
+
+    try:
+        if force_field_name == "MMFF94s":
+            mol_properties = AllChem.MMFFGetMoleculeProperties(
+                mol, mmffVariant="MMFF94s"
+            )
+            force_field = AllChem.MMFFGetMoleculeForceField(
+                mol, mol_properties, confId=0
+            )
+        elif force_field_name == "MMFF94":
+            mol_properties = AllChem.MMFFGetMoleculeProperties(mol)
+            force_field = AllChem.MMFFGetMoleculeForceField(
+                mol, mol_properties, confId=0
+            )
+        elif force_field_name == "UFF":
+            force_field = AllChem.UFFGetMoleculeForceField(mol, confId=0)
+
+        start_energy = force_field.CalcEnergy()
+        not_converged = force_field.Minimize(maxIts=n_steps)
+        if not_converged:
+            print(
+                "Energy minimization did not converge - using intermediate state for strain calculation"
+            )
+        final_energy = force_field.CalcEnergy()
+        strain_energy = start_energy - final_energy
+        assert strain_energy > 0, "Strain energy should be positive"
+        return strain_energy
+    except Exception:
+        print("Force field error - skipping strain calculation")
+        return np.nan
+
+
 def calc_dihedrals(molecules):
     """
     Calculates dihedral angles (in degrees) for all rotatable bonds in a list of RDKit molecules.

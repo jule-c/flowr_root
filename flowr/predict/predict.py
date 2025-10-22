@@ -6,6 +6,7 @@ from rdkit import Chem
 def predict_affinity_batch(
     args,
     model,
+    prior,
     posterior,
     noise_scale: float = 0.1,
     eps=1e-4,
@@ -30,33 +31,41 @@ def predict_affinity_batch(
     torch.manual_seed(seed)
     L.seed_everything(args.seed)
 
-    # Get ligand and pocket data
-    lig_prior = model.builder.extract_ligand_from_complex(posterior)
-    lig_prior["interactions"] = posterior["interactions"]
-    lig_prior["fragment_mask"] = posterior["fragment_mask"]
-    # Add noise to the coordinates
-    noise = torch.randn_like(lig_prior["coords"])
-    lig_prior["coords"] = lig_prior["coords"] + noise * noise_scale
+    # Get Ligand prior
+    lig_prior = model.builder.extract_ligand_from_complex(prior)
+    lig_prior["interactions"] = prior["interactions"]
+    lig_prior["fragment_mask"] = prior["fragment_mask"]
     lig_prior = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_prior.items()}
 
-    pocket_prior = model.builder.extract_pocket_from_complex(posterior)
-    pocket_prior["interactions"] = posterior["interactions"]
-    pocket_prior["complex"] = posterior["complex"]
-    pocket_prior = {
-        k: v.cuda() if torch.is_tensor(v) else v for k, v in pocket_prior.items()
+    # Get ligand and add noise to ligand coordinates
+    lig_data = model.builder.extract_ligand_from_complex(posterior)
+    lig_data["interactions"] = posterior["interactions"]
+    lig_data["fragment_mask"] = posterior["fragment_mask"]
+    lig_data["fragment_mode"] = posterior["fragment_mode"]
+    noise = torch.randn_like(lig_data["coords"])
+    lig_data["coords"] = lig_data["coords"] + noise * noise_scale
+    lig_data = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_data.items()}
+
+    # Get pocket data
+    pocket_data = model.builder.extract_pocket_from_complex(posterior)
+    pocket_data["interactions"] = posterior["interactions"]
+    pocket_data["complex"] = posterior["complex"]
+    pocket_data = {
+        k: v.cuda() if torch.is_tensor(v) else v for k, v in pocket_data.items()
     }
 
     # Build starting times for the integrator
     ## In affinity mode use the provided reference data and only add a bit of noise to the coordinates
     lig_times_cont = torch.ones(posterior["coords"].size(0), device=device) - eps
     lig_times_disc = torch.ones(posterior["coords"].size(0), device=device) - eps
-    pocket_times = torch.ones(pocket_prior["coords"].size(0), device=device)
+    pocket_times = torch.ones(pocket_data["coords"].size(0), device=device)
     prior_times = [lig_times_cont, lig_times_disc, pocket_times]
 
     # Run generation N times
     output = model._predict_affinity(
         lig_prior,
-        pocket_prior,
+        ligand_data=lig_data,
+        pocket_data=pocket_data,
         times=prior_times,
     )
 

@@ -25,6 +25,66 @@ TupleRot = tuple[float, float, float]
 # *************************************************************************************************
 
 
+def symmetrize_bonds(bond_dist: torch.Tensor, is_one_hot: bool = False) -> torch.Tensor:
+    """
+    Symmetrize bond tensor by ensuring B[i,j] == B[j,i].
+
+    Args:
+        bond_dist: Bond tensor of shape:
+            - (B, N, N, n_bond_types) if batched one-hot
+            - (B, N, N) if batched adjacency indices
+            - (N, N, n_bond_types) if single molecule one-hot
+            - (N, N) if single molecule adjacency indices
+        is_one_hot: If True, input is one-hot encoded bonds
+
+    Returns:
+        Symmetrized bond tensor (same shape as input)
+    """
+
+    # Detect if input is batched or not
+    if is_one_hot:
+        # One-hot: (B, N, N, K) or (N, N, K)
+        single_mol = len(bond_dist.shape) == 3
+        if single_mol:
+            bond_dist = bond_dist.unsqueeze(0)  # Add batch dim: (1, N, N, K)
+        bond_adj = torch.argmax(bond_dist, dim=-1)  # (B, N, N)
+    else:
+        # Adjacency indices: (B, N, N) or (N, N)
+        single_mol = len(bond_dist.shape) == 2
+        if single_mol:
+            bond_dist = bond_dist.unsqueeze(0)  # Add batch dim: (1, N, N)
+        bond_adj = bond_dist  # (B, N, N)
+
+    # Create upper triangle mask (excludes diagonal - no self-loops)
+    n_atoms = bond_adj.shape[-1]
+    device = bond_adj.device
+    upper_tri_mask = torch.triu(
+        torch.ones((n_atoms, n_atoms), dtype=torch.bool, device=device), diagonal=1
+    )  # (N, N)
+
+    # Vectorized symmetrization for entire batch
+    # Keep only upper triangle, zero out lower
+    bond_adj_upper = bond_adj.clone()
+    # Broadcast upper_tri_mask to batch dimension
+    bond_adj_upper[:, ~upper_tri_mask] = 0  # (B, N, N)
+
+    # Symmetrize by adding transpose (diagonal stays 0)
+    bond_adj_sym = bond_adj_upper + bond_adj_upper.transpose(1, 2)
+
+    # Convert back to one-hot if needed
+    if is_one_hot:
+        n_bond_types = bond_dist.shape[-1]
+        result = one_hot_encode_tensor(bond_adj_sym, n_bond_types)
+    else:
+        result = bond_adj_sym
+
+    # Remove batch dimension if input was single molecule
+    if single_mol:
+        result = result.squeeze(0)
+
+    return result
+
+
 def prepare_complex_data(
     gen_ligs: list[Chem.Mol],
     native_lig: Chem.Mol,

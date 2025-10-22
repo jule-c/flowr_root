@@ -949,6 +949,7 @@ class MolBuilder:
         prediction: dict,
         pocket_mask: Optional[torch.Tensor] = None,
         keep_interactions: Optional[bool] = False,
+        symmetrize: bool = True,
     ) -> dict:
         """
         Vectorized inpainting based on the interactions.
@@ -962,6 +963,7 @@ class MolBuilder:
         hybridization = data.get("hybridization", None)  # (B, N_l, h)
         bonds = data.get("bonds", None)  # (B, N_l, N_l, n_bonds)
         fragment_mask = data["fragment_mask"].bool()  # (B, N_l)
+        fragment_mode = data["fragment_mode"]
 
         # Unpack predicted
         pred_coords = prediction["coords"]  # (B, N_l, C)
@@ -982,13 +984,17 @@ class MolBuilder:
         if pred_hybridization is not None:
             pred_hybridization[inpaint_mask, :] = hybridization[inpaint_mask, :]
 
-        # Overwrite bonds with a pairwise fixed mask:
+        # ========== BOND INPAINTING WITH SYMMETRIZATION ==========
         if bonds is not None and pred_bonds is not None:
-            inpaint_mask = inpaint_mask.unsqueeze(2) & inpaint_mask.unsqueeze(1)
-            bond_mask = torch.argmax(bonds, dim=-1) != 0
-            fixed_mask = inpaint_mask & bond_mask
-            pred_bonds[fixed_mask] = bonds[fixed_mask]
-            # pred_bonds = torch.where(fixed_mask, bonds, pred_bonds)
+            inpaint_mask_pair = inpaint_mask.unsqueeze(2) & inpaint_mask.unsqueeze(
+                1
+            )  # (B, N, N)
+            # bond_mask = torch.argmax(bonds, dim=-1) != 0  # (B, N, N)
+            # fixed_mask = inpaint_mask_pair & bond_mask  # (B, N, N)
+            # pred_bonds[inpaint_mask_pair] = bonds[inpaint_mask_pair]
+            pred_bonds = torch.where(inpaint_mask_pair.unsqueeze(-1), bonds, pred_bonds)
+            if symmetrize:
+                pred_bonds = smolF.symmetrize_bonds(pred_bonds, is_one_hot=True)
 
         out = {
             "coords": pred_coords,
@@ -998,6 +1004,7 @@ class MolBuilder:
             "bonds": pred_bonds,
             "mask": data["mask"],
             "fragment_mask": fragment_mask,
+            "fragment_mode": fragment_mode,
         }
         if keep_interactions and "interactions" in prediction:
             out["interactions"] = prediction["interactions"]
@@ -1027,8 +1034,10 @@ class MolBuilder:
         out = {}
         assert "fragment_mask" in data, "Fragment mask is required for inpainting."
         fragment_mask = data["fragment_mask"].bool()  # (B, N_l)
+        fragment_mode = data["fragment_mode"]  # (B,)
         lig_mask = data["mask"].bool()  # (B, N_l)
         out["fragment_mask"] = fragment_mask
+        out["fragment_mode"] = fragment_mode
         out["mask"] = lig_mask
 
         # Check which molecules have full fragment masks (all 1s for valid atoms)

@@ -24,6 +24,7 @@ nohup.out
 # Slurm submission scripts and logs
 subslurm/
 slurm-*
+scripts/test.sh
 
 # Local data
 .data/

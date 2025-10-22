@@ -243,7 +243,11 @@ class Integrator:
         if "bonds" in predicted:
             if self.bond_strategy == "uniform-sample":
                 bonds = self._uniform_sample_step(
-                    curr["bonds"], predicted["bonds"], lig_times_disc, step_size
+                    curr["bonds"],
+                    predicted["bonds"],
+                    lig_times_disc,
+                    step_size,
+                    symmetrize=True,
                 )
 
             # Uniform sampling from discrete flow models paper
@@ -351,7 +355,9 @@ class Integrator:
 
         return updated
 
-    def _uniform_sample_step(self, curr_dist, pred_dist, t, step_size):
+    def _uniform_sample_step(
+        self, curr_dist, pred_dist, t, step_size, symmetrize: bool = False
+    ):
         n_categories = pred_dist.size(-1)
 
         curr = torch.argmax(curr_dist, dim=-1).unsqueeze(-1)
@@ -364,7 +370,7 @@ class Integrator:
         noise[times + step_size < 1.0] = self.cat_noise_level
 
         # Off-diagonal step probs
-        mult = (1 + ((2 * noise) * (n_categories - 1) * times)) / (1 - times)
+        mult = (1 + noise + (noise * (n_categories - 1) * times)) / (1 - times)
         first_term = step_size * mult * pred_dist
         second_term = step_size * noise * pred_probs_curr
         step_probs = (first_term + second_term).clamp(max=1.0)
@@ -374,9 +380,13 @@ class Integrator:
         diags = (1.0 - step_probs.sum(dim=-1, keepdim=True)).clamp(min=0.0)
         step_probs.scatter_(-1, curr, diags)
 
-        # Sample and convert back to one-hot so that all strategies represent data the same way
+        # # Sample and convert back to one-hot so that all strategies represent data the same way
         samples = torch.distributions.Categorical(step_probs).sample()
-        return smolF.one_hot_encode_tensor(samples, n_categories)
+        if symmetrize:
+            samples = smolF.symmetrize_bonds(samples, is_one_hot=False)
+        samples = smolF.one_hot_encode_tensor(samples, n_categories)
+
+        return samples
 
     def _coord_velocity_step(self, curr_coords, pred_coords, t, step_size):
         ones = [1] * (len(pred_coords.shape) - 1)

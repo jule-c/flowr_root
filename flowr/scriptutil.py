@@ -58,6 +58,7 @@ from flowr.util.tokeniser import (
 # from flowr.models.fm_pocket_flex import LigandPocketFlexCFM
 LigandCFM = LigandPocketFlexCFM = None
 
+
 PROJECT_PREFIX = "flowr"
 BOND_MASK_INDEX = 5
 COMPILER_CACHE_SIZE = 128
@@ -305,22 +306,23 @@ def complex_transform(
         # Add a one-hot vector for the interaction type (N_pocket, N_lig, num_interactions + 1)
         # where no interaction is encoded as the first index
         interactions = trans_complex.interactions
-        n_pocket, n_lig, n_interactions = interactions.shape
-        interactions_arr = np.zeros((n_pocket, n_lig, n_interactions + 1))
-        interactions_arr[:, :, 1:] = interactions
-        interactions_flat = interactions_arr.reshape(
-            n_pocket * n_lig, n_interactions + 1
-        )
-        interactions_flat = np.argmax(
-            interactions_flat, axis=-1
-        )  # to get no interaction class at index 0
-        interactions_arr = smolF.one_hot_encode_tensor(
-            torch.from_numpy(interactions_flat), n_interactions + 1
-        )
-        interactions_arr = interactions_arr.reshape(
-            n_pocket, n_lig, -1
-        )  # (N_pocket, N_lig, num_interactions + 1)
-        trans_complex.interactions = interactions_arr
+        if interactions is not None:
+            n_pocket, n_lig, n_interactions = interactions.shape
+            interactions_arr = np.zeros((n_pocket, n_lig, n_interactions + 1))
+            interactions_arr[:, :, 1:] = interactions
+            interactions_flat = interactions_arr.reshape(
+                n_pocket * n_lig, n_interactions + 1
+            )
+            interactions_flat = np.argmax(
+                interactions_flat, axis=-1
+            )  # to get no interaction class at index 0
+            interactions_arr = smolF.one_hot_encode_tensor(
+                torch.from_numpy(interactions_flat), n_interactions + 1
+            )
+            interactions_arr = interactions_arr.reshape(
+                n_pocket, n_lig, -1
+            )  # (N_pocket, N_lig, num_interactions + 1)
+            trans_complex.interactions = interactions_arr
 
     if rotate_complex:
         trans_complex = trans_complex.rotate()
@@ -586,7 +588,7 @@ def build_trainer(args, model=None):
             dirpath=args.save_dir,
             save_top_k=3,
             # monitor="val-fc-validity",
-            monitor="val-pb-validity",
+            monitor="val-pb_validity",
             mode="max",
             save_last=True,
         )
@@ -595,7 +597,7 @@ def build_trainer(args, model=None):
             dirpath=args.save_dir,
             save_top_k=3,
             # monitor="val-fc-validity",
-            monitor="val-pb-validity",
+            monitor="val-pb_validity",
             mode="max",
             save_last=True,
         )
@@ -746,6 +748,13 @@ def build_model(
         use_lig_pocket_rbf=args.use_lig_pocket_rbf,
         use_fourier_time_embed=args.use_fourier_time_embed,
         graph_inpainting=args.graph_inpainting,
+        use_inpaint_mode_embed=args.scaffold_inpainting
+        or args.functional_group_inpainting
+        or args.interaction_inpainting
+        or args.core_inpainting
+        or args.linker_inpainting
+        or args.fragment_inpainting
+        or args.substructure_inpainting,
         self_cond=args.self_condition,
         coord_skip_connect=not args.no_coord_skip_connect,
         pocket_enc=pocket_enc,
@@ -941,11 +950,23 @@ def load_model(
     hparams["compile_model"] = False
     hparams["integration-steps"] = args.integration_steps
     hparams["sampling_strategy"] = args.ode_sampling_strategy
+    hparams["use_inpaint_mode_embed"] = (
+        hparams.get("scaffold_inpainting", False)
+        or hparams.get("func_group_inpainting", False)
+        or hparams.get("interaction_inpainting", False)
+        or hparams.get("core_inpainting", False)
+        or hparams.get("linker_inpainting", False)
+        or hparams.get("fragment_inpainting", False)
+        or hparams.get("substructure_inpainting", False)
+    )
     hparams["interaction_inpainting"] = args.interaction_inpainting
     hparams["scaffold_inpainting"] = args.scaffold_inpainting
     hparams["func_group_inpainting"] = args.func_group_inpainting
     hparams["linker_inpainting"] = args.linker_inpainting
     hparams["core_inpainting"] = args.core_inpainting
+    hparams["fragment_inpainting"] = args.fragment_inpainting
+    hparams["substructure_inpainting"] = args.substructure_inpainting
+    hparams["substructure"] = args.substructure
     hparams["data_path"] = args.data_path
     hparams["save_dir"] = args.save_dir
     hparams["predict_affinity"] = hparams.get("predict_affinity", False)
@@ -1056,6 +1077,7 @@ def load_model(
             use_crossproducts=hparams["use_crossproducts"],
             use_fourier_time_embed=hparams["use_fourier_time_embed"],
             use_lig_pocket_rbf=hparams["use_lig_pocket_rbf"],
+            use_inpaint_mode_embed=hparams["use_inpaint_mode_embed"],
             self_cond=hparams["self_cond"],
             coord_skip_connect=hparams["coord_skip_connect"],
             pocket_enc=pocket_enc,
@@ -1343,10 +1365,21 @@ def load_mol_model(
     hparams["compile_model"] = False
     hparams["integration-steps"] = args.integration_steps
     hparams["sampling_strategy"] = args.ode_sampling_strategy
+    hparams["use_inpaint_mode_embed"] = (
+        hparams.get("scaffold_inpainting", False)
+        or hparams.get("func_group_inpainting", False)
+        or hparams.get("core_inpainting", False)
+        or hparams.get("linker_inpainting", False)
+        or hparams.get("fragment_inpainting", False)
+        or hparams.get("substructure_inpainting", False)
+    )
     hparams["scaffold_inpainting"] = args.scaffold_inpainting
     hparams["func_group_inpainting"] = args.func_group_inpainting
     hparams["linker_inpainting"] = args.linker_inpainting
     hparams["core_inpainting"] = args.core_inpainting
+    hparams["fragment_inpainting"] = args.fragment_inpainting
+    hparams["substructure_inpainting"] = args.substructure_inpainting
+    hparams["substructure"] = args.substructure
     hparams["data_path"] = args.data_path
     hparams["save_dir"] = args.save_dir
     hparams["add_feats"] = hparams.get("add_feats", False)
@@ -1407,6 +1440,7 @@ def load_mol_model(
             use_distances=hparams["use_distances"],
             use_crossproducts=hparams["use_crossproducts"],
             use_fourier_time_embed=hparams["use_fourier_time_embed"],
+            use_inpaint_mode_embed=hparams["use_inpaint_mode_embed"],
             self_cond=hparams["self_cond"],
             coord_skip_connect=hparams["coord_skip_connect"],
         )
@@ -1572,6 +1606,12 @@ def build_mol_model(
             use_crossproducts=args.use_crossproducts,
             use_fourier_time_embed=args.use_fourier_time_embed,
             graph_inpainting=args.graph_inpainting,
+            use_inpaint_mode_embed=args.scaffold_inpainting
+            or args.func_group_inpainting
+            or args.core_inpainting
+            or args.linker_inpainting
+            or args.fragment_inpainting
+            or args.substructure_inpainting,
             self_cond=args.self_condition,
             coord_skip_connect=not args.no_coord_skip_connect,
         )
@@ -1832,6 +1872,9 @@ def build_dm(
         elif args.dataset == "bindingmoad":
             coord_std = constants.BINDINGMOAD_COORDS_STD_DEV
             padded_sizes = constants.BINDINGMOAD_BUCKET_LIMITS
+        elif args.dataset == "adds":
+            coord_std = constants.ADDS_COORDS_STD_DEV
+            padded_sizes = constants.ADDS_BUCKET_LIMITS
         elif args.dataset == "hiqbind":
             coord_std = constants.HIQBIND_COORDS_STD_DEV
             padded_sizes = constants.HIQBIND_BUCKET_LIMITS

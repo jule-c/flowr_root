@@ -13,6 +13,7 @@ from torch.optim.lr_scheduler import LinearLR, OneCycleLR
 from torchmetrics import MetricCollection
 
 import flowr.util.metrics as Metrics
+from flowr.constants import INPAINT_ENCODER as inpaint_mode_encoder
 from flowr.data.data_info import GeneralInfos as DataInfos
 from flowr.models.integrator import Integrator
 from flowr.models.losses import LossComputer
@@ -330,10 +331,11 @@ class LigandPocketCFM(pl.LightningModule):
                 "total_steps must be provided when using the one-cycle LR scheduler."
             )
 
+        # INPAINTING AND SELF-CONDITIONING SETTINGS
         self.self_condition = self_condition
         self.self_condition_mode = "stacking"
         self.self_condition_prob = 0.5
-        self._inpaint_self_condition = True
+        self._inpaint_self_condition = False
         if self.self_condition_mode == "residual":
             from flowr.models.self_conditioning import SelfConditioningResidualLayer
 
@@ -352,6 +354,7 @@ class LigandPocketCFM(pl.LightningModule):
             self.feature_keys.append("hybridization")
             # self.sc_feature_keys.append("hybridization")
 
+        # Save hyperparameters
         self.gen = gen
         self.vocab = vocab
         self.vocab_charges = vocab_charges
@@ -652,18 +655,22 @@ class LigandPocketCFM(pl.LightningModule):
                 f"Unknown self-conditioning mode: {self.self_condition_mode}"
             )
 
-        # Apply graph inpainting if needed (for stacking mode)
-        if (
-            self.self_condition_mode == "stacking"
-            and self.graph_inpainting
-            and self._inpaint_self_condition
-        ):
-            cond_batch = self.builder.inpaint_graph(
-                lig_data,
-                cond_batch,
-                feature_keys=["coords", "atomics", "bonds"],
-                overwrite_with_zeros=True,
-            )
+        # Apply inpainting if needed (for stacking mode)
+        if self.self_condition_mode == "stacking" and self._inpaint_self_condition:
+            if self.inpainting_mode:
+                cond_batch = self.builder.inpaint_molecule(
+                    lig_data,
+                    cond_batch,
+                    pocket_mask=pocket_data["mask"].bool(),
+                    keep_interactions=self.flow_interactions,
+                )
+            elif self.graph_inpainting:
+                cond_batch = self.builder.inpaint_graph(
+                    lig_data,
+                    cond_batch,
+                    feature_keys=["coords", "atomics", "bonds"],
+                    overwrite_with_zeros=True,
+                )
 
         # During training, randomly use self-conditioning
         if training and torch.rand(1).item() < self.self_condition_prob:
@@ -702,6 +709,25 @@ class LigandPocketCFM(pl.LightningModule):
                     if self.add_feats:
                         cond_batch["hybridization"] = F.softmax(
                             cond_out["hybridization"], dim=-1
+                        )
+
+                if (
+                    self.self_condition_mode == "stacking"
+                    and self._inpaint_self_condition
+                ):
+                    if self.inpainting_mode:
+                        cond_batch = self.builder.inpaint_molecule(
+                            lig_data,
+                            cond_batch,
+                            pocket_mask=pocket_data["mask"].bool(),
+                            keep_interactions=self.flow_interactions,
+                        )
+                    elif self.graph_inpainting:
+                        cond_batch = self.builder.inpaint_graph(
+                            lig_data,
+                            cond_batch,
+                            feature_keys=["coords", "atomics", "bonds"],
+                            overwrite_with_zeros=True,
                         )
 
         return cond_batch
@@ -752,6 +778,19 @@ class LigandPocketCFM(pl.LightningModule):
         inpaint_mask = batch.get("fragment_mask", None)
         times = self._get_times(t, lig_mask=mask, inpaint_mask=inpaint_mask)
 
+        # Encode inpainting mode
+        inpaint_mode = (
+            torch.stack(
+                [
+                    torch.tensor(inpaint_mode_encoder[mode]).to("cuda")
+                    for mode in batch["fragment_mode"]
+                ],
+                dim=0,
+            )
+            if self.inpainting_mode
+            else None
+        )
+
         if cond_batch is not None:
             out = self.gen(
                 coords,
@@ -778,6 +817,7 @@ class LigandPocketCFM(pl.LightningModule):
                     else None
                 ),
                 inpaint_mask=inpaint_mask,
+                inpaint_mode=inpaint_mode,
             )
         else:
             out = self.gen(
@@ -802,6 +842,7 @@ class LigandPocketCFM(pl.LightningModule):
                     else None
                 ),
                 inpaint_mask=inpaint_mask,
+                inpaint_mode=inpaint_mode,
             )
         out["times"] = times
         return out
@@ -817,11 +858,13 @@ class LigandPocketCFM(pl.LightningModule):
         lig_prior = self.builder.extract_ligand_from_complex(prior)
         lig_interp = self.builder.extract_ligand_from_complex(interpolated)
         lig_interp["fragment_mask"] = data["fragment_mask"]
+        lig_interp["fragment_mode"] = data["fragment_mode"]
         lig_interp["interactions"] = interpolated["interactions"]
         lig_data = self.builder.extract_ligand_from_complex(data)
-        lig_data["interactions"] = data["interactions"]
         lig_data["pocket_mask"] = pocket_data["mask"]
-        lig_data["fragment_mask"] = lig_interp["fragment_mask"]
+        lig_data["interactions"] = data["interactions"]
+        lig_data["fragment_mask"] = data["fragment_mask"]
+        lig_data["fragment_mode"] = data["fragment_mode"]
 
         # Times (bs, 3) -> (lig_times_cont, lig_times_disc, pocket_times)
         times = times.T
@@ -895,7 +938,7 @@ class LigandPocketCFM(pl.LightningModule):
         #     data=data,
         #     coord_scale=self.coord_scale,
         #     idx=1,
-        #     save_dir=".",
+        #     save_dir="/hpfs/userws/cremej01/projects/tmp",
         # )
 
         losses = self._loss(lig_data, lig_interp, predicted, pocket_data=pocket_data)
@@ -936,6 +979,7 @@ class LigandPocketCFM(pl.LightningModule):
         # Extract ligand data
         lig_prior = self.builder.extract_ligand_from_complex(prior)
         lig_prior["fragment_mask"] = prior["fragment_mask"]
+        lig_prior["fragment_mode"] = prior["fragment_mode"]
         lig_prior["interactions"] = prior["interactions"]
 
         # Build starting times for the integrator
@@ -952,6 +996,8 @@ class LigandPocketCFM(pl.LightningModule):
             times=prior_times,
             strategy=self.sampling_strategy,
             corr_iters=self.corrector_iters,
+            final_corr_pred=True,
+            final_inpaint=False,
         )
         gen_mols = self._generate_mols(gen_batch)
 
@@ -972,12 +1018,12 @@ class LigandPocketCFM(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         if not self.trainer.sanity_checking:
-            gen_dist_results, pair_metrics_results = {}, {}
+            gen_dist_results = {}
 
             gen_metrics_results = self.gen_mol_metrics.compute()
             if self.gen_dist_metrics is not None:
                 gen_dist_results = self.gen_dist_metrics.compute()
-            posebusters_validity = self.posebusters_validity.compute()
+            posebusters_results = self.posebusters_validity.compute()
 
             if self.graph_inpainting:
                 docking_metrics_results = self.docking_metrics.compute()
@@ -986,14 +1032,13 @@ class LigandPocketCFM(pl.LightningModule):
 
             metrics = {
                 **gen_metrics_results,
-                **pair_metrics_results,
                 **gen_dist_results,
-                **posebusters_validity,
+                **posebusters_results,
                 **docking_metrics_results,
             }
-
             for metric, value in metrics.items():
-                progbar = True if metric == "pb-validity" else False
+                # Show main validity and individual critical metrics in progress bar
+                progbar = metric in ["pb_validity"]
                 if isinstance(value, dict):
                     for k, v in value.items():
                         self.log(
@@ -1001,7 +1046,7 @@ class LigandPocketCFM(pl.LightningModule):
                             v.to(self.device),
                             on_epoch=True,
                             logger=True,
-                            prog_bar=progbar,
+                            prog_bar=False,
                             sync_dist=True,
                         )
                 else:
@@ -1038,6 +1083,7 @@ class LigandPocketCFM(pl.LightningModule):
         # Extract ligand data
         lig_prior = self.builder.extract_ligand_from_complex(prior)
         lig_prior["fragment_mask"] = prior["fragment_mask"]
+        lig_prior["fragment_mode"] = prior["fragment_mode"]
         lig_prior["interactions"] = prior["interactions"]
 
         # Starting times for the integrator
@@ -1109,6 +1155,11 @@ class LigandPocketCFM(pl.LightningModule):
             path=os.path.join(self.hparams.save_dir, f"traj_pred_mols_{iter}"),
             t=step,
         )
+        predicted["res_names"] = torch.zeros(
+            predicted["atomics"].size(0),
+            predicted["atomics"].size(1),
+            device=self.device,
+        ).long()  # dummy res names
         pred_complex = self.builder.add_ligand_to_pocket(
             lig_data=predicted,
             pocket_data=pocket_data,
@@ -1327,6 +1378,8 @@ class LigandPocketCFM(pl.LightningModule):
         sigma: float = 2.0,
         maximize: bool = True,
         coord_noise_level: float = 0.2,
+        final_inpaint: bool = False,
+        final_corr_pred: bool = True,
     ):
 
         self.integrator.use_sde_simulation = (
@@ -1363,8 +1416,21 @@ class LigandPocketCFM(pl.LightningModule):
             "atomics": torch.zeros_like(prior["atomics"]),
             "bonds": torch.zeros_like(prior["bonds"]),
         }
-        if self.graph_inpainting and self._inpaint_self_condition:
-            cond_batch["coords"] = torch.zeros_like(prior["coords"])
+        if self._inpaint_self_condition:
+            if self.inpainting_mode:
+                cond_batch = self.builder.inpaint_molecule(
+                    prior,
+                    cond_batch,
+                    pocket_mask=pocket_data["mask"].bool(),
+                    keep_interactions=self.flow_interactions,
+                )
+            elif self.graph_inpainting:
+                cond_batch = self.builder.inpaint_graph(
+                    prior,
+                    cond_batch,
+                    feature_keys=["coords", "atomics", "bonds"],
+                    overwrite_with_zeros=True,
+                )
 
         step_sizes = [t1 - t0 for t0, t1 in zip(time_points[:-1], time_points[1:])]
         with torch.no_grad():
@@ -1429,8 +1495,38 @@ class LigandPocketCFM(pl.LightningModule):
                         curr, predicted, prior, times, step_size
                     )
 
-                # import pdb; pdb.set_trace()
-                # guidance
+                # Inpainting for the ligand if required
+                if self.inpainting_mode and self.inpainting_mode_inf == "fragment":
+                    curr = self.builder.inpaint_molecule(
+                        data=prior,
+                        prediction=curr,
+                        pocket_mask=pocket_data["mask"].bool(),
+                        keep_interactions=self.flow_interactions,
+                    )
+                elif self.graph_inpainting:
+                    curr = self.builder.inpaint_graph(
+                        prior,
+                        curr,
+                        feature_keys=self.feature_keys,
+                    )
+                # Self-conditioning inpainting
+                if self._inpaint_self_condition:
+                    if self.inpainting_mode:
+                        cond_batch = self.builder.inpaint_molecule(
+                            prior,
+                            cond_batch,
+                            pocket_mask=pocket_data["mask"].bool(),
+                            keep_interactions=self.flow_interactions,
+                        )
+                    elif self.graph_inpainting:
+                        cond_batch = self.builder.inpaint_graph(
+                            prior,
+                            cond_batch,
+                            feature_keys=["coords", "atomics", "bonds"],
+                            overwrite_with_zeros=True,
+                        )
+
+                # Apply SMC guidance
                 if (
                     apply_guidance
                     and guidance_window_start <= times[0][0]
@@ -1465,29 +1561,7 @@ class LigandPocketCFM(pl.LightningModule):
                     step_size,
                 )
 
-                # Inpainting for the ligand if required
-                if self.inpainting_mode and self.inpainting_mode_inf == "fragment":
-                    curr = self.builder.inpaint_molecule(
-                        data=prior,
-                        prediction=curr,
-                        pocket_mask=pocket_data["mask"].bool(),
-                        keep_interactions=self.flow_interactions,
-                    )
-                elif self.graph_inpainting:
-                    curr = self.builder.inpaint_graph(
-                        prior,
-                        curr,
-                        feature_keys=self.feature_keys,
-                    )
-                    if self._inpaint_self_condition:
-                        cond_batch = self.builder.inpaint_graph(
-                            prior,
-                            cond_batch,
-                            feature_keys=["coords", "atomics", "bonds"],
-                            overwrite_with_zeros=True,
-                        )
-
-                # Save trajectory
+                # Build trajectory
                 if save_traj:
                     self._build_trajectory(
                         curr,
@@ -1511,20 +1585,6 @@ class LigandPocketCFM(pl.LightningModule):
                 )
 
                 predicted, cond_batch = self._get_predictions(out)
-                if self.graph_inpainting:
-                    # Inpaint the predicted structure if graph inpainting is used
-                    predicted = self.builder.inpaint_graph(
-                        prior,
-                        predicted,
-                        feature_keys=self.feature_keys,
-                    )
-                    if self._inpaint_self_condition:
-                        cond_batch = self.builder.inpaint_graph(
-                            prior,
-                            cond_batch,
-                            feature_keys=["coords", "atomics", "bonds"],
-                            overwrite_with_zeros=True,
-                        )
                 step_size = 1 / steps if corr_step_size is None else corr_step_size
                 curr = self.integrator.corrector_iter(
                     curr, predicted, prior, times, step_size
@@ -1542,7 +1602,16 @@ class LigandPocketCFM(pl.LightningModule):
                         curr,
                         feature_keys=self.feature_keys,
                     )
-                    if self._inpaint_self_condition:
+                # Self-conditioning inpainting
+                if self._inpaint_self_condition:
+                    if self.inpainting_mode:
+                        cond_batch = self.builder.inpaint_molecule(
+                            prior,
+                            cond_batch,
+                            pocket_mask=pocket_data["mask"].bool(),
+                            keep_interactions=self.flow_interactions,
+                        )
+                    elif self.graph_inpainting:
                         cond_batch = self.builder.inpaint_graph(
                             prior,
                             cond_batch,
@@ -1550,31 +1619,52 @@ class LigandPocketCFM(pl.LightningModule):
                             overwrite_with_zeros=True,
                         )
 
-        # Final corrector prediction
-        eps = -1e-4
-        times = self._update_times(
-            times,
-            eps,
-        )
-        with torch.no_grad():
-            cond = cond_batch if self.self_condition else None
-            out = self(
-                curr,
-                pocket_data,
+        if final_corr_pred:
+            # Final corrector prediction
+            eps = -1e-4
+            times = self._update_times(
                 times,
-                training=False,
-                cond_batch=cond,
-                pocket_equis=pocket_equis,
-                pocket_invs=pocket_invs,
+                eps,
             )
-        predicted, _ = self._get_predictions(out)
+            with torch.no_grad():
+                cond = cond_batch if self.self_condition else None
+                out = self(
+                    curr,
+                    pocket_data,
+                    times,
+                    training=False,
+                    cond_batch=cond,
+                    pocket_equis=pocket_equis,
+                    pocket_invs=pocket_invs,
+                )
+            predicted, _ = self._get_predictions(out)
 
-        if self.graph_inpainting:
-            predicted = self.builder.inpaint_graph(
-                prior,
-                predicted,
-                feature_keys=self.feature_keys,
-            )
+            if final_inpaint:
+                # Inpainting for the ligand if required
+                if self.inpainting_mode and self.inpainting_mode_inf == "fragment":
+                    predicted = self.builder.inpaint_molecule(
+                        data=prior,
+                        prediction=predicted,
+                        pocket_mask=pocket_data["mask"].bool(),
+                        keep_interactions=self.flow_interactions,
+                    )
+                elif self.graph_inpainting:
+                    predicted = self.builder.inpaint_graph(
+                        prior,
+                        predicted,
+                        feature_keys=self.feature_keys,
+                    )
+            # Add to trajectory
+            if save_traj:
+                self._build_trajectory(
+                    curr,
+                    predicted,
+                    pocket_data,
+                    iter=iter,
+                    step=i + 1,
+                )
+        else:
+            predicted = curr
 
         # Move everything to CPU
         predicted = {
@@ -1591,6 +1681,7 @@ class LigandPocketCFM(pl.LightningModule):
                 com_list=[system.com for system in pocket_data["complex"]],
             )
 
+        # Save trajectory
         if save_traj:
             self._save_trajectory(
                 predicted,
@@ -1930,23 +2021,58 @@ class LigandPocketCFM(pl.LightningModule):
 
         return predicted_target
 
-    def _predict_affinity(self, ligand_data, pocket_data, times):
+    def _predict_affinity(self, ligand_prior, ligand_data, pocket_data, times):
         """
         Predict the binding affinity of a batch of protein-ligand complexes.
+
+        Args:
+            ligand_prior: Prior ligand state (noisy/starting state)
+            ligand_data: Target ligand state (clean/final state)
+            pocket_data: Pocket information
+            times: Time points for the flow
+
+        Returns:
+            Dictionary containing predicted properties including affinity
         """
-        cond_batch = {
-            "coords": ligand_data["coords"],
-            "atomics": ligand_data["atomics"],
-            "bonds": ligand_data["bonds"],
-        }
         with torch.no_grad():
-            cond = cond_batch if self.self_condition else None
-            # Run the model
+            # First pass: Generate conditional batch from prior (similar to training)
+            # Initialize cond_batch with zeros for stacking mode
+            cond_batch = {
+                "coords": ligand_prior["coords"],
+                "atomics": torch.zeros_like(ligand_prior["atomics"]),
+                "bonds": torch.zeros_like(ligand_prior["bonds"]),
+            }
+            if self.add_feats:
+                cond_batch["hybridization"] = torch.zeros_like(
+                    ligand_prior["hybridization"]
+                )
+
+            # Run prediction on prior to get conditional batch
+            out_prior = self(
+                ligand_data,
+                pocket_data,
+                times,
+                cond_batch=cond_batch if self.self_condition else None,
+                training=False,
+            )
+
+            # Prepare conditional batch from prior prediction
+            cond_batch = {
+                "coords": out_prior["coords"],
+                "atomics": F.softmax(out_prior["atomics"], dim=-1),
+                "bonds": F.softmax(out_prior["bonds"], dim=-1),
+            }
+            if self.add_feats:
+                cond_batch["hybridization"] = F.softmax(
+                    out_prior["hybridization"], dim=-1
+                )
+
+            # Second pass: Predict on actual ligand data using conditional batch from prior
             out = self(
                 ligand_data,
                 pocket_data,
                 times,
-                cond_batch=cond,
+                cond_batch=cond_batch if self.self_condition else None,
                 training=False,
             )
             predicted, _ = self._get_predictions(out)
@@ -1956,8 +2082,10 @@ class LigandPocketCFM(pl.LightningModule):
             k: v.cpu().detach() if torch.is_tensor(v) else v
             for k, v in predicted.items()
         }
+
         # Scale back coordinates if necessary
         predicted["coords"] = predicted["coords"] * self.coord_scale
+
         # Undo zero COM alignment if necessary
         if "complex" in pocket_data:
             predicted["coords"] = self.builder.undo_zero_com_batch(
@@ -1965,6 +2093,7 @@ class LigandPocketCFM(pl.LightningModule):
                 predicted["mask"],
                 com_list=[system.com for system in pocket_data["complex"]],
             )
+
         return predicted
 
     def _generate_mols(self, generated, scale=1.0, sanitise=True, add_hs=False):

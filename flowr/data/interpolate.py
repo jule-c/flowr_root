@@ -1,6 +1,6 @@
 import random
 from abc import ABC, abstractmethod
-from itertools import chain, zip_longest
+from itertools import zip_longest
 from typing import Optional
 
 import numpy as np
@@ -60,30 +60,37 @@ def extract_fragments(to_mols: list[Chem.Mol], maxCuts: int = 3):
 
         # Generate fragments
         frags = FragmentMol(mol=mol, maxCuts=maxCuts)
-        frags = [clean_fragment(frag) for frag in chain(*frags) if frag]
-        frags = [
-            frag
-            for frag_tuple in frags
-            for frag in frag_tuple
-            if frag.GetNumAtoms() > 1
-        ]
-        substructure_ids = [mol.GetSubstructMatches(frag)[0] for frag in frags]
+        # FragmentMol returns (cores, side_chains), need to flatten properly
+        all_frags = []
+        for frag_tuple in frags:  # cores or side_chains
+            if frag_tuple:  # if not None/empty
+                for frag in frag_tuple:  # individual fragments
+                    if frag:
+                        cleaned = clean_fragment(frag)
+                        all_frags.extend([f for f in cleaned if f.GetNumAtoms() > 1])
+
+        if not all_frags:
+            return mask
+
+        substructure_ids = []
+        for frag in all_frags:
+            matches = mol.GetSubstructMatches(frag)
+            if matches:
+                substructure_ids.append(matches[0])
+
         # Randomly select a fragment
-        findices = []
         if substructure_ids:
             frag = random.choice(substructure_ids)
-            findices.extend(frag)
+            mask[torch.tensor(frag)] = 1
 
-            if findices:
-                mask[torch.tensor(findices)] = 1
         return mask
 
     return [fragment_per_mol(mol, maxCuts=maxCuts) for mol in to_mols]
 
 
 def extract_substructure(
-    to_mols: list[Chem.Mol], 
-    substructure_query: str, 
+    to_mols: list[Chem.Mol],
+    substructure_query: str,
     use_smarts: bool = False,
     invert_mask: bool = False,
 ):
@@ -130,12 +137,13 @@ def extract_substructure(
         mask[torch.tensor(substructure_atoms)] = 1
         return mask
 
+    assert isinstance(substructure_query, list) or isinstance(
+        substructure_query, str
+    ), "substructure_query must be a list or string either containing atom indices or a SMILES/SMARTS pattern"
     if isinstance(substructure_query, str):
         mask = [substructure_per_mol(mol, substructure_query) for mol in to_mols]
-    elif isinstance(substructure_query, list):
-        mask = [substructure_per_mol_list(mol, substructure_query) for mol in to_mols]
     else:
-        raise ValueError("substructure_query must be a string or a list of atom indices.")
+        mask = [substructure_per_mol_list(mol, substructure_query) for mol in to_mols]
 
     # Invert the mask if requested (to exclude the specified atoms instead of including them)
     if invert_mask:
@@ -646,12 +654,15 @@ class GeometricNoiseSampler(NoiseSampler):
         self,
         to_mol: GeometricMol,
         from_mol: GeometricMol,
-        mask: torch.Tensor,
+        fragment_mask: torch.Tensor,
+        fragment_mode: Optional[str] = "",
         harmonic_prior: Optional[bool] = False,
+        symmetrize: Optional[bool] = False,
     ) -> GeometricMol:
 
-        if mask is None or not mask.any():
+        if fragment_mask is None or not fragment_mask.any():
             # if fragment_mask is already specified by graph_inpainting, return from_mol
+            from_mol.fragment_mode = fragment_mode
             if from_mol.fragment_mask is not None:
                 return from_mol
             from_mol.fragment_mask = torch.zeros(
@@ -671,12 +682,12 @@ class GeometricNoiseSampler(NoiseSampler):
             from_mol.atomics.clone(),
             from_mol.charges.clone(),
         )
-        inp_coords[mask, :] = to_mol.coords[mask, :]
-        inp_atomics[mask, :] = to_mol.atomics[mask, :]
-        inp_charges[mask, :] = to_mol.charges[mask, :]
+        inp_coords[fragment_mask, :] = to_mol.coords[fragment_mask, :]
+        inp_atomics[fragment_mask, :] = to_mol.atomics[fragment_mask, :]
+        inp_charges[fragment_mask, :] = to_mol.charges[fragment_mask, :]
         if self.n_hybridization_types is not None:
             inp_hybridization = from_mol.hybridization.clone()
-            inp_hybridization[mask, :] = to_mol.hybridization[mask, :]
+            inp_hybridization[fragment_mask, :] = to_mol.hybridization[fragment_mask, :]
         else:
             inp_hybridization = None
 
@@ -689,10 +700,15 @@ class GeometricNoiseSampler(NoiseSampler):
         from_adj = torch.argmax(from_mol.adjacency, dim=-1)
         to_adj = torch.argmax(to_mol.adjacency, dim=-1)
 
-        ## only update bonds if both atoms are inpainted and if they are bonded
-        fixed_mask_matrix = (mask.unsqueeze(0) & mask.unsqueeze(1)) & (to_adj != 0)
+        ## only update bonds if both atoms are inpainted
+        fixed_mask = fragment_mask.unsqueeze(0) & fragment_mask.unsqueeze(
+            1
+        )  # & (to_adj > 0)
         new_adj = from_adj.clone()
-        new_adj[fixed_mask_matrix] = to_adj[fixed_mask_matrix]
+        new_adj[fixed_mask] = to_adj[fixed_mask]
+        if symmetrize:
+            new_adj = smolF.symmetrize_bonds(new_adj, is_one_hot=False)
+
         new_bond_types = smolF.one_hot_encode_tensor(
             new_adj, num_bond_types
         )  # shape: (N, N, num_bond_types)
@@ -705,7 +721,8 @@ class GeometricNoiseSampler(NoiseSampler):
             hybridization=inp_hybridization,
             bond_indices=bond_indices,
             bond_types=new_bond_types,
-            fragment_mask=mask,
+            fragment_mask=fragment_mask,
+            fragment_mode=fragment_mode,
         )
 
     def inpaint_graph(
@@ -713,6 +730,7 @@ class GeometricNoiseSampler(NoiseSampler):
         to_mol: GeometricMol,
         from_mol: GeometricMol,
         mask: torch.Tensor,
+        mode: str = "random",
     ) -> GeometricMol:
 
         # if all mask is False, return from_mol with fragment_mask
@@ -721,6 +739,7 @@ class GeometricNoiseSampler(NoiseSampler):
                 from_mol.seq_length, dtype=torch.bool, device=from_mol.coords.device
             )
             from_mol.fragment_mask = mask
+            from_mol.fragment_mode = "graph"
             return from_mol
         else:
             # create atom-wise mask
@@ -728,28 +747,34 @@ class GeometricNoiseSampler(NoiseSampler):
                 from_mol.seq_length, dtype=torch.bool, device=from_mol.coords.device
             )
 
-        coords = self.coord_dist.sample((to_mol.seq_length, 3))
-        inp_atomics, inp_charges, inp_bond_types, inp_bond_indices = (
-            to_mol.atomics.clone(),
-            to_mol.charges.clone(),
-            to_mol.bond_types.clone(),
-            to_mol.bond_indices.clone(),
-        )
-        if self.n_hybridization_types is not None:
-            inp_hybridization = from_mol.hybridization.clone()
+        if mode == "conformer":
+            return self.inpaint_graph_with_conformer(to_mol, from_mol, mask)
+        elif mode == "harmonic":
+            return self.inpaint_graph_with_harmonic(to_mol, from_mol, mask)
+        elif mode == "random":
+            coords = self.coord_dist.sample((to_mol.seq_length, 3))
+            inp_atomics, inp_charges, inp_bond_types, inp_bond_indices = (
+                to_mol.atomics.clone(),
+                to_mol.charges.clone(),
+                to_mol.bond_types.clone(),
+                to_mol.bond_indices.clone(),
+            )
+            if self.n_hybridization_types is not None:
+                inp_hybridization = from_mol.hybridization.clone()
 
-        mol = GeometricMol(
-            coords,
-            inp_atomics,
-            charges=inp_charges,
-            hybridization=inp_hybridization,
-            bond_indices=inp_bond_indices,
-            bond_types=inp_bond_types,
-            fragment_mask=mask,
-        )
-        if self.zero_com:
-            mol = mol.zero_com()
-        return mol
+            mol = GeometricMol(
+                coords,
+                inp_atomics,
+                charges=inp_charges,
+                hybridization=inp_hybridization,
+                bond_indices=inp_bond_indices,
+                bond_types=inp_bond_types,
+                fragment_mask=mask,
+                fragment_mode="graph",
+            )
+            if self.zero_com:
+                mol = mol.zero_com()
+            return mol
 
     def inpaint_graph_with_conformer(
         self,
@@ -761,19 +786,6 @@ class GeometricNoiseSampler(NoiseSampler):
         Graph inpainting using RDKit conformer as starting coordinates
         instead of noisy coordinates
         """
-
-        # if all mask is False, return from_mol with fragment_mask
-        if mask is None or not mask.any():
-            mask = torch.zeros(
-                from_mol.seq_length, dtype=torch.bool, device=from_mol.coords.device
-            )
-            from_mol.fragment_mask = mask
-            return from_mol
-        else:
-            # create atom-wise mask
-            mask = torch.ones(
-                from_mol.seq_length, dtype=torch.bool, device=from_mol.coords.device
-            )
 
         # Generate conformer coordinates
         conformer_coords = None
@@ -810,19 +822,6 @@ class GeometricNoiseSampler(NoiseSampler):
         """
         Graph inpainting using harmonic prior based on molecular bonds
         """
-
-        # if all mask is False, return from_mol with fragment_mask
-        if mask is None or not mask.any():
-            mask = torch.zeros(
-                from_mol.seq_length, dtype=torch.bool, device=from_mol.coords.device
-            )
-            from_mol.fragment_mask = mask
-            return from_mol
-        else:
-            # create atom-wise mask
-            mask = torch.ones(
-                from_mol.seq_length, dtype=torch.bool, device=from_mol.coords.device
-            )
 
         try:
             # Generate harmonic coordinates
@@ -976,7 +975,7 @@ class GeometricNoiseSampler(NoiseSampler):
             print(f"Error in harmonic matrix diagonalization: {e}")
             return None, None
 
-    def sample_molecule(self, n_atoms: int) -> GeometricMol:
+    def sample_molecule(self, n_atoms: int, symmetrize: bool = False) -> GeometricMol:
 
         # Sample coords and scale, if required
         coords = self.coord_dist.sample((n_atoms, 3))
@@ -1039,13 +1038,20 @@ class GeometricNoiseSampler(NoiseSampler):
         n_bonds = bond_indices.size(0)
         if self.bond_noise == "uniform-sample":
             bond_types = torch.randint(0, self.n_bond_types, size=(n_bonds,))
-            bond_types = smolF.one_hot_encode_tensor(bond_types, self.n_bond_types)
 
         elif self.bond_noise == "prior-sample":
             bond_types = torch.multinomial(
                 self.bond_types_distribution, n_bonds, replacement=True
             )
-            bond_types = smolF.one_hot_encode_tensor(bond_types, self.n_bond_types)
+
+        # Convert to adjacency
+        bond_adj = torch.zeros((n_atoms, n_atoms), dtype=torch.long)
+        bond_adj[bond_indices[:, 0], bond_indices[:, 1]] = bond_types
+        if symmetrize:
+            bond_adj = smolF.symmetrize_bonds(bond_adj, is_one_hot=False)
+        # Convert back to edge list format
+        bond_types = smolF.one_hot_encode_tensor(bond_adj, self.n_bond_types)
+        bond_types = bond_types[bond_indices[:, 0], bond_indices[:, 1]]
 
         # Create smol mol object
         mol = GeometricMol(
@@ -1222,8 +1228,20 @@ class GeometricInterpolant(Interpolant):
         else:
             raise ValueError(f"Unknown noise schedule: {coord_noise_schedule}")
 
-        # Add cache for extracted inpainted masks
-        self._mask_cache = {}
+        self.symmetrize = (
+            True  # NOTE: Whether or not to symmetrize bonds: Should be true
+        )
+
+        # Define which modes are local vs global
+        # Local modes: fragment and substructure inpainting (invert mask to keep everything except fragment)
+        # Global modes: everything else (keep the specified structure, generate the rest)
+        self.local_modes = {"fragment_inpainting", "substructure_inpainting"}
+        self.global_modes = {
+            "scaffold_inpainting",
+            "func_group_inpainting",
+            "linker_inpainting",
+            "core_inpainting",
+        }
 
     @property
     def hparams(self):
@@ -1249,108 +1267,37 @@ class GeometricInterpolant(Interpolant):
 
         return hparams
 
-    def _get_cache_key(self, mol: GeometricMol) -> str:
-        """Generate a unique cache key for a molecule based on its 3D structure"""
-        try:
-            import hashlib
+    def _calculate_fragment_center_of_mass(
+        self, mol: GeometricMol, mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Calculate the center of mass for atoms specified by the mask."""
+        if not mask.any():
+            return torch.zeros(3, device=mol.coords.device)
 
-            # Get coordinates and round to reasonable precision (e.g., 3 decimal places)
-            # This handles small numerical differences while preserving conformational differences
-            coords = mol.coords.numpy()
-            coords_rounded = np.round(coords, decimals=3)
+        fragment_coords = mol.coords[mask]
+        return fragment_coords.mean(dim=0)
 
-            # Get atom types for context (same conformation of different molecules should be different)
-            atomics = torch.argmax(mol.atomics, dim=-1).numpy()
+    def _align_prior_to_fragment(
+        self, from_mol: GeometricMol, to_mol: GeometricMol, fragment_mask: torch.Tensor
+    ) -> GeometricMol:
+        """Align the prior noise for the fragment to the fragment's center of mass in the target."""
+        if not fragment_mask.any():
+            return from_mol
 
-            # Create a deterministic string representation
-            # Include both atom types and coordinates
-            cache_components = [
-                f"atoms:{atomics.tolist()}",
-                f"coords:{coords_rounded.flatten().tolist()}",
-                f"seq_len:{mol.seq_length}",
-            ]
+        # Calculate center of mass of the fragment in the target molecule
+        target_com = self._calculate_fragment_center_of_mass(to_mol, fragment_mask)
 
-            # Use SHA256 hash for uniqueness
-            cache_str = "|".join(cache_components)
-            return hashlib.sha256(cache_str.encode()).hexdigest()[:16]
+        # Calculate center of mass of the fragment in the prior
+        prior_com = self._calculate_fragment_center_of_mass(from_mol, fragment_mask)
 
-        except Exception as e:
-            # Fallback to object id if anything fails
-            print(f"Warning: Cache key generation failed: {e}")
-            return f"fallback_{id(mol)}"
+        # Calculate translation vector
+        translation = target_com - prior_com
 
-    def _extract_masks_cached(
-        self, to_mols: list[GeometricMol], interaction_mask: torch.Tensor = None
-    ):
-        """Extract masks with caching to avoid recomputation"""
-        all_masks = []
+        # Apply translation only to fragment atoms
+        new_coords = from_mol.coords.clone()
+        new_coords[fragment_mask] = from_mol.coords[fragment_mask] + translation
 
-        for mol in to_mols:
-            cache_key = self._get_cache_key(mol)
-
-            # Check if we have cached results for this molecule
-            if cache_key in self._mask_cache:
-                cached_data = self._mask_cache[cache_key]
-                all_masks.append(cached_data["masks"])
-                continue
-
-            # Convert to RDKit molecule (only if not cached)
-            rdkit_mol = mol.to_rdkit(
-                vocab=self.vocab,
-                vocab_charges=self.vocab_charges,
-                vocab_hybridization=self.vocab_hybridization,
-            )
-
-            # Extract all possible masks for this molecule
-            mol_masks = {}
-
-            if self.scaffold_inpainting:
-                mol_masks["scaffold"] = extract_scaffolds([rdkit_mol])[0]
-            if self.func_group_inpainting:
-                mol_masks["func_group"] = extract_func_groups(
-                    [rdkit_mol], includeHs=True
-                )[0]
-            if self.substructure_inpainting:
-                mol_masks["substructure"] = extract_substructure(
-                    [rdkit_mol], substructure_query=self.substructure
-                )[0]
-            if self.linker_inpainting:
-                mol_masks["linker"] = extract_linkers([rdkit_mol])[0]
-            if self.core_inpainting:
-                mol_masks["core"] = extract_cores([rdkit_mol])[0]
-            if self.fragment_inpainting:
-                mol_masks["fragment"] = extract_fragments(
-                    [rdkit_mol], maxCuts=self.max_fragment_cuts
-                )[0]
-
-            # Cache the results
-            self._mask_cache[cache_key] = {
-                "masks": mol_masks,
-            }
-            all_masks.append(mol_masks)
-
-        # Now select which mask to use for each molecule
-        inpaint_mask = []
-        for i, mol_masks in enumerate(all_masks):
-            available_masks = []
-
-            # Add interaction mask if provided
-            if interaction_mask is not None:
-                available_masks.append(interaction_mask[i])
-
-            # Add cached structural masks
-            for mask_type, mask in mol_masks.items():
-                available_masks.append(mask)
-
-            # Randomly select one mask (or create empty mask if none available)
-            if available_masks:
-                selected_mask = random.choice(available_masks)
-            else:
-                selected_mask = torch.zeros(to_mols[i].seq_length, dtype=torch.bool)
-
-            inpaint_mask.append(selected_mask)
-
-        return inpaint_mask
+        return from_mol._copy_with(coords=new_coords)
 
     def interpolate(
         self, to_mols: list[GeometricMol], interaction_mask: torch.Tensor = None
@@ -1363,9 +1310,14 @@ class GeometricInterpolant(Interpolant):
                 sample_mol_sizes(mol.seq_length, self.dataset) for mol in to_mols
             ]
         num_atoms = max(mol_sizes)
-        # Within match_mols either just truncate noise to match size of data molecule
-        # Or also permute and rotate the noise to best match data molecule
-        from_mols = [self.prior_sampler.sample_molecule(num_atoms) for mol in to_mols]
+
+        # Sample prior
+        from_mols = [
+            self.prior_sampler.sample_molecule(num_atoms, symmetrize=self.symmetrize)
+            for mol in to_mols
+        ]
+
+        # Align prior to reference while training
         from_mols = [
             self._match_mols(
                 from_mol,
@@ -1375,8 +1327,7 @@ class GeometricInterpolant(Interpolant):
             for from_mol, to_mol, mol_size in zip(from_mols, to_mols, mol_sizes)
         ]
 
-        # Interpolate ligands
-        inpaint_mask = []
+        # Handle inpainting
         if (
             interaction_mask is not None
             or self.inpainting_mode
@@ -1386,7 +1337,27 @@ class GeometricInterpolant(Interpolant):
                 not self.sample_mol_sizes
             ), "Inpainting currently not supported with sampled mol sizes"
 
-            mols = [
+            # Determine which modes are active
+            active_global_modes = []
+            active_local_modes = []
+
+            if self.scaffold_inpainting:
+                active_global_modes.append("scaffold")
+            if self.func_group_inpainting:
+                active_global_modes.append("func_group")
+            if self.linker_inpainting:
+                active_global_modes.append("linker")
+            if self.core_inpainting:
+                active_global_modes.append("core")
+            if interaction_mask is not None:
+                active_global_modes.append("interaction")
+            if self.fragment_inpainting:
+                active_local_modes.append("fragment")
+            if self.substructure_inpainting and self.inference:
+                active_local_modes.append("substructure")
+
+            # Pre-compute RDKit molecules if needed for inpainting
+            rdkit_mols = [
                 mol.to_rdkit(
                     vocab=self.vocab,
                     vocab_charges=self.vocab_charges,
@@ -1395,128 +1366,171 @@ class GeometricInterpolant(Interpolant):
                 for mol in to_mols
             ]
 
-            if self.inpainting_mode:
-                if self.scaffold_inpainting:
-                    scaffold_mask = extract_scaffolds(mols)
-                if self.func_group_inpainting:
-                    func_group_mask = extract_func_groups(mols, includeHs=True)
-                if self.substructure_inpainting:
-                    assert (
-                        self.substructure is not None
-                    ), "Substructure query must be provided"
-                    assert isinstance(self.substructure, str) or isinstance(
-                        self.substructure, list
-                    ), "Substructure must be a string or a list of indices"
-                    custom_mask = extract_substructure(
-                        mols,
-                        substructure_query=self.substructure, invert_mask=True
-                    )
-                if self.linker_inpainting:
-                    linker_mask = extract_linkers(mols)
-                if self.core_inpainting:
-                    core_mask = extract_cores(mols)
-                if self.fragment_inpainting:
-                    fragment_mask = extract_fragments(
-                        mols, maxCuts=self.max_fragment_cuts
-                    )
+            # Decide modes for all molecules at once
+            selected_modes = []
+            is_local_modes = []
 
-                # Randomly select one of the mask for both training and inference if more than one mode is active
-                # NOTE: normally, at inference time, only one mode should be active, but this allows for more flexibility
-                masks = []
-                if interaction_mask is not None:
-                    masks.append(interaction_mask)
-                if self.scaffold_inpainting:
-                    masks.append(scaffold_mask)
-                if self.func_group_inpainting:
-                    masks.append(func_group_mask)
-                if self.substructure_inpainting:
-                    masks.append(custom_mask)
-                if self.linker_inpainting:
-                    masks.append(linker_mask)
-                if self.core_inpainting:
-                    masks.append(core_mask)
-                if self.fragment_inpainting:
-                    masks.append(fragment_mask)
-                inpaint_mask = random.choice(masks)
+            all_active = active_local_modes + active_global_modes
 
+            if self.inference and len(all_active) == 1:
+                # If only one mode active during inference, use it for all molecules
+                selected_modes = [all_active[0]] * batch_size
+                is_local = all_active[0] in active_local_modes
+                is_local_modes = [is_local] * batch_size
+            else:
+                rand_vals = torch.rand(batch_size)
+                for i in range(batch_size):
+                    # Inference time: use specified mode for all molecules
+                    if self.inference:
+                        # Multiple modes during validation - sample one per molecule
+                        selected_mode = random.choice(all_active)
+                        selected_modes.append(selected_mode)
+                        is_local = selected_mode in active_local_modes
+                        is_local_modes.append(is_local)
+                    else:
+                        # Training time: 25% de novo, 50% local, 25% global per molecule
+                        if rand_vals[i] < 0.25:
+                            # 25% de novo (no inpainting)
+                            selected_modes.append("de_novo")
+                            is_local_modes.append(False)
+                        elif rand_vals[i] < 0.65 and active_local_modes:
+                            # 40% local mode (if available)
+                            selected_modes.append(random.choice(active_local_modes))
+                            is_local_modes.append(True)
+                        else:
+                            # 35% global mode (or 75% if no local modes)
+                            selected_modes.append(random.choice(active_global_modes))
+                            is_local_modes.append(False)
+
+            # Extract masks for all molecules based on their modes
+            inpaint_masks = []
+            if selected_modes:
+                for i, mode in enumerate(selected_modes):
+                    if mode == "de_novo":
+                        mask = torch.zeros(to_mols[i].seq_length, dtype=torch.bool)
+                    else:
+                        mol_list = [rdkit_mols[i]]
+
+                        if mode == "scaffold":
+                            mask = extract_scaffolds(mol_list)[0]
+                        elif mode == "func_group":
+                            mask = extract_func_groups(mol_list, includeHs=True)[0]
+                        elif mode == "linker":
+                            mask = extract_linkers(mol_list)[0]
+                        elif mode == "core":
+                            mask = extract_cores(mol_list)[0]
+                        elif mode == "fragment":
+                            mask = extract_fragments(
+                                mol_list, maxCuts=self.max_fragment_cuts
+                            )[0]
+                        elif mode == "substructure":
+                            assert self.substructure is not None
+                            mask = extract_substructure(
+                                mol_list,
+                                substructure_query=self.substructure,
+                                invert_mask=False,
+                            )[0]
+                        elif mode == "interaction":
+                            mask = (
+                                interaction_mask[i]
+                                if interaction_mask is not None
+                                else torch.zeros(
+                                    to_mols[i].seq_length, dtype=torch.bool
+                                )
+                            )
+
+                        # For local modes, invert the mask
+                        if is_local_modes[i] and mode != "interaction":
+                            mask = ~mask
+
+                    inpaint_masks.append(mask)
+
+            # Handle graph inpainting overrides
             if self.graph_inpainting is not None:
                 if not self.inference and self.mixed_uncond_inpaint:
                     if self.inpainting_mode or interaction_mask is not None:
-                        # Both modes are active: 0.25 uncond, 0.25 graph, 0.5 inpaint
+                        # Both modes active: might override some to graph or de novo
                         rand_vals = torch.rand(batch_size)
-                        graph_mask = (rand_vals >= 0.25) & (rand_vals < 0.5)
-                        zero_out_mask = (
-                            rand_vals < 0.5
-                        )  # Zero out for uncond (25%) + graph-only (25%)
-                        inpaint_mask = [
-                            torch.zeros_like(mask) if zero_out_mask[i] else mask
-                            for i, mask in enumerate(inpaint_mask)
-                        ]
+                        for i in range(batch_size):
+                            if rand_vals[i] < 0.25:
+                                # Override to de novo
+                                selected_modes[i] = "de_novo"
+                                inpaint_masks[i] = torch.zeros(
+                                    to_mols[i].seq_length, dtype=torch.bool
+                                )
+                            elif rand_vals[i] < 0.5:
+                                # Override to graph
+                                selected_modes[i] = "graph"
                     else:
-                        # Only graph mode is active: 0.5 uncond, 0.5 graph
-                        graph_mask = torch.rand(batch_size) < 0.5
+                        # Only graph mode: 0.5 uncond, 0.5 graph per molecule
+                        rand_vals = torch.rand(batch_size)
+                        for i in range(batch_size):
+                            if rand_vals[i] < 0.5:
+                                selected_modes.append("de_novo")
+                                inpaint_masks.append(
+                                    torch.zeros(to_mols[i].seq_length, dtype=torch.bool)
+                                )
+                            else:
+                                selected_modes.append("graph")
+                                inpaint_masks.append(
+                                    torch.ones(to_mols[i].seq_length, dtype=torch.bool)
+                                )
                 else:
-                    graph_mask = torch.ones(batch_size, dtype=torch.bool)
-                    # NOTE: if at inference several conditional modes are specified and graph_inpainting is true as well,
-                    # which should only be the case at training time + validation, use graph_inpainting only as default!
-                    if self.inpainting_mode or interaction_mask is not None:
-                        inpaint_mask = []
+                    # Inference or no mixed_uncond: always graph if no other mode
+                    if not (self.inpainting_mode or interaction_mask is not None):
+                        selected_modes = ["graph"] * batch_size
+                        inpaint_masks = [
+                            torch.ones(mol.seq_length, dtype=torch.bool)
+                            for mol in to_mols
+                        ]
 
-                # Apply graph inpainting...
-                if self.graph_inpainting == "harmonic":
+                # Apply graph inpainting
+                if "graph" in selected_modes:
                     from_mols = [
                         (
-                            self.prior_sampler.inpaint_graph_with_harmonic(
-                                to_mol, from_mol, mask
+                            self.prior_sampler.inpaint_graph(
+                                to_mol, from_mol, True, mode=self.graph_inpainting
                             )
+                            if mode == "graph"
+                            else from_mol
                         )
-                        for to_mol, from_mol, mask in zip(
-                            to_mols, from_mols, graph_mask
+                        for from_mol, to_mol, mode in zip(
+                            from_mols, to_mols, selected_modes
                         )
-                    ]
-                elif self.graph_inpainting == "conformer":
-                    from_mols = [
-                        (
-                            self.prior_sampler.inpaint_graph_with_conformer(
-                                to_mol, from_mol, mask
-                            )
-                        )
-                        for to_mol, from_mol, mask in zip(
-                            to_mols, from_mols, graph_mask
-                        )
-                    ]
-                elif self.graph_inpainting == "random":
-                    from_mols = [
-                        (self.prior_sampler.inpaint_graph(to_mol, from_mol, mask))
-                        for to_mol, from_mol, mask in zip(
-                            to_mols, from_mols, graph_mask
-                        )
-                    ]
-                else:
-                    raise ValueError(
-                        "Graph inpainting is not supported with the current prior. Set prior to be either 'harmonic', 'conformer' or 'random'."
-                    )
-            else:
-                # No graph inpainting, handle only inpaint modes if they exist
-                if not self.inference and self.mixed_uncond_inpaint:
-                    # Only inpainting mode is active: 0.5 uncond, 0.5 inpaint
-                    rand_vals = torch.rand(batch_size)
-                    uncond_batch_mask = rand_vals < 0.5
-                    inpaint_mask = [
-                        torch.zeros_like(mask) if uncond_batch_mask[i] else mask
-                        for i, mask in enumerate(inpaint_mask)
                     ]
 
-        # Apply the conditional masks if inpainting
-        if inpaint_mask and len(inpaint_mask) > 0:
-            from_mols = [
-                (
-                    self.prior_sampler.inpaint_molecule(
-                        to_mol, from_mol, mask, harmonic_prior=False
+            # Apply inpainting for non-graph, non-de-novo modes
+            if inpaint_masks and any(m != "graph" for m in selected_modes):
+                # For local modes, align prior fragments to target fragments first
+                aligned_from_mols = [
+                    (
+                        self._align_prior_to_fragment(from_mol, to_mol, ~mask)
+                        if is_local_modes[i]
+                        and selected_modes[i] in ["fragment", "substructure"]
+                        and mask.any()
+                        else from_mol
                     )
-                )
-                for to_mol, from_mol, mask in zip(to_mols, from_mols, inpaint_mask)
-            ]
+                    for i, (from_mol, to_mol, mask) in enumerate(
+                        zip(from_mols, to_mols, inpaint_masks)
+                    )
+                ]
+
+                # Apply inpainting using list comprehension
+                from_mols = [
+                    (
+                        self.prior_sampler.inpaint_molecule(
+                            to_mol,
+                            from_mol,
+                            mask,
+                            fragment_mode=mode,
+                            harmonic_prior=False,
+                            symmetrize=self.symmetrize,
+                        )
+                    )
+                    for from_mol, to_mol, mask, mode in zip(
+                        aligned_from_mols, to_mols, inpaint_masks, selected_modes
+                    )
+                ]
 
         # Sample the batch times
         if self.fixed_time is not None:
@@ -1718,18 +1732,18 @@ class GeometricInterpolant(Interpolant):
         from_adj = torch.argmax(from_mol.adjacency, dim=-1)
         if self.bond_interpolation == "unmask":
             bond_mask = torch.rand_like(from_adj.float()) > t_disc
-            to_adj[bond_mask] = from_adj[bond_mask]
-            interp_adj = smolF.one_hot_encode_tensor(to_adj, to_mol.adjacency.size(-1))
+            new_adj = to_adj.clone()
+            new_adj[bond_mask] = from_adj[bond_mask]
 
         elif self.bond_interpolation == "sample":
             adj_mean = (from_adj * (1 - t_disc)) + (to_adj * t_disc)
-            adj_sample = torch.distributions.Categorical(adj_mean).sample()
-            interp_adj = smolF.one_hot_encode_tensor(
-                adj_sample, to_mol.adjacency.size(-1)
-            )
+            new_adj = torch.distributions.Categorical(adj_mean).sample()
 
+        if self.symmetrize:
+            new_adj = smolF.symmetrize_bonds(new_adj, is_one_hot=False)
+        new_adj = smolF.one_hot_encode_tensor(new_adj, to_mol.adjacency.size(-1))
         bond_indices = torch.ones((from_mol.seq_length, from_mol.seq_length)).nonzero()
-        bond_types = interp_adj[bond_indices[:, 0], bond_indices[:, 1]]
+        bond_types = new_adj[bond_indices[:, 0], bond_indices[:, 1]]
 
         interp_mol = GeometricMol(
             coords,
@@ -1741,6 +1755,8 @@ class GeometricInterpolant(Interpolant):
         )
         if from_mol.fragment_mask is not None:
             interp_mol.fragment_mask = from_mol.fragment_mask
+        if from_mol.fragment_mode is not None:
+            interp_mol.fragment_mode = from_mol.fragment_mode
 
         return interp_mol
 
@@ -1897,7 +1913,12 @@ class ComplexInterpolant(GeometricInterpolant):
             ), "Inpainting currently not supported with sampled mol sizes"
             if self.interaction_inpainting:
                 interaction_mask = [
-                    mol.interactions[:, :, 1:].sum(dim=(0, 2)) > 0 for mol in to_mols
+                    (
+                        mol.interactions[:, :, 1:].sum(dim=(0, 2)) > 0
+                        if mol.interactions is not None
+                        else None
+                    )
+                    for mol in to_mols
                 ]
 
         ligands = [system.ligand for system in to_mols]
@@ -1915,6 +1936,10 @@ class ComplexInterpolant(GeometricInterpolant):
                 if mol.fragment_mask is not None
                 else torch.tensor([0] * len(mol)).bool()
             )
+            for mol in from_ligands
+        ]
+        inpaint_mode = [
+            mol.fragment_mode if mol.fragment_mode is not None else ""
             for mol in from_ligands
         ]
 
@@ -1993,14 +2018,16 @@ class ComplexInterpolant(GeometricInterpolant):
                 interactions=interaction,
                 metadata=meta,
                 fragment_mask=_mask,
+                fragment_mode=_mode,
                 com=_com,
             )
-            for apo_pocket, ligand, interaction, meta, _mask, _com in zip_longest(
+            for apo_pocket, ligand, interaction, meta, _mask, _mode, _com in zip_longest(
                 apo_pockets,
                 from_ligands,
                 from_interactions,
                 metadata,
                 inpaint_mask,
+                inpaint_mode,
                 com,
                 fillvalue=None,
             )
@@ -2013,15 +2040,17 @@ class ComplexInterpolant(GeometricInterpolant):
                 interactions=interaction,
                 metadata=meta,
                 fragment_mask=_mask,
+                fragment_mode=_mode,
                 com=_com,
             )
-            for holo_pocket, apo_pocket, ligand, interaction, meta, _mask, _com in zip_longest(
+            for holo_pocket, apo_pocket, ligand, interaction, meta, _mask, _mode, _com in zip_longest(
                 holo_pockets,
                 apo_pockets,
                 to_ligands,
                 to_interactions,
                 metadata,
                 inpaint_mask,
+                inpaint_mode,
                 com,
                 fillvalue=None,
             )
@@ -2033,13 +2062,15 @@ class ComplexInterpolant(GeometricInterpolant):
                 interactions=interaction,
                 metadata=meta,
                 fragment_mask=_mask,
+                fragment_mode=_mode,
             )
-            for interp_pocket, ligand, meta, interaction, _mask in zip_longest(
+            for interp_pocket, ligand, meta, interaction, _mask, _mode in zip_longest(
                 interp_pockets,
                 interp_ligands,
                 metadata,
                 interp_interactions,
                 inpaint_mask,
+                inpaint_mode,
                 fillvalue=None,
             )
         ]

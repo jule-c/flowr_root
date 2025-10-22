@@ -402,6 +402,7 @@ class GeometricMol(SmolMol):
         forces: Optional[_T] = None,
         potential_energy: Optional[float] = None,
         fragment_mask: Optional[_T] = None,
+        fragment_mode: Optional[str] = None,
         orig_mol: Optional[GeometricMol] = None,
         rdkit_feats_cont: Optional[_T] = None,
         rdkit_feats_disc: Optional[_T] = None,
@@ -458,6 +459,7 @@ class GeometricMol(SmolMol):
         self._rdkit_feats_cont = rdkit_feats_cont
         self._rdkit_feats_disc = rdkit_feats_disc
         self.fragment_mask = fragment_mask
+        self.fragment_mode = fragment_mode
         self.orig_mol = orig_mol
 
         # If the data are not stored in mmap tensors, then convert to expected type and move to device
@@ -919,6 +921,8 @@ class GeometricMol(SmolMol):
             dict_repr["potential_energy"] = self.potential_energy
         if self.fragment_mask is not None:
             dict_repr["fragment_mask"] = self.fragment_mask
+        if self.fragment_mode is not None:
+            dict_repr["fragment_mode"] = self.fragment_mode
 
         byte_obj = pickle.dumps(dict_repr, protocol=PICKLE_PROTOCOL)
         return byte_obj
@@ -1024,6 +1028,7 @@ class GeometricMol(SmolMol):
         rdkit_feats_disc: Optional[_T] = None,
         orig_mol: Optional[GeometricMol] = None,
         fragment_mask: Optional[_T] = None,
+        fragment_mode: Optional[str] = None,
         com: Optional[_T] = None,
     ) -> GeometricMol:
 
@@ -1046,6 +1051,7 @@ class GeometricMol(SmolMol):
         )
         orig_mol = self.orig_mol if orig_mol is None else orig_mol
         fragment_mask = self.fragment_mask if fragment_mask is None else fragment_mask
+        fragment_mode = self.fragment_mode if fragment_mode is None else fragment_mode
 
         obj = GeometricMol(
             coords,
@@ -1064,6 +1070,7 @@ class GeometricMol(SmolMol):
             str_id=self._str_id,
             orig_mol=orig_mol,
             fragment_mask=fragment_mask,
+            fragment_mode=fragment_mode,
         )
         return obj
 
@@ -1163,6 +1170,7 @@ class GeometricMolBatch(SmolBatch[GeometricMol]):
         self._rdkit_feats_cont = None
         self._rdkit_feats_disc = None
         self._fragment_mask = None
+        self._fragment_mode = None
         self._orig_mols = None
 
     # *** General Properties ***
@@ -1282,6 +1290,16 @@ class GeometricMolBatch(SmolBatch[GeometricMol]):
             return []
         else:
             return self._fragment_mask
+
+    @property
+    def fragment_mode(self) -> Optional[str]:
+        if self._fragment_mode is None and self._mols[0].fragment_mode is not None:
+            self._fragment_mode = [mol.fragment_mode for mol in self._mols]
+            return self._fragment_mode
+        elif self._mols[0].fragment_mode is None:
+            return []
+        else:
+            return self._fragment_mode
 
     @property
     def adjacency(self) -> _T:

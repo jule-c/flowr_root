@@ -230,6 +230,7 @@ class LigandDecoder(torch.nn.Module):
         use_lig_pocket_rbf: bool = False,
         use_fourier_time_embed: bool = False,
         use_sphcs: bool = False,
+        use_inpaint_mode_embed: bool = False,
         # Training features
         self_cond: bool = False,
         intermediate_coord_updates: bool = True,
@@ -263,6 +264,7 @@ class LigandDecoder(torch.nn.Module):
         self.use_rbf = use_rbf
         self.use_distances = use_distances
         self.use_crossproducts = use_crossproducts
+        self.use_inpaint_mode_embed = use_inpaint_mode_embed
         self.intermediate_coord_updates = intermediate_coord_updates
         self.interactions = n_interaction_types is not None
         self.coord_skip_connect = coord_skip_connect
@@ -270,14 +272,17 @@ class LigandDecoder(torch.nn.Module):
         self.predict_affinity = predict_affinity
         self.predict_docking_score = predict_docking_score
 
-        # if self.graph_inpainting:
-        #     print(
-        #         "Graph inpainting is enabled, using inpaint projection for invariant features."
-        #     )
-        #     self.inpaint_proj = torch.nn.Embedding(2, self.d_inv)
-        # else:
-        #     self.inpaint_proj = None
-        self.inpaint_proj = None
+        # Add inpainting mode embedding
+        if self.use_inpaint_mode_embed:
+            # Embedding for hierarchical inpaint mode encoding
+            # First index: 0-3 for main category, Second index: 0-8 for subcategory
+            self.inpaint_mode_embed_main = torch.nn.Embedding(4, emb_size // 2)
+            self.inpaint_mode_embed_sub = torch.nn.Embedding(9, emb_size // 2)
+            self.inpaint_mode_proj = torch.nn.Linear(emb_size, d_inv)
+        else:
+            self.inpaint_mode_embed_main = None
+            self.inpaint_mode_embed_sub = None
+            self.inpaint_mode_proj = None
 
         # Size args
         self.n_atom_types = n_atom_types
@@ -588,6 +593,7 @@ class LigandDecoder(torch.nn.Module):
         pocket_atom_mask=None,
         interactions=None,
         inpaint_mask=None,
+        inpaint_mode=None,
     ):
         """Generate ligand atom types, coords, charges and bonds
 
@@ -711,13 +717,26 @@ class LigandDecoder(torch.nn.Module):
             extra_feats=extra_feats,
         )
 
-        if self.graph_inpainting is not None and self.inpaint_proj is not None:
-            assert (
-                inpaint_mask is not None
-            ), "Inpaint mask must be provided for graph inpainting."
-            # Apply inpaint projection to invariant features based on inpaint mask
-            inpaint_embeds = self.inpaint_proj(inpaint_mask.long())
-            invs = invs + inpaint_embeds
+        # Add inpainting mode embedding if provided
+        if self.use_inpaint_mode_embed:
+            # inpaint_mode shape: [batch_size, 2]
+            # Embed main category (first index) and subcategory (second index)
+            main_embed = self.inpaint_mode_embed_main(
+                inpaint_mode[:, 0]
+            )  # [B, emb_size//2]
+            sub_embed = self.inpaint_mode_embed_sub(
+                inpaint_mode[:, 1]
+            )  # [B, emb_size//2]
+
+            # Combine embeddings
+            inpaint_embed = torch.cat([main_embed, sub_embed], dim=-1)  # [B, emb_size]
+            inpaint_embed = self.inpaint_mode_proj(inpaint_embed)  # [B, d_inv]
+
+            # Broadcast to all atoms and add to invariant features
+            inpaint_embed = inpaint_embed.unsqueeze(1).expand(
+                -1, invs.size(1), -1
+            )  # [B, N, d_inv]
+            invs = invs + inpaint_embed * atom_mask.unsqueeze(-1)
 
         if self.use_rbf:
             edges = torch.cat((edges, rbf_embeds), dim=-1)
@@ -761,16 +780,23 @@ class LigandDecoder(torch.nn.Module):
 
         # Project invariant features to atom and charge logits
         invs_norm = self.final_inv_norm(invs)
-        atom_type_logits = self.atom_type_proj(invs_norm)
-        charge_logits = self.atom_charge_proj(invs_norm)
+        atom_type_logits = self.atom_type_proj(invs_norm) * atom_mask.unsqueeze(-1)
+        charge_logits = self.atom_charge_proj(invs_norm) * atom_mask.unsqueeze(-1)
         extra_feats_logits = (
-            self.extra_feats_proj(invs_norm) if extra_feats is not None else None
+            self.extra_feats_proj(invs_norm) * atom_mask.unsqueeze(-1)
+            if extra_feats is not None
+            else None
         )
 
         # Pass bonds through refinement layer and project to logits
         edge_norm = self.final_bond_norm(edges)
         edge_out = self.bond_refine(out_coords, invs_norm, atom_mask, edge_norm)
-        bond_logits = self.bond_proj(edge_out + edge_out.transpose(1, 2))
+        bond_logits = self.bond_proj(
+            0.5 * (edge_out + edge_out.transpose(1, 2))
+        ) * adj_matrix.unsqueeze(-1)
+        # bond_logits = self.bond_proj(
+        #     edge_out + edge_out.transpose(1, 2)
+        # ) * adj_matrix.unsqueeze(-1)
 
         affinity_pred, docking_pred = None, None
         if self.predict_affinity or self.predict_docking_score:
@@ -909,6 +935,7 @@ class LigandGenerator(torch.nn.Module):
         self_cond: bool = False,
         coord_skip_connect: bool = True,
         graph_inpainting: Optional[str] = None,
+        use_inpaint_mode_embed: bool = False,
         # Numerical stability
         eps: float = 1e-6,
     ):
@@ -956,6 +983,7 @@ class LigandGenerator(torch.nn.Module):
             self_cond=self_cond,
             coord_skip_connect=coord_skip_connect,
             graph_inpainting=graph_inpainting,
+            use_inpaint_mode_embed=False,
             eps=eps,
         )
 
@@ -995,6 +1023,7 @@ class LigandGenerator(torch.nn.Module):
         pocket_invs=None,
         interactions=None,
         inpaint_mask=None,
+        inpaint_mode=None,
     ):
 
         if self.pocket_enc is not None:
@@ -1025,6 +1054,7 @@ class LigandGenerator(torch.nn.Module):
             pocket_atom_mask=pocket_atom_mask,
             interactions=interactions,
             inpaint_mask=inpaint_mask,
+            inpaint_mode=inpaint_mode,
         )
 
         return decoder_out
@@ -1086,6 +1116,7 @@ class LigandGenerator(torch.nn.Module):
         pocket_atom_mask=None,
         interactions=None,
         inpaint_mask=None,
+        inpaint_mode=None,
     ):
 
         if self.pocket_enc is not None and pocket_invs is None:
@@ -1115,6 +1146,7 @@ class LigandGenerator(torch.nn.Module):
             pocket_atom_mask=pocket_atom_mask,
             interactions=interactions,
             inpaint_mask=inpaint_mask,
+            inpaint_mode=inpaint_mode,
         )
 
         return decoder_out

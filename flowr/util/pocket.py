@@ -739,6 +739,7 @@ class PocketComplex:
         interactions: Optional[np.ndarray] = None,
         metadata: Optional[dict] = None,
         fragment_mask: Optional[torch.Tensor] = None,
+        fragment_mode: Optional[str] = None,
         com: Optional[torch.Tensor] = None,
     ):
         assert (
@@ -765,6 +766,7 @@ class PocketComplex:
         self.interactions = interactions
         self.metadata = metadata
         self.fragment_mask = fragment_mask
+        self.fragment_mode = fragment_mode
         self.com = com
 
     def __len__(self) -> int:
@@ -1538,6 +1540,11 @@ class PocketComplexBatch(Sequence):
         return smolF.pad_tensors(
             [system.fragment_mask for system in self._systems]
         ).long()
+
+    def fragment_mode(self) -> Optional[str]:
+        if self._systems[0].fragment_mode is None:
+            return []
+        return [system.fragment_mode for system in self._systems]
 
     @property
     def mask(self) -> _T:

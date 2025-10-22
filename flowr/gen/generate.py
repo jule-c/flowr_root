@@ -122,6 +122,7 @@ def generate_ligands_per_target(
     lig_prior = model.builder.extract_ligand_from_complex(prior)
     lig_prior["interactions"] = prior["interactions"]
     lig_prior["fragment_mask"] = prior["fragment_mask"]
+    lig_prior["fragment_mode"] = prior["fragment_mode"]
     lig_prior = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_prior.items()}
     if args.arch == "pocket_flex" and pocket_noise == "apo":
         pocket_prior = model.builder.extract_pocket_from_complex(prior)
@@ -178,32 +179,37 @@ def generate_ligands_per_target(
     # Attach affinity predictions as properties if present
     if "affinity" in output:
         affinity = output["affinity"]
-        # Ensure affinity is a dict-like object with keys: pic50, pki, pkd, pec50
-        for mol, idx in zip(gen_ligs, range(len(gen_ligs))):
-            if mol is not None:
-                metadata = posterior["complex"][0].metadata
-                system_id = metadata["system_id"]
-                mol.SetProp("_Name", str(system_id))
-                if "pic50" in metadata:
-                    exp_pic50 = metadata["pic50"]
-                    mol.SetProp("exp_pic50", str(exp_pic50))
-                if "pkd" in metadata:
-                    exp_pkd = metadata["pkd"]
-                    mol.SetProp("exp_pkd", str(exp_pkd))
-                if "pki" in metadata:
-                    exp_pki = metadata["pki"]
-                    mol.SetProp("exp_pki", str(exp_pki))
-                if "pec50" in metadata:
-                    exp_pec50 = metadata["pec50"]
-                    mol.SetProp("exp_pec50", str(exp_pec50))
-                for key in ["pic50", "pki", "pkd", "pec50"]:
-                    value = affinity[key]
-                    # If value is a tensor, get the scalar for this molecule
-                    if hasattr(value, "detach"):
-                        val = value[idx].item() if value.ndim > 0 else value.item()
-                    else:
-                        val = value[idx] if isinstance(value, (list, tuple)) else value
-                    mol.SetProp(key, str(val))
+        if affinity is not None:
+            # Ensure affinity is a dict-like object with keys: pic50, pki, pkd, pec50
+            for mol, idx in zip(gen_ligs, range(len(gen_ligs))):
+                if mol is not None:
+                    metadata = posterior["complex"][0].metadata
+                    system_id = metadata["system_id"]
+                    mol.SetProp("_Name", str(system_id))
+                    if "pic50" in metadata:
+                        exp_pic50 = metadata["pic50"]
+                        mol.SetProp("exp_pic50", str(exp_pic50))
+                    if "pkd" in metadata:
+                        exp_pkd = metadata["pkd"]
+                        mol.SetProp("exp_pkd", str(exp_pkd))
+                    if "pki" in metadata:
+                        exp_pki = metadata["pki"]
+                        mol.SetProp("exp_pki", str(exp_pki))
+                    if "pec50" in metadata:
+                        exp_pec50 = metadata["pec50"]
+                        mol.SetProp("exp_pec50", str(exp_pec50))
+                    for key in ["pic50", "pki", "pkd", "pec50"]:
+                        value = affinity[key]
+                        # If value is a tensor, get the scalar for this molecule
+                        if hasattr(value, "detach"):
+                            val = value[idx].item() if value.ndim > 0 else value.item()
+                        else:
+                            val = (
+                                value[idx]
+                                if isinstance(value, (list, tuple))
+                                else value
+                            )
+                        mol.SetProp(key, str(val))
 
     if args.arch == "pocket_flex":
         pocket_prior = {

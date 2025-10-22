@@ -3,7 +3,7 @@
 
 This is a research repository introducing FLOWR.root. 
 
-**⚠️ PLEASE NOTE:** This is an early release. Currently, only ligand generation and affinity prediction scripts are provided alongside the model weights. Full training details, additional generation modes, and (LoRA-)finetuning documentation will be added progressively over time.
+**⚠️ PLEASE NOTE:** This is an early release. Currently, only ligand generation and affinity prediction scripts are provided alongside model weights (not fully trained). Full training details, additional generation modes, and (LoRA-)finetuning documentation will be added progressively over time. Final model weights will be shared in a few months.
 
 ---
 
@@ -70,6 +70,9 @@ If you provide a protein PDB/CIF file, you need to provide a ligand file (SDF/MO
 We recommend using (Schrödinger-)prepared complexes for best results with the protein and ligand being protonated.
 
 Note, if you want to run conditional generation, you need to provide a ligand file as reference. 
+Crucially, there are two different modes, "global" and "local". 
+Global: If you want to run scaffold hopping or elaboration (func_group_inpainting, scaffold_inpainting), interaction- (interaction_inpainting) or core-conditional (core_inpainting) generation, simply specifiy it via the respective flags. 
+Local: If you want to replace a core, or a fragment of your reference ligand, specify the --substructure_inpainting flag and provide the atom indices with the --substructure flag.
 
 Modify `scripts/generate_pdb.sl` according to your requirements, then submit the job via SLURM:
 

@@ -413,6 +413,10 @@ class GeometricDM(SmolDM):
             fragment_mask = batch.fragment_mask.long()[1:]
         else:
             fragment_mask = []
+        if len(batch.fragment_mode) > 0:
+            fragment_mode = batch.fragment_mode[1:]
+        else:
+            fragment_mode = []
 
         data = {
             "coords": coords,
@@ -421,6 +425,7 @@ class GeometricDM(SmolDM):
             "charges": charges,
             "mask": mask,
             "fragment_mask": fragment_mask,
+            "fragment_mode": fragment_mode,
         }
         if hybridization is not None:
             data["hybridization"] = hybridization
@@ -446,6 +451,7 @@ class GeometricDM(SmolDM):
         lig_mask = smol_batch.lig_mask(state=state).long()
         pocket_mask = smol_batch.pocket_mask(state=state).long()
         fragment_mask = smol_batch.fragment_mask()
+        fragment_mode = smol_batch.fragment_mode()
         mask = smol_batch.mask.long()
 
         data = {
@@ -461,6 +467,7 @@ class GeometricDM(SmolDM):
             "lig_mask": lig_mask,
             "pocket_mask": pocket_mask,
             "fragment_mask": fragment_mask,
+            "fragment_mode": fragment_mode,
             "mask": mask,
             "complex": _complex,
         }
@@ -510,6 +517,10 @@ class GeometricDM(SmolDM):
             fragment_mask = torch.zeros((n_atoms,))
         else:
             fragment_mask = None
+        if mol.fragment_mode is not None:
+            fragment_mode = ""
+        else:
+            fragment_mode = None
 
         return GeometricMol(
             coords,
@@ -519,6 +530,7 @@ class GeometricDM(SmolDM):
             bond_indices=bond_indices,
             bond_types=bond_types,
             fragment_mask=fragment_mask,
+            fragment_mode=fragment_mode,
         )
 
 

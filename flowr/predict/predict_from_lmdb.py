@@ -97,10 +97,11 @@ def evaluate(args):
     print("\nStarting affinity prediction...\n")
     dataloader = get_dataloader(args, dataset, interpolant)
     for i, batch in tqdm(enumerate(dataloader), desc="Predicting affinity..."):
-        _, posterior, _, _ = batch
+        prior, posterior, _, _ = batch
         gen_ligs_with_aff = predict_affinity_batch(
             args,
             model=model,
+            prior=prior,
             posterior=posterior,
             noise_scale=args.coord_noise_scale,
             eps=1e-4,
