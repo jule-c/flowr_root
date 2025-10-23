@@ -147,23 +147,33 @@ def evaluate(args):
                     iter=f"{k}_{i}",
                     guidance_params=guidance_params,
                 )
+
+            # Filter by validity and uniqueness
             if args.filter_valid_unique:
                 num_sampled = len(gen_ligs)
                 if gen_pdbs:
                     gen_ligs, gen_pdbs = smolRD.sanitize_list(
                         gen_ligs,
                         pdbs=gen_pdbs,
-                        filter_uniqueness=True,
+                        filter_uniqueness=False,
                         filter_pdb=True,
                         sanitize=True,
                     )
                 else:
                     gen_ligs = smolRD.sanitize_list(
                         gen_ligs,
-                        filter_uniqueness=True,
+                        filter_uniqueness=False,
                         sanitize=True,
                     )
-                print(f"Validity rate: {round(len(gen_ligs) / num_sampled, 2)}")
+                    print(f"Validity rate: {round(len(gen_ligs) / num_sampled, 2)}")
+                    gen_ligs = smolRD.sanitize_list(
+                        gen_ligs,
+                        filter_uniqueness=True,
+                        sanitize=False,
+                    )
+                    print(f"Uniqueness rate: {round(len(gen_ligs) / num_sampled, 2)}")
+
+            # Filter by conditional substructure
             if args.filter_cond_substructure:
                 assert (
                     inpainting_mode is not None
@@ -188,6 +198,7 @@ def evaluate(args):
 
         k += 1
 
+    # Finalize sampling
     run_time = time.time() - start
     if num_ligands == 0:
         raise (
@@ -219,6 +230,7 @@ def evaluate(args):
                 sanitize=True,
             )
 
+    # Retrieve reference ligand and pdb
     ref_lig_with_hs = model.retrieve_ligs_with_hs(data, save_idx=0)
     ref_pdb = model.retrieve_pdbs(
         data, save_dir=Path(args.save_dir) / "ref_pdbs", save_idx=0
@@ -226,7 +238,6 @@ def evaluate(args):
     ref_pdb_with_hs = model.retrieve_pdbs_with_hs(
         data, save_dir=Path(args.save_dir) / "ref_pdbs", save_idx=0
     )
-
     out_dict["gen_ligs"] = all_gen_ligs
     if args.arch == "pocket_flex":
         assert len(all_gen_pdbs) == len(all_gen_ligs)
@@ -236,7 +247,6 @@ def evaluate(args):
     out_dict["ref_pdb"] = ref_pdb
     out_dict["ref_pdb_with_hs"] = ref_pdb_with_hs
     out_dict["run_time"] = run_time
-
     print(
         f"\n Run time={round(run_time, 2)}s for {len(out_dict['gen_ligs'])} molecules \n"
     )
@@ -301,7 +311,7 @@ def evaluate(args):
         out_dict["gen_ligs_hs"] = all_gen_ligs_hs
         print("Done!")
 
-    if args.calc_strain:
+    if args.calculate_strain_energies:
         # Calculate strain energies
         print("Calculating strain energies...")
         ref_strain_energy = calc_strain(
@@ -464,7 +474,7 @@ def get_args():
     parser.add_argument("--filter_valid_unique", action="store_true")
     parser.add_argument("--filter_pb_valid", action="store_true")
     parser.add_argument("--filter_cond_substructure", action="store_true")
-    parser.add_argument("--calc_strain", action="store_true")
+    parser.add_argument("--calculate_strain_energies", action="store_true")
 
     parser.add_argument("--batch_cost", type=int)
     parser.add_argument("--dataset_split", type=str, default=None)
