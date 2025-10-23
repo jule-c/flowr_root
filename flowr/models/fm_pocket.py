@@ -18,6 +18,7 @@ from flowr.data.data_info import GeneralInfos as DataInfos
 from flowr.models.integrator import Integrator
 from flowr.models.losses import LossComputer
 from flowr.models.mol_builder import MolBuilder
+from flowr.models.score_modifier import MaxGaussianModifier, MinGaussianModifier
 from flowr.models.semla import MolecularGenerator
 from flowr.util.tokeniser import Vocabulary
 
@@ -29,8 +30,6 @@ OptFloat = Optional[float]
 def create_list_defaultdict():
     return defaultdict(list)
 
-
-from flowr.models.score_modifier import MaxGaussianModifier, MinGaussianModifier
 
 # *********************************************************************************************************************
 # ******************************************** Lightning Flow Matching Models *****************************************
@@ -181,25 +180,40 @@ def apply_selective_smc_guidance(
             val.to(selected_ids.device)
 
     prior = {
-        key: value[selected_ids] if len(value) > 0 else value
+        key: (
+            value[selected_ids]
+            if len(value) > 0 and isinstance(value, torch.Tensor)
+            else value
+        )
         for key, value in prior.items()
     }
+    prior["fragment_mode"] = [prior["fragment_mode"][i] for i in selected_ids.tolist()]
     current = {
-        key: value[selected_ids] if len(value) > 0 else value
+        key: (
+            value[selected_ids]
+            if len(value) > 0 and isinstance(value, torch.Tensor)
+            else value
+        )
         for key, value in current.items()
     }
-
     cond_batch = (
         {
-            key: value[selected_ids] if len(value) > 0 else value
+            key: (
+                value[selected_ids]
+                if len(value) > 0 and isinstance(value, torch.Tensor)
+                else value
+            )
             for key, value in cond_batch.items()
         }
         if cond_batch is not None
         else None
     )
-
     predicted_target = {
-        key: value[selected_ids] if len(value) > 0 else value
+        key: (
+            value[selected_ids]
+            if len(value) > 0 and isinstance(value, torch.Tensor)
+            else value
+        )
         for key, value in predicted_target.items()
     }
     pocket_data_target = {
@@ -845,6 +859,7 @@ class LigandPocketCFM(pl.LightningModule):
                 inpaint_mode=inpaint_mode,
             )
         out["times"] = times
+        out["fragment_mode"] = batch.get("fragment_mode", None)
         return out
 
     def training_step(self, batch, b_idx):
@@ -1960,7 +1975,7 @@ class LigandPocketCFM(pl.LightningModule):
                 pocket_invs=pocket_invs_target,
             )
 
-            # get affinity predictions
+            # Get affinity predictions
             out_non_target = self(
                 out_target,
                 pocket_data_untarget,

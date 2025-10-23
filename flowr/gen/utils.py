@@ -1,14 +1,16 @@
+import json
 import os
 import tempfile
 import warnings
 from argparse import Namespace
 from functools import partial
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional, Union
 
 import lightning as L
 import numpy as np
 import torch
+import yaml
 from pymol import cmd
 from rdkit import Chem
 from rdkit.Chem import AllChem, DataStructs
@@ -531,38 +533,22 @@ def load_data_from_pdb(args, remove_hs: bool, remove_aromaticity: bool):
 
 def load_data_from_pdb_selective(args, remove_hs: bool, remove_aromaticity: bool):
     # Load the data
-    processing_params = {
-        "add_hs": args.add_hs,
-        "add_hs_and_optimize": args.add_hs_and_optimize,
-        "kekulize": args.kekulize,
-        "use_pdbfixer": args.use_pdbfixer,
-        "add_bonds_to_protein": True,
-        "add_hs_to_protein": args.protonate_pocket and not args.use_pdbfixer,
-        "pocket_cutoff": args.pocket_cutoff,
-        "cut_pocket": args.cut_pocket,
-        "max_pocket_size": args.max_pocket_size,
-        "min_pocket_size": args.min_pocket_size,
-        "compute_interactions": args.compute_interactions,
-        "pocket_type": args.pocket_type,
-    }
-    system_target = process_complex(
-        pdb_id=args.pdb_id,
-        ligand_id=args.ligand_id,
-        pdb_path=args.pdb_file_target,
-        ligand_sdf_path=args.ligand_file_target,
-        **processing_params,
-    )
 
-    system_untarget = process_complex(
-        pdb_id=args.pdb_id,
-        ligand_id=args.ligand_id,
-        pdb_path=args.pdb_file_untarget,
-        ligand_sdf_path=args.ligand_file_untarget,
-        **processing_params,
+    args.pdb_file = args.pdb_file_target
+    args.ligand_file = args.ligand_file_target
+    system_target = load_data_from_pdb(
+        args,
+        remove_hs=remove_hs,
+        remove_aromaticity=remove_aromaticity,
     )
-    system_target = system_target.remove_hs(include_ligand=remove_hs)
-    system_untarget = system_untarget.remove_hs(include_ligand=remove_hs)
-    return system_target, system_untarget
+    args.pdb_file = args.pdb_file_untarget
+    args.ligand_file = args.ligand_file_untarget
+    system_offtarget = load_data_from_pdb(
+        args,
+        remove_hs=remove_hs,
+        remove_aromaticity=remove_aromaticity,
+    )
+    return system_target, system_offtarget
 
 
 def load_data_from_lmdb_mol(
@@ -890,3 +876,59 @@ def filter_diverse_ligands_bulk(ligands, pdbs=None, threshold=0.9):
         pdbs = [pdbs[i] for i in selected_indices]
         return ligands, pdbs
     return ligands
+
+
+def load_config_file(config_path: Union[str, Path]) -> Dict[str, Any]:
+    """
+    Load a JSON or YAML configuration file and return as dictionary.
+    """
+    config_path = Path(config_path)
+
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    file_extension = config_path.suffix.lower()
+
+    try:
+        with open(config_path, "r") as f:
+            if file_extension == ".json":
+                config = json.load(f)
+            elif file_extension in [".yaml", ".yml"]:
+                config = yaml.safe_load(f)
+            else:
+                raise ValueError(
+                    f"Unsupported file format: {file_extension}. Use .json, .yaml, or .yml"
+                )
+
+        return config
+
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON file: {e}")
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML file: {e}")
+    except Exception as e:
+        raise ValueError(f"Error reading config file: {e}")
+
+
+def get_guidance_params(args) -> Dict[str, Any]:
+    """
+    Get guidance parameters either from config file or use defaults.
+    """
+    if args.guidance_config is not None:
+        print(f"Loading guidance config from: {args.guidance_config}")
+        guidance_params = load_config_file(args.guidance_config)
+    else:
+        # Default guidance parameters
+        guidance_params = {
+            "apply_guidance": False,
+            "window_start": 0.0,
+            "window_end": 0.3,
+            "value_key": "affinity",
+            "subvalue_key": "pic50",
+            "mu": 8.0,
+            "sigma": 2.0,
+            "maximize": True,
+            "coord_noise_level": 0.2,
+        }
+
+    return guidance_params

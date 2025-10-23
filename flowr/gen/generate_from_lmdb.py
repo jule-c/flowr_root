@@ -1,26 +1,19 @@
 import argparse
-import json
 import time
 import warnings
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, Union
 
 import numpy as np
 import torch
-import yaml
 from tqdm import tqdm
 
+import flowr.gen.utils as util
 import flowr.util.rdkit as smolRD
 from flowr.data.dataset import (
     GeometricDataset,
 )
 from flowr.gen.generate import generate_ligands_per_target
-from flowr.gen.utils import (
-    get_dataloader,
-    load_data_from_lmdb,
-    load_util,
-)
 from flowr.scriptutil import (
     load_model,
 )
@@ -51,62 +44,6 @@ def create_list_defaultdict():
     return defaultdict(list)
 
 
-def load_config_file(config_path: Union[str, Path]) -> Dict[str, Any]:
-    """
-    Load a JSON or YAML configuration file and return as dictionary.
-    """
-    config_path = Path(config_path)
-
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-
-    file_extension = config_path.suffix.lower()
-
-    try:
-        with open(config_path, "r") as f:
-            if file_extension == ".json":
-                config = json.load(f)
-            elif file_extension in [".yaml", ".yml"]:
-                config = yaml.safe_load(f)
-            else:
-                raise ValueError(
-                    f"Unsupported file format: {file_extension}. Use .json, .yaml, or .yml"
-                )
-
-        return config
-
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON file: {e}")
-    except yaml.YAMLError as e:
-        raise ValueError(f"Invalid YAML file: {e}")
-    except Exception as e:
-        raise ValueError(f"Error reading config file: {e}")
-
-
-def get_guidance_params(args) -> Dict[str, Any]:
-    """
-    Get guidance parameters either from config file or use defaults.
-    """
-    if args.guidance_config is not None:
-        print(f"Loading guidance config from: {args.guidance_config}")
-        guidance_params = load_config_file(args.guidance_config)
-    else:
-        # Default guidance parameters
-        guidance_params = {
-            "apply_guidance": False,
-            "window_start": 0.0,
-            "window_end": 0.3,
-            "value_key": "affinity",
-            "subvalue_key": "pic50",
-            "mu": 8.0,
-            "sigma": 2.0,
-            "maximize": True,
-            "coord_noise_level": 0.2,
-        }
-
-    return guidance_params
-
-
 def evaluate(args):
     # Set precision
     torch.set_float32_matmul_precision("high")
@@ -132,7 +69,7 @@ def evaluate(args):
     print("Model complete.")
 
     # load util
-    transform, interpolant = load_util(
+    transform, interpolant = util.load_util(
         args,
         hparams,
         vocab,
@@ -142,7 +79,7 @@ def evaluate(args):
     )
 
     # Load the data
-    systems = load_data_from_lmdb(
+    systems = util.load_data_from_lmdb(
         args,
         remove_hs=hparams["remove_hs"],
         remove_aromaticity=hparams["remove_aromaticity"],
@@ -151,7 +88,7 @@ def evaluate(args):
         sample_n_molecules=args.max_samples,  # Limit to max samples e.g. for quicker testing
     )
 
-    guidance_params = get_guidance_params(args)
+    guidance_params = util.get_guidance_params(args)
     print("\nStarting sampling...\n")
     out_dict = defaultdict(list)
     for system in tqdm(systems, desc="Sampling ligands"):
@@ -177,7 +114,7 @@ def evaluate(args):
                 f"...Sampling iteration {k + 1}...",
                 end="\r",
             )
-            dataloader = get_dataloader(args, data, interpolant, iter=k)
+            dataloader = util.get_dataloader(args, data, interpolant, iter=k)
             for batch in tqdm(dataloader, desc="Sampling", leave=False):
                 prior, posterior, _, _ = batch
                 batch_start = time.time()

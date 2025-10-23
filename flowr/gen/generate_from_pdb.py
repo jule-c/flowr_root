@@ -16,7 +16,6 @@ import flowr.gen.utils as util
 import flowr.util.rdkit as smolRD
 from flowr.data.dataset import GeometricDataset
 from flowr.gen.generate import generate_ligands_per_target
-from flowr.gen.generate_from_lmdb import get_guidance_params
 from flowr.scriptutil import (
     load_model,
 )
@@ -89,7 +88,7 @@ def evaluate(args):
         vocab_aromatic,
     )
 
-    guidance_params = get_guidance_params(args)
+    guidance_params = util.get_guidance_params(args)
 
     # Load the data
     system = util.load_data_from_pdb(

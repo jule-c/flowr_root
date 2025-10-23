@@ -25,6 +25,7 @@ nohup.out
 subslurm/
 slurm-*
 scripts/test.sh
+scripts/tests/
 
 # Local data
 .data/

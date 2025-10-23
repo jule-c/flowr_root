@@ -12,19 +12,10 @@ import torch
 from rdkit import Chem
 from tqdm import tqdm
 
+import flowr.gen.utils as util
 import flowr.util.rdkit as smolRD
 from flowr.data.dataset import GeometricDataset
-from flowr.gen.generate_from_lmdb import get_guidance_params
-from flowr.gen.utils import (
-    filter_diverse_ligands_bulk,
-    get_dataloader,
-    load_data_from_pdb_selective,
-    load_util,
-    process_interaction,
-    process_lig,
-    process_lig_wrapper,
-    write_ligand_pocket_complex_pdb,
-)
+from flowr.gen.generate import generate_ligands_per_target_selective
 from flowr.scriptutil import (
     load_model,
 )
@@ -50,186 +41,6 @@ DEFAULT_CATEGORICAL_STRATEGY = "uniform-sample"
 
 def create_list_defaultdict():
     return defaultdict(list)
-
-
-def generate_ligands_per_target_selective(
-    args,
-    model,
-    prior,
-    posterior_target,
-    posterior_untarget,
-    pocket_noise="fix",
-    device="cuda",
-    save_traj=False,
-    iter="",
-    guidance_params: dict | None = None,
-):
-    """
-    Generate ligands for a specific protein target using flow-based molecular generation.
-
-    This function performs molecular generation by flowing from a prior distribution to the
-    target data distribution, conditioning on protein pocket information. It supports both
-    rigid and flexible pocket conformations depending on the model architecture.
-    If inpainting is enabled, the function will also handle masked regions in the ligand
-    during generation, where the prior is modified accordingly (masked prior).
-
-    Args:
-        args: Configuration object containing generation parameters including:
-            - arch: Model architecture ("pocket_flex" for flexible pocket models)
-            - integration_steps: Number of ODE integration steps for generation
-            - ode_sampling_strategy: Strategy for ODE sampling ("euler", "heun", etc.)
-            - solver: ODE solver type for numerical integration
-            - corrector_iters: Number of corrector iterations for predictor-corrector methods
-            - save_dir: Directory path for saving generated structures
-        model: Trained flow-based molecular generation model with methods:
-            - builder.extract_ligand_from_complex(): Extract ligand data from complex
-            - builder.extract_pocket_from_complex(): Extract pocket data from complex
-            - _generate(): Core generation method using flow matching
-            - _generate_mols(): Convert generated coordinates to RDKit molecules
-            - retrieve_pdbs(): Save generated structures as PDB files (for flexible models)
-        prior: Prior distribution samples (noise) for ligand generation
-        posterior: Target data containing ground truth ligand-pocket complexes
-        pocket_noise: Type of pocket noise ("apo", "holo", "random")
-        device (str, optional): PyTorch device for computation. Defaults to "cuda".
-        save_traj (bool, optional): Whether to save generation trajectory. Defaults to False.
-        iter (str, optional): Iteration identifier for file naming. Defaults to "".
-
-    Returns:
-        For rigid pocket models:
-            list[rdkit.Chem.Mol]: Generated ligand molecules as RDKit Mol objects
-
-        For flexible pocket models ("pocket_flex"):
-            tuple: (generated_ligands, generated_pdbs) where:
-                - generated_ligands: list[rdkit.Chem.Mol] - Generated ligand molecules
-                - generated_pdbs: list[str] - Paths to generated PDB files with pocket conformations
-    """
-
-    assert (
-        len(set([cmpl.metadata["system_id"] for cmpl in posterior_target["complex"]]))
-        == 1
-    ), "Sampling N ligands per target, but found mixed targets"
-
-    # Get ligand and pocket data
-    lig_prior = model.builder.extract_ligand_from_complex(prior)
-    lig_prior["interactions"] = prior["interactions"]
-    lig_prior["fragment_mask"] = prior["fragment_mask"]
-    lig_prior = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_prior.items()}
-
-    # pocket data
-    if args.arch == "pocket_flex" and pocket_noise == "apo":
-        pocket_data_target = model.builder.extract_pocket_from_complex(prior)
-    else:
-        pocket_data_target = model.builder.extract_pocket_from_complex(posterior_target)
-    pocket_data_target["interactions"] = posterior_target["interactions"]
-    pocket_data_target["complex"] = posterior_target["complex"]
-    pocket_data_target = {
-        k: v.cuda() if torch.is_tensor(v) else v for k, v in pocket_data_target.items()
-    }
-
-    if args.arch == "pocket_flex" and pocket_noise == "apo":
-        pocket_data_untarget = model.builder.extract_pocket_from_complex(prior)
-    else:
-        pocket_data_untarget = model.builder.extract_pocket_from_complex(
-            posterior_untarget
-        )
-    pocket_data_untarget["interactions"] = posterior_untarget["interactions"]
-    pocket_data_untarget["complex"] = posterior_untarget["complex"]
-    pocket_data_untarget = {
-        k: v.cuda() if torch.is_tensor(v) else v
-        for k, v in pocket_data_untarget.items()
-    }
-
-    # Build starting times for the integrator
-    lig_times_cont = torch.zeros(prior["coords"].size(0), device=device)
-    lig_times_disc = torch.zeros(prior["coords"].size(0), device=device)
-    pocket_times = torch.zeros(pocket_data_target["coords"].size(0), device=device)
-    prior_times = [lig_times_cont, lig_times_disc, pocket_times]
-
-    # Run generation N times
-    if guidance_params is None:
-        guidance_params = {}
-        guidance_params["apply_guidance"] = False
-        guidance_params["window_start"] = 0.0
-        guidance_params["window_end"] = 0.4
-        guidance_params["value_key"] = "affinity"
-        guidance_params["subvalue_key"] = "pic50"
-        guidance_params["mu"] = 8.0
-        guidance_params["sigma"] = 2.0
-        guidance_params["maximize"] = True
-        guidance_params["coord_noise_level"] = 0.2
-
-    output = model._generate_selective(
-        prior=lig_prior,
-        pocket_data_target=pocket_data_target,
-        pocket_data_untarget=pocket_data_untarget,
-        times=prior_times,
-        steps=args.integration_steps,
-        strategy=args.ode_sampling_strategy,
-        solver=args.solver,
-        corr_iters=args.corrector_iters,
-        save_traj=save_traj,
-        iter=iter,
-        apply_guidance=guidance_params["apply_guidance"],
-        guidance_window_start=guidance_params["window_start"],
-        guidance_window_end=guidance_params["window_end"],
-        value_key=guidance_params["value_key"],
-        mu=guidance_params["mu"],
-        sigma=guidance_params["sigma"],
-        maximize=guidance_params["maximize"],
-        coord_noise_level=guidance_params["coord_noise_level"],
-    )
-
-    # Generate RDKit molecules
-    gen_ligs = model._generate_mols(output)
-
-    # Attach affinity predictions as properties if present
-    if "affinity" in output:
-        affinity = output["affinity"]
-        # Ensure affinity is a dict-like object with keys: pic50, pki, pkd, pec50
-        for mol, idx in zip(gen_ligs, range(len(gen_ligs))):
-            if mol is not None:
-                metadata = posterior_target["complex"][0].metadata
-                system_id = metadata["system_id"]
-                mol.SetProp("_Name", str(system_id))
-                if "pic50" in metadata:
-                    exp_pic50 = metadata["pic50"]
-                    mol.SetProp("exp_pic50", str(exp_pic50))
-                if "pkd" in metadata:
-                    exp_pkd = metadata["pkd"]
-                    mol.SetProp("exp_pkd", str(exp_pkd))
-                if "pki" in metadata:
-                    exp_pki = metadata["pki"]
-                    mol.SetProp("exp_pki", str(exp_pki))
-                if "pec50" in metadata:
-                    exp_pec50 = metadata["pec50"]
-                    mol.SetProp("exp_pec50", str(exp_pec50))
-                for key in ["pic50", "pki", "pkd", "pec50"] + [
-                    "pic50_untarget",
-                    "pki_untarget",
-                    "pkd_untarget",
-                    "pec50_untarget",
-                ]:
-                    value = affinity[key]
-                    # If value is a tensor, get the scalar for this molecule
-                    if hasattr(value, "detach"):
-                        val = value[idx].item() if value.ndim > 0 else value.item()
-                    else:
-                        val = value[idx] if isinstance(value, (list, tuple)) else value
-                    mol.SetProp(key, str(val))
-
-    if args.arch == "pocket_flex":
-        pocket_data_target = {
-            k: v.cpu().detach() if torch.is_tensor(v) else v
-            for k, v in pocket_data_target.items()
-        }
-        gen_pdbs = model.retrieve_pdbs(
-            pocket_data_target,
-            coords=output["pocket_coords"],
-            save_dir=Path(args.save_dir) / "gen_pdbs",
-            iter=iter,
-        )
-        return gen_ligs, gen_pdbs
-    return gen_ligs
 
 
 def get_dataset(system, transform, vocab, interpolant, args, hparams):
@@ -271,7 +82,7 @@ def evaluate(args):
     print("Model complete.")
 
     # load util
-    transform, interpolant = load_util(
+    transform, interpolant = util.load_util(
         args,
         hparams,
         vocab,
@@ -280,10 +91,11 @@ def evaluate(args):
         vocab_aromatic,
     )
 
-    guidance_params = get_guidance_params(args)
+    # Load guidance parameters
+    guidance_params = util.get_guidance_params(args)
 
     # Load the data
-    system_target, system_untarget = load_data_from_pdb_selective(
+    system_target, system_untarget = util.load_data_from_pdb_selective(
         args,
         remove_hs=hparams["remove_hs"],
         remove_aromaticity=hparams["remove_aromaticity"],
@@ -313,8 +125,10 @@ def evaluate(args):
             f"...Sampling iteration {k + 1}...",
             end="\r",
         )
-        dataloader_target = get_dataloader(args, dataset_target, interpolant, iter=k)
-        dataloader_untarget = get_dataloader(
+        dataloader_target = util.get_dataloader(
+            args, dataset_target, interpolant, iter=k
+        )
+        dataloader_untarget = util.get_dataloader(
             args, dataset_untarget, interpolant, iter=k
         )
 
@@ -432,11 +246,11 @@ def evaluate(args):
     # Filter by diversity
     print("Filtering ligands by diversity...")
     if args.arch == "pocket_flex":
-        all_gen_ligs, all_gen_pdbs = filter_diverse_ligands_bulk(
+        all_gen_ligs, all_gen_pdbs = util.filter_diverse_ligands_bulk(
             all_gen_ligs, all_gen_pdbs, threshold=0.9
         )
     else:
-        all_gen_ligs = filter_diverse_ligands_bulk(all_gen_ligs, threshold=0.995)
+        all_gen_ligs = util.filter_diverse_ligands_bulk(all_gen_ligs, threshold=0.995)
     print(
         f"Number of ligands after filtering by diversity: {len(all_gen_ligs)} ligands ({args.sample_n_molecules_per_target - len(all_gen_ligs)} removed)"
     )
@@ -466,7 +280,7 @@ def evaluate(args):
         # Create a partial function binding pdb_file and optimizer
         if args.arch == "pocket_flex":
             process_lig_partial = partial(
-                process_lig_wrapper,
+                util.process_lig_wrapper,
                 optimizer=optimizer,
                 optimize_pocket_hs=True,
                 process_pocket=True,
@@ -477,7 +291,7 @@ def evaluate(args):
                 )
         else:
             process_lig_partial = partial(
-                process_lig,
+                util.process_lig,
                 pdb_file=ref_pdb_with_hs,
                 optimizer=optimizer,
                 process_pocket=True,
@@ -520,13 +334,13 @@ def evaluate(args):
         if not gen_complexes_dir.exists():
             gen_complexes_dir.mkdir(parents=True, exist_ok=True)
         if args.add_hs_and_optimize_gen_ligs:
-            write_ligand_pocket_complex_pdb(
+            util.write_ligand_pocket_complex_pdb(
                 all_gen_ligs_hs,
                 all_gen_pdbs,
                 gen_complexes_dir,
                 complex_name=target_name,
             )
-        write_ligand_pocket_complex_pdb(
+        util.write_ligand_pocket_complex_pdb(
             all_gen_ligs,
             all_gen_pdbs,
             gen_complexes_dir,
@@ -545,7 +359,7 @@ def evaluate(args):
             for i in range(0, len(all_gen_ligs_hs), args.num_workers)
         ]
         process_interaction_partial = partial(
-            process_interaction,
+            util.process_interaction,
             ref_lig=ref_lig_with_hs,
             pdb_file=ref_pdb_with_hs,
             pocket_cutoff=args.pocket_cutoff,
@@ -568,6 +382,24 @@ def evaluate(args):
         out_dict["tanimoto_sims"] = tanimoto_sims
         print(f"Interaction recovery rate: {np.nanmean(recovery_rates)}")
         print(f"Interaction Tanimoto similarity: {np.nanmean(tanimoto_sims)}")
+
+
+def parse_substructure(value):
+    """
+    Parse substructure argument as either a SMILES/SMARTS string or an integer.
+
+    Args:
+        value: String input from argparse
+
+    Returns:
+        str or int: SMILES/SMARTS string or atom index as integer
+    """
+    # Try to parse as integer
+    try:
+        return int(value)
+    except ValueError:
+        # If not an integer, treat as SMILES/SMARTS string
+        return value
 
 
 def get_args():
@@ -603,8 +435,7 @@ def get_args():
     parser.add_argument("--num_workers", type=int, default=24)
     parser.add_argument("--arch", type=str, choices=["pocket", "pocket_flex"], required=True)
     parser.add_argument(
-        "--pocket_type", type=str, choices=["holo", "apo"],
-        default="holo",
+        "--pocket_type", type=str, choices=["holo", "apo"], required=True
     )
     parser.add_argument(
         "--pocket_coord_noise_std", type=float, default=0.0,
@@ -628,6 +459,8 @@ def get_args():
 
     parser.add_argument("--filter_valid_unique", action="store_true")
     parser.add_argument("--filter_pb_valid", action="store_true")
+    parser.add_argument("--filter_cond_substructure", action="store_true")
+    parser.add_argument("--calc_strain", action="store_true")
 
     parser.add_argument("--batch_cost", type=int)
     parser.add_argument("--dataset_split", type=str, default=None)
@@ -643,7 +476,13 @@ def get_args():
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--core_inpainting", action="store_true")
     parser.add_argument("--substructure_inpainting", action="store_true")
-    parser.add_argument("--substructure", type=str, default=None)
+    parser.add_argument(
+        "--substructure", 
+        type=parse_substructure,
+        nargs='+',  # This allows multiple space-separated values
+        default=None,
+        help="SMILES/SMARTS string or space-separated atom indices (e.g., '10 11 12 13' or 'c1ccccc1')"
+    )
     parser.add_argument(
         "--graph_inpainting",
         default=None,
