@@ -170,7 +170,7 @@ This final step computes essential data distribution statistics required for tra
    ```
 
 **Option A: Custom Train/Val/Test Split**
-- Place your `splits.npz` file in the `final/` folder
+- Place your `splits.npz` file (with keys idx_train, idx_val and idx_test containing indices) in the `final/` folder
 - Comment out `--val_size` and `--test_size` parameters in `data_statistics.sl`
 
 **Option B: Random Split**  
