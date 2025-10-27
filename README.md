@@ -12,8 +12,14 @@ This is a research repository introducing FLOWR.root.
 - [Installation](#installation)
 - [Getting Started](#getting-started)
   - [Data](#data)
-  - [Generating Molecules from PDB/CIF](#generating-molecules-from-pdb)
-  - [Affinity prediction](#affinity-prediction)
+  - [Generating Molecules from PDB/CIF](#generating-molecules-from-pdbcif)
+  - [Predicting Binding Affinities](#predicting-binding-affinities)
+- [Data Preprocessing](#data-preprocessing)
+  - [Input Data Requirements](#input-data-requirements)
+  - [Preprocessing Workflow](#preprocessing-workflow)
+- [Finetuning](#finetuning)
+  - [Prerequisites](#prerequisites)
+  - [Running Fine-tuning](#running-fine-tuning)
 - [Contributing](#contributing)
 - [License](#license)
 - [Citation](#citation)
@@ -95,6 +101,106 @@ sbatch scripts/predict_aff.sl
 
 De-noised ligands are saved as an SDF file at the specified location (save_dir). 
 The SDF file contains predicted affinity values (pIC50, pKi, pKd, pEC50)
+
+---
+
+
+## Data Preprocessing
+
+To train FLOWR.root on your own custom datasets, you'll need to preprocess your protein-ligand complexes into the required LMDB format. The `flowr/data/preprocess_data/` directory contains all necessary SLURM batch scripts to streamline this workflow.
+
+### 📁 Input Data Requirements
+
+Your input data should be organized in a folder named `data/` with the following structure:
+
+- **Ligand files**: SDF format
+- **Protein files**: PDB format
+- **Naming convention**: Files must share a consistent system identifier, like
+
+data/
+├── system_1.sdf
+├── system_1.pdb
+├── system_2.sdf
+├── system_2.pdb
+└── ...
+
+---
+
+### 🔄 Preprocessing Workflow
+
+The preprocessing pipeline consists of three sequential steps:
+
+#### **Step 1: Create LMDB Chunks** (`preprocess.sl`)
+
+This script parallelizes the preprocessing across multiple jobs, creating N LMDB databases.
+
+1. Modify `flowr/data/preprocess_data/custom_data/preprocess.sl` according to:
+   - Your compute environment (partition, memory, time limits)
+   - Your folder structure (paths to `data/` directory)
+   - Number of parallel jobs via `num_jobs` parameter (e.g., `num_jobs=100` for larger, `num_jobs=10` for smaller datasets)
+   - SLURM array size (`--array=1-N` where N ≥ num_jobs)
+
+2. Submit the job:
+   ```bash
+   sbatch flowr/data/preprocess_data/custom_data/preprocess.sl
+
+
+#### **Step 2: Merge LMDB Databases** (`merge.sl`)
+
+Once all preprocessing jobs complete, merge the individual LMDB chunks into a single database.
+
+1. Modify `flowr/data/preprocess_data/custom_data/merge.sl` if needed
+
+2. Submit the merge job:
+   ```bash
+   sbatch flowr/data/preprocess_data/custom_data/merge.sl
+
+3. Output: Unified LMDB saved in final/ folder
+
+
+#### **Step 3: Calculate Data Statistics** (data_statistics.sl)
+
+This final step computes essential data distribution statistics required for training.
+
+1. Modify `flowr/data/preprocess_data/custom_data/data_statistics.sl` according to your split preference:
+
+2. Submit the statistics job:
+   ```bash
+   sbatch flowr/data/preprocess_data/custom_data/data_statistics.sl
+   ```
+
+**Option A: Custom Train/Val/Test Split**
+- Place your `splits.npz` file in the `final/` folder
+- Comment out `--val_size` and `--test_size` parameters in `data_statistics.sl`
+
+**Option B: Random Split**  
+- The script will automatically create train/val/test splits with the specified sizes
+- Modify `--val_size` and `--test_size` as needed
+- Adjust `--seed` for reproducibility
+
+3. Output: Statistics saved alongside the final LMDB database
+
+---
+
+
+## Finetuning
+
+FLOWR.root can be fine-tuned on your custom datasets using full model fine-tuning (default) or LoRA (not yet supported).
+
+### Prerequisites
+
+Before fine-tuning, ensure you have:
+1. Preprocessed your custom dataset following the [Data Preprocessing](#data-preprocessing) workflow
+2. Downloaded the pre-trained FLOWR.root checkpoint from [Google Drive](https://drive.google.com/drive/u/0/folders/1NWpzTY-BG_9C4zXZndWlKwdu7UJNCYj8)
+
+### Running Fine-tuning
+
+1. Modify `scripts/finetune.sl` according to your setup
+
+2. Submit the fine-tuning job:
+   ```bash
+   sbatch scripts/finetune.sl
+
 
 ---
 
