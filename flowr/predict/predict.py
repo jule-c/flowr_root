@@ -1,6 +1,5 @@
 import lightning as L
 import torch
-from rdkit import Chem
 
 
 def predict_affinity_batch(

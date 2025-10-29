@@ -92,7 +92,8 @@ def predict(args):
     gen_lig_with_aff = predict_affinity_batch(
         args,
         model=model,
-        posterior=batch[1],  # only the posterior is needed
+        prior=batch[0],
+        posterior=batch[1],
         noise_scale=args.coord_noise_scale,
         eps=1e-4,
         seed=args.seed,
