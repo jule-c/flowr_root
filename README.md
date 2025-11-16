@@ -185,7 +185,7 @@ This final step computes essential data distribution statistics required for tra
 
 ## Finetuning
 
-FLOWR.root can be fine-tuned on your custom datasets using full model fine-tuning (default) or LoRA (not yet supported).
+FLOWR.root can be fine-tuned on your custom datasets using full model or LoRA fine-tuning.
 
 ### Prerequisites
 
@@ -193,14 +193,22 @@ Before fine-tuning, ensure you have:
 1. Preprocessed your custom dataset following the [Data Preprocessing](#data-preprocessing) workflow
 2. Downloaded the pre-trained FLOWR.root checkpoint from [Google Drive](https://drive.google.com/drive/u/0/folders/1NWpzTY-BG_9C4zXZndWlKwdu7UJNCYj8)
 
-### Running Fine-tuning
+### Running Full Fine-tuning
 
 1. Modify `scripts/finetune.sl` according to your setup
 
-2. Submit the fine-tuning job:
+2. Submit the full fine-tuning job:
    ```bash
    sbatch scripts/finetune.sl
 
+
+### Running LoRA Fine-tuning
+
+1. Modify `scripts/finetune_lora.sl` according to your setup.
+
+2. Submit the LoRA fine-tuning job:
+   ```bash
+   sbatch scripts/finetune_lora.sl
 
 ---
 

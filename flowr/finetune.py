@@ -153,7 +153,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt_path", type=str, default=None)
     parser.add_argument("--load_pretrained_ckpt", action="store_true")
     parser.add_argument(
-        "--save_dir", type=str, default="."
+        "--save_dir", type=str, default="/hpfs/userws/cremej01/projects/flowr_logs"
     )
     parser.add_argument("--val_check_epochs", type=int, default=None)
     parser.add_argument("--val_check_interval", type=float, default=0.5)
@@ -162,6 +162,8 @@ if __name__ == "__main__":
 
     ################################ FINETUNING ################################
     parser.add_argument("--lora_finetuning", action="store_true")
+    parser.add_argument("--lora_rank", type=int, default=16)
+    parser.add_argument("--lora_alpha", type=int, default=32)
     parser.add_argument("--freeze_layers", action="store_true")
     parser.add_argument(
         "--affinity_finetuning",

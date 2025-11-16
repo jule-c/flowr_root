@@ -1,5 +1,6 @@
 """Main util file for all scripts"""
 
+import copy
 import datetime
 import math
 import os
@@ -538,6 +539,22 @@ def make_splits(
     )
 
 
+# Function to recursively inject LoRA layers
+def _inject_lora(lora_rank: int, lora_alpha: float, mod: torch.nn.Module):
+    from flowr.models.lora import LinearWithLoRA
+
+    for name, child in mod.named_children():
+        # wrap any pure Linear
+        if isinstance(child, torch.nn.Linear):
+            setattr(
+                mod,
+                name,
+                LinearWithLoRA(child, rank=lora_rank, alpha=lora_alpha),
+            )
+        else:
+            _inject_lora(lora_rank, lora_alpha, child)
+
+
 # *****************************************************************************
 # *****************************************************************************
 # *****************************************************************************
@@ -977,6 +994,32 @@ def load_model(
     hparams["use_rbf"] = hparams.get("use_rbf", False)
     hparams["use_distances"] = hparams.get("use_distances", False)
     hparams["use_crossproducts"] = hparams.get("use_crossproducts", False)
+    hparams["lr"] = args.lr if getattr(args, "lr", None) else hparams.get("lr", 1e-4)
+    hparams["lr_schedule"] = (
+        args.lr_schedule
+        if getattr(args, "lr_schedule", None) is not None
+        else hparams.get("lr_schedule", "exponential")
+    )
+    hparams["lr_gamma"] = (
+        args.lr_gamma
+        if getattr(args, "lr_gamma", None) is not None
+        else hparams.get("lr_gamma", 0.995)
+    )
+    hparams["weight_decay"] = (
+        args.weight_decay
+        if getattr(args, "weight_decay", None) is not None
+        else hparams.get("weight_decay", 1e-12)
+    )
+    hparams["beta1"] = (
+        args.beta1
+        if getattr(args, "beta1", None) is not None
+        else hparams.get("beta1", 0.9)
+    )
+    hparams["beta2"] = (
+        args.beta2
+        if getattr(args, "beta2", None) is not None
+        else hparams.get("beta2", 0.95)
+    )
 
     # Number of corrector iterations
     if args.corrector_iters > 0:
@@ -1020,13 +1063,14 @@ def load_model(
     n_hybridization_types = (
         vocab_hybridization.size if vocab_hybridization is not None else None
     )
-    n_aromatic_types = vocab_aromatic.size if vocab_aromatic is not None else None
+    # n_aromatic_types = vocab_aromatic.size if vocab_aromatic is not None else None
     n_interaction_types = (
         len(PROLIF_INTERACTIONS) + 1
         if hparams["flow_interactions"] or hparams["predict_interactions"]
         else None
     )
 
+    # Build the EGNN generator
     if args.arch == "pocket":
         from flowr.models.fm_pocket import LigandPocketCFM
         from flowr.models.pocket import LigandGenerator, PocketEncoder
@@ -1110,206 +1154,24 @@ def load_model(
     else:
         raise ValueError(f"Unknown architecture {args.arch}")
 
-    if hasattr(args, "load_pretrained_ckpt") and args.load_pretrained_ckpt:
-        print(f"Loading pretrained checkpoint from {args.ckpt_path}...")
-        state_dict = torch.load(args.ckpt_path)["state_dict"]
-        state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
-        egnn_gen.load_state_dict(state_dict, strict=True)
-
-        if args.lora_finetuning:
-            from flowr.models.lora import LinearWithLoRA
-            from flowr.models.pocket import SemlaCondAttention
-
-            lora_rank, lora_alpha = 8, 16
-
-            def _inject_lora(mod):
-                for name, child in mod.named_children():
-                    # skip the entire cross-attention blocks
-                    if isinstance(child, SemlaCondAttention):
-                        continue
-                    # wrap any pure Linear
-                    if isinstance(child, torch.nn.Linear):
-                        setattr(
-                            mod,
-                            name,
-                            LinearWithLoRA(child, rank=lora_rank, alpha=lora_alpha),
-                        )
-                    else:
-                        _inject_lora(child)
-
-            # Apply LoRA to ligand decoder
-            _inject_lora(egnn_gen.ligand_dec)
-
-            # Freeze all parameters except LoRA and conditional attention
-            trainable_params = 0
-            total_params = 0
-
-            for n, p in egnn_gen.ligand_dec.named_parameters():
-                total_params += p.numel()
-                if "lora" in n or "cond_attention" in n:
-                    p.requires_grad = True
-                    trainable_params += p.numel()
-                else:
-                    p.requires_grad = False
-
-            # Keep pocket encoder trainable if exists
-            if egnn_gen.pocket_enc is not None:
-                for p in egnn_gen.pocket_enc.parameters():
-                    p.requires_grad = True
-                    trainable_params += p.numel()
-                    total_params += p.numel()
-
-            print(
-                f"LoRA: {trainable_params}/{total_params} parameters trainable ({100*trainable_params/total_params:.2f}%)"
+    # Check if the model has been LoRA finetuned
+    if hparams.get("lora_finetuning", False):
+        # Apply LoRA to ligand decoder
+        _inject_lora(
+            lora_rank=hparams["lora_rank"],
+            lora_alpha=hparams["lora_alpha"],
+            mod=egnn_gen.ligand_dec,
+        )
+        # Apply LoRA to pocket encoder if exists
+        if egnn_gen.pocket_enc is not None:
+            _inject_lora(
+                lora_rank=hparams["lora_rank"],
+                lora_alpha=hparams["lora_alpha"],
+                mod=egnn_gen.pocket_enc,
             )
-            return egnn_gen
 
-        if args.freeze_layers:
-
-            def _freeze_bottom_layers(args, egnn_gen):
-                """Freeze bottom layers for gentle fine-tuning"""
-
-                n_layers_to_train = getattr(args, "n_top_layers_to_retrain", 3)
-                n_layers_to_train_pocket = getattr(
-                    args, "n_top_layers_to_retrain_pocket", 2
-                )
-
-                trainable_params = 0
-                total_params = 0
-
-                # For LigandGenerator with pocket conditioning (args.arch == "pocket")
-                if hasattr(egnn_gen, "ligand_dec") and hasattr(
-                    egnn_gen.ligand_dec, "layers"
-                ):
-                    layers = egnn_gen.ligand_dec.layers
-                    n_layers = len(layers)
-
-                    print(
-                        f"Found {n_layers} ligand decoder layers, training top {n_layers_to_train}"
-                    )
-
-                    for i, layer in enumerate(layers):
-                        layer_name = f"ligand_dec.layers.{i}"
-                        if i < n_layers - n_layers_to_train:
-                            # Freeze bottom layers
-                            for name, param in layer.named_parameters():
-                                param.requires_grad = False
-                                total_params += param.numel()
-                                print(f"  Frozen: {layer_name}.{name}")
-                        else:
-                            # Train top layers
-                            for name, param in layer.named_parameters():
-                                param.requires_grad = True
-                                trainable_params += param.numel()
-                                total_params += param.numel()
-                                print(f"  Trainable: {layer_name}.{name}")
-                else:
-                    raise ValueError("Ligand decoder missing in initiated model!")
-
-                # Here in this func, always keep pocket encoder trainable (if it exists)
-                if hasattr(egnn_gen, "pocket_enc") and egnn_gen.pocket_enc is not None:
-                    if n_layers_to_train_pocket is not None:
-                        egnn_gen.pocket_enc.freeze_bottom_layers(
-                            n_layers_to_train_pocket
-                        )
-                        print(
-                            f"  Pocket encoder: training top {n_layers_to_train_pocket} layers"
-                        )
-                    else:
-                        for name, param in egnn_gen.pocket_enc.named_parameters():
-                            param.requires_grad = True
-                            trainable_params += param.numel()
-                            total_params += param.numel()
-                        print("  Pocket encoder: kept trainable")
-                else:
-                    raise ValueError("Pocket encoder missing in initiated model!")
-
-                # Keep output projections trainable - these are direct attributes of ligand_dec
-                output_module_names = [
-                    "coord_out_proj",
-                    "atom_type_proj",
-                    "atom_charge_proj",
-                    "bond_proj",
-                    "bond_refine",
-                ]
-                if hparams["predict_affinity"]:
-                    output_module_names += [
-                        "pic50_head",
-                        "pkd_head",
-                        "pki_head",
-                        "pec50_head",
-                    ]
-                if hparams["predict_docking_score"]:
-                    output_module_names += ["vina_head", "gnina_head"]
-
-                for module_name in output_module_names:
-                    if hasattr(egnn_gen.ligand_dec, module_name):
-                        module = getattr(egnn_gen.ligand_dec, module_name)
-                        for name, param in module.named_parameters():
-                            param.requires_grad = True
-                            trainable_params += param.numel()
-                            total_params += param.numel()
-                        print(
-                            f"  Output module ligand_dec.{module_name}: kept trainable"
-                        )
-
-                # Handle final normalization layers
-                norm_modules = ["final_coord_norm", "final_inv_norm", "final_bond_norm"]
-                for module_name in norm_modules:
-                    if hasattr(egnn_gen.ligand_dec, module_name):
-                        module = getattr(egnn_gen.ligand_dec, module_name)
-                        for name, param in module.named_parameters():
-                            param.requires_grad = True
-                            trainable_params += param.numel()
-                            total_params += param.numel()
-                        print(f"  Norm module ligand_dec.{module_name}: kept trainable")
-
-                print(
-                    f"Layer freezing: {trainable_params}/{total_params} parameters trainable ({100*trainable_params/total_params:.2f}%)"
-                )
-                return egnn_gen
-
-            def _freeze_all_except_affinity_heads(args, egnn_gen):
-                """
-                Freeze all parameters except the selected affinity head(s).
-                """
-                affinity_heads = args.affinity_finetuning
-                if isinstance(affinity_heads, str):
-                    affinity_heads = [affinity_heads]
-                trainable_params = 0
-                total_params = 0
-
-                # Freeze all parameters
-                for name, param in egnn_gen.named_parameters():
-                    param.requires_grad = False
-                    total_params += param.numel()
-
-                # Unfreeze only the selected affinity head(s)
-                for head in affinity_heads:
-                    head_name = f"{head}_head"
-                    if hasattr(egnn_gen.ligand_dec, head_name):
-                        module = getattr(egnn_gen.ligand_dec, head_name)
-                        for n, p in module.named_parameters():
-                            p.requires_grad = True
-                            trainable_params += p.numel()
-                            print(
-                                f"  Affinity head ligand_dec.{head_name}.{n}: trainable"
-                            )
-                    else:
-                        print(
-                            f"  Warning: Affinity head ligand_dec.{head_name} not found in model."
-                        )
-
-                print(
-                    f"Affinity finetuning: {trainable_params}/{total_params} parameters trainable ({100*trainable_params/total_params:.2f}%)"
-                )
-                return egnn_gen
-
-            if getattr(args, "affinity_finetuning", None):
-                egnn_gen = _freeze_all_except_affinity_heads(args, egnn_gen)
-            else:
-                egnn_gen = _freeze_bottom_layers(args, egnn_gen)
-
+    print(f"Loading pretrained checkpoint from {args.ckpt_path}...")
+    # Initialize the ligand-pocket conditional flow model
     CFM = LigandPocketCFM
     type_mask_index = None
     bond_mask_index = None
@@ -1340,6 +1202,225 @@ def load_model(
         graph_inpainting=args.graph_inpainting is not None,
         **hparams,
     )
+
+    if getattr(args, "lora_finetuning", None):
+        print("Applying LoRA finetuning...")
+        _hparams = fm_model.hparams
+        _hparams["lora_finetuning"] = True
+        _hparams["lora_rank"] = args.lora_rank
+        _hparams["lora_alpha"] = args.lora_alpha
+
+        # Load the pretrained weights
+        state_dict = torch.load(args.ckpt_path)["state_dict"]
+        state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
+        egnn = copy.deepcopy(egnn_gen)
+        egnn.load_state_dict(state_dict, strict=True)
+        assert (
+            not args.affinity_finetuning
+        ), "Cannot use both LoRA and affinity_finetune."
+        assert not args.freeze_layers, "Cannot use both LoRA and freeze_layers."
+
+        # Apply LoRA to ligand decoder
+        _inject_lora(
+            lora_rank=args.lora_rank, lora_alpha=args.lora_alpha, mod=egnn.ligand_dec
+        )
+        # Apply LoRA to pocket encoder if exists
+        if egnn.pocket_enc is not None:
+            _inject_lora(
+                lora_rank=args.lora_rank,
+                lora_alpha=args.lora_alpha,
+                mod=egnn.pocket_enc,
+            )
+
+        # Freeze all parameters except LoRA
+        trainable_params = 0
+        total_params = 0
+
+        for n, p in egnn.ligand_dec.named_parameters():
+            total_params += p.numel()
+            if "lora" in n:
+                p.requires_grad = True
+                trainable_params += p.numel()
+            else:
+                p.requires_grad = False
+
+        # Keep pocket encoder trainable if exists
+        if egnn.pocket_enc is not None:
+            for n, p in egnn.pocket_enc.named_parameters():
+                total_params += p.numel()
+                if "lora" in n:
+                    p.requires_grad = True
+                    trainable_params += p.numel()
+                else:
+                    p.requires_grad = False
+
+        print(
+            f"LoRA: {trainable_params}/{total_params} parameters trainable ({100*trainable_params/total_params:.2f}%)"
+        )
+        # Set the modified generator back to the model
+        fm_model.gen = egnn
+        fm_model.save_hyperparameters(_hparams)
+
+    elif getattr(args, "freeze_layers", None):
+        print("Applying freeze_layers finetuning...")
+        state_dict = torch.load(args.ckpt_path)["state_dict"]
+        state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
+        egnn = copy.deepcopy(egnn_gen)
+        egnn.load_state_dict(state_dict, strict=True)
+        assert (
+            not args.affinity_finetuning
+        ), "Cannot use both freeze_layers and affinity_finetune."
+
+        def _freeze_bottom_layers(args, egnn_gen):
+            """Freeze bottom layers for gentle fine-tuning"""
+
+            n_layers_to_train = getattr(args, "n_top_layers_to_retrain", 3)
+            n_layers_to_train_pocket = getattr(
+                args, "n_top_layers_to_retrain_pocket", 2
+            )
+
+            trainable_params = 0
+            total_params = 0
+
+            # For LigandGenerator with pocket conditioning (args.arch == "pocket")
+            if hasattr(egnn_gen, "ligand_dec") and hasattr(
+                egnn_gen.ligand_dec, "layers"
+            ):
+                layers = egnn_gen.ligand_dec.layers
+                n_layers = len(layers)
+
+                print(
+                    f"Found {n_layers} ligand decoder layers, training top {n_layers_to_train}"
+                )
+
+                for i, layer in enumerate(layers):
+                    layer_name = f"ligand_dec.layers.{i}"
+                    if i < n_layers - n_layers_to_train:
+                        # Freeze bottom layers
+                        for name, param in layer.named_parameters():
+                            param.requires_grad = False
+                            total_params += param.numel()
+                            print(f"  Frozen: {layer_name}.{name}")
+                    else:
+                        # Train top layers
+                        for name, param in layer.named_parameters():
+                            param.requires_grad = True
+                            trainable_params += param.numel()
+                            total_params += param.numel()
+                            print(f"  Trainable: {layer_name}.{name}")
+            else:
+                raise ValueError("Ligand decoder missing in initiated model!")
+
+            # Here in this func, always keep pocket encoder trainable (if it exists)
+            if hasattr(egnn_gen, "pocket_enc") and egnn_gen.pocket_enc is not None:
+                if n_layers_to_train_pocket is not None:
+                    egnn_gen.pocket_enc.freeze_bottom_layers(n_layers_to_train_pocket)
+                    print(
+                        f"  Pocket encoder: training top {n_layers_to_train_pocket} layers"
+                    )
+                else:
+                    for name, param in egnn_gen.pocket_enc.named_parameters():
+                        param.requires_grad = True
+                        trainable_params += param.numel()
+                        total_params += param.numel()
+                    print("  Pocket encoder: kept trainable")
+            else:
+                raise ValueError("Pocket encoder missing in initiated model!")
+
+            # Keep output projections trainable - these are direct attributes of ligand_dec
+            output_module_names = [
+                "coord_out_proj",
+                "atom_type_proj",
+                "atom_charge_proj",
+                "bond_proj",
+                "bond_refine",
+            ]
+            if hparams["predict_affinity"]:
+                output_module_names += [
+                    "pic50_head",
+                    "pkd_head",
+                    "pki_head",
+                    "pec50_head",
+                ]
+            if hparams["predict_docking_score"]:
+                output_module_names += ["vina_head", "gnina_head"]
+
+            for module_name in output_module_names:
+                if hasattr(egnn_gen.ligand_dec, module_name):
+                    module = getattr(egnn_gen.ligand_dec, module_name)
+                    for name, param in module.named_parameters():
+                        param.requires_grad = True
+                        trainable_params += param.numel()
+                        total_params += param.numel()
+                    print(f"  Output module ligand_dec.{module_name}: kept trainable")
+
+            # Handle final normalization layers
+            norm_modules = ["final_coord_norm", "final_inv_norm", "final_bond_norm"]
+            for module_name in norm_modules:
+                if hasattr(egnn_gen.ligand_dec, module_name):
+                    module = getattr(egnn_gen.ligand_dec, module_name)
+                    for name, param in module.named_parameters():
+                        param.requires_grad = True
+                        trainable_params += param.numel()
+                        total_params += param.numel()
+                    print(f"  Norm module ligand_dec.{module_name}: kept trainable")
+
+            print(
+                f"Layer freezing: {trainable_params}/{total_params} parameters trainable ({100*trainable_params/total_params:.2f}%)"
+            )
+            return egnn_gen
+
+        egnn = _freeze_bottom_layers(args, egnn)
+        fm_model.gen = egnn
+
+    elif getattr(args, "affinity_finetuning", None):
+        print("Applying affinity_finetuning...")
+        state_dict = torch.load(args.ckpt_path)["state_dict"]
+        state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
+        egnn = copy.deepcopy(egnn_gen)
+        egnn.load_state_dict(state_dict, strict=True)
+        assert (
+            not args.freeze_layers
+        ), "Cannot use both freeze_layers and affinity_finetune."
+
+        def _freeze_all_except_affinity_heads(args, egnn_gen):
+            """
+            Freeze all parameters except the selected affinity head(s).
+            """
+            affinity_heads = args.affinity_finetuning
+            if isinstance(affinity_heads, str):
+                affinity_heads = [affinity_heads]
+            trainable_params = 0
+            total_params = 0
+
+            # Freeze all parameters
+            for name, param in egnn_gen.named_parameters():
+                param.requires_grad = False
+                total_params += param.numel()
+
+            # Unfreeze only the selected affinity head(s)
+            for head in affinity_heads:
+                head_name = f"{head}_head"
+                if hasattr(egnn_gen.ligand_dec, head_name):
+                    module = getattr(egnn_gen.ligand_dec, head_name)
+                    for n, p in module.named_parameters():
+                        p.requires_grad = True
+                        trainable_params += p.numel()
+                        print(f"  Affinity head ligand_dec.{head_name}.{n}: trainable")
+                else:
+                    print(
+                        f"  Warning: Affinity head ligand_dec.{head_name} not found in model."
+                    )
+
+            print(
+                f"Affinity finetuning: {trainable_params}/{total_params} parameters trainable ({100*trainable_params/total_params:.2f}%)"
+            )
+            return egnn_gen
+
+        egnn = _freeze_all_except_affinity_heads(args, egnn)
+        fm_model.gen = egnn
+
+    print("Done.")
     if return_info:
         return (
             fm_model,
@@ -1380,13 +1461,39 @@ def load_mol_model(
     hparams["fragment_inpainting"] = args.fragment_inpainting
     hparams["substructure_inpainting"] = args.substructure_inpainting
     hparams["substructure"] = args.substructure
-    hparams["data_path"] = args.data_path
+    hparams["data_path"] = getattr(args, "data_path", None)
     hparams["save_dir"] = args.save_dir
     hparams["add_feats"] = hparams.get("add_feats", False)
     hparams["use_fourier_time_embed"] = hparams.get("use_fourier_time_embed", False)
     hparams["use_rbf"] = hparams.get("use_rbf", False)
     hparams["use_distances"] = hparams.get("use_distances", False)
     hparams["use_crossproducts"] = hparams.get("use_crossproducts", False)
+    hparams["lr"] = args.lr if getattr(args, "lr", None) else hparams.get("lr", 1e-4)
+    hparams["lr_schedule"] = (
+        args.lr_schedule
+        if getattr(args, "lr_schedule", None) is not None
+        else hparams.get("lr_schedule", "exponential")
+    )
+    hparams["lr_gamma"] = (
+        args.lr_gamma
+        if getattr(args, "lr_gamma", None) is not None
+        else hparams.get("lr_gamma", 0.995)
+    )
+    hparams["weight_decay"] = (
+        args.weight_decay
+        if getattr(args, "weight_decay", None) is not None
+        else hparams.get("weight_decay", 1e-12)
+    )
+    hparams["beta1"] = (
+        args.beta1
+        if getattr(args, "beta1", None) is not None
+        else hparams.get("beta1", 0.9)
+    )
+    hparams["beta2"] = (
+        args.beta2
+        if getattr(args, "beta2", None) is not None
+        else hparams.get("beta2", 0.95)
+    )
 
     # Number of corrector iterations
     if args.corrector_iters > 0:
@@ -1413,7 +1520,7 @@ def load_mol_model(
     n_hybridization_types = (
         vocab_hybridization.size if vocab_hybridization is not None else None
     )
-    n_aromatic_types = vocab_aromatic.size if vocab_aromatic is not None else None
+    # n_aromatic_types = vocab_aromatic.size if vocab_aromatic is not None else None
 
     if args.arch == "flowr":
         from flowr.models.fm_mol import LigandCFM
@@ -1467,30 +1574,16 @@ def load_mol_model(
     else:
         raise ValueError(f"Unknown architecture {args.arch}")
 
-    if args.lora_finetuned:
-        from flowr.models.lora import LinearWithLoRA
-        from flowr.models.pocket import SemlaCondAttention
+    # Check if the model has been LoRA finetuned
+    if hparams.get("lora_finetuning", False):
+        # Apply LoRA to ligand decoder
+        _inject_lora(
+            lora_rank=hparams["lora_rank"],
+            lora_alpha=hparams["lora_alpha"],
+            mod=gen.ligand_dec,
+        )
 
-        lora_rank, lora_alpha = 8, 16
-
-        def _inject_lora(mod):
-            for name, child in mod.named_children():
-                # skip the entire cross-attention blocks
-                if isinstance(child, SemlaCondAttention):
-                    continue
-                # wrap any pure Linear
-                if isinstance(child, torch.nn.Linear):
-                    setattr(
-                        mod,
-                        name,
-                        LinearWithLoRA(child, rank=lora_rank, alpha=lora_alpha),
-                    )
-                else:
-                    _inject_lora(child)
-
-        # inject LoRA into the ligand generator
-        _inject_lora(gen.ligand_dec)
-
+    # Initialize the integrator
     type_mask_index = None
     bond_mask_index = None
     integrator = Integrator(
@@ -1506,6 +1599,7 @@ def load_mol_model(
         use_cosine_scheduler=args.use_cosine_scheduler,
     )
 
+    # Initialize the ligand flow model
     CFM = LigandCFM
     fm_model = CFM.load_from_checkpoint(
         args.ckpt_path,
@@ -1521,6 +1615,49 @@ def load_mol_model(
         graph_inpainting=args.graph_inpainting is not None,
         **hparams,
     )
+
+    if getattr(args, "lora_finetuning", None):
+        print("Applying LoRA finetuning...")
+        # Save the LoRA hyperparameters
+        _hparams = fm_model.hparams
+        _hparams["lora_finetuning"] = True
+        _hparams["lora_rank"] = args.lora_rank
+        _hparams["lora_alpha"] = args.lora_alpha
+
+        # Load the pretrained weights
+        state_dict = torch.load(args.ckpt_path)["state_dict"]
+        state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
+        egnn = copy.deepcopy(gen)
+        egnn.load_state_dict(state_dict, strict=True)
+        assert (
+            not args.affinity_finetuning
+        ), "Cannot use both LoRA and affinity_finetune."
+        assert not args.freeze_layers, "Cannot use both LoRA and freeze_layers."
+
+        # Apply LoRA to ligand decoder
+        _inject_lora(
+            lora_rank=args.lora_rank, lora_alpha=args.lora_alpha, mod=egnn.ligand_dec
+        )
+
+        # Freeze all parameters except LoRA
+        trainable_params = 0
+        total_params = 0
+
+        for n, p in egnn.ligand_dec.named_parameters():
+            total_params += p.numel()
+            if "lora" in n:
+                p.requires_grad = True
+                trainable_params += p.numel()
+            else:
+                p.requires_grad = False
+
+        print(
+            f"LoRA: {trainable_params}/{total_params} parameters trainable ({100*trainable_params/total_params:.2f}%)"
+        )
+        # Set the modified generator back to the model
+        fm_model.gen = egnn
+        fm_model.save_hyperparameters(_hparams)
+
     if return_info:
         return (
             fm_model,

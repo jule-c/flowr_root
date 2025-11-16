@@ -571,7 +571,7 @@ class LigandPocketCFM(pl.LightningModule):
             )
 
         self.posebusters_validity = MetricCollection(
-            {"pb-validity": Metrics.PoseBustersValidity()}
+            {"pb_validity": Metrics.PoseBustersValidity()}
         )
 
         # if self.train_mols is not None:
