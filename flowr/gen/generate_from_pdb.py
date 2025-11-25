@@ -122,9 +122,9 @@ def evaluate(args):
         dataloader = util.get_dataloader(args, dataset, interpolant, iter=k)
         for i, batch in enumerate(tqdm(dataloader, desc="Sampling", leave=False)):
             prior, data, _, _ = batch
-            ref_lig = model._generate_ligs(
+            ref_ligs = model._generate_ligs(
                 data, lig_mask=data["lig_mask"].bool(), scale=model.coord_scale
-            )[0]
+            )
             if args.arch == "pocket_flex":
                 gen_ligs, gen_pdbs = generate_ligands_per_target(
                     args,
@@ -132,7 +132,7 @@ def evaluate(args):
                     prior=prior,
                     posterior=data,
                     pocket_noise=args.pocket_noise,
-                    save_traj=False,
+                    save_traj=args.save_traj,
                     iter=f"{k}_{i}",
                     guidance_params=guidance_params,
                 )
@@ -143,7 +143,7 @@ def evaluate(args):
                     prior=prior,
                     posterior=data,
                     pocket_noise=args.pocket_noise,
-                    save_traj=False,
+                    save_traj=args.save_traj,
                     iter=f"{k}_{i}",
                     guidance_params=guidance_params,
                 )
@@ -172,7 +172,6 @@ def evaluate(args):
                         sanitize=False,
                     )
                     print(f"Uniqueness rate: {round(len(gen_ligs) / num_sampled, 2)}")
-
             # Filter by conditional substructure
             if args.filter_cond_substructure:
                 assert (
@@ -181,7 +180,7 @@ def evaluate(args):
                 num_sampled = len(gen_ligs)
                 gen_ligs = util.filter_substructure(
                     gen_ligs,
-                    ref_lig,
+                    ref_ligs,
                     inpainting_mode=inpainting_mode,
                     substructure_query=args.substructure,
                     max_fragment_cuts=3,
@@ -194,8 +193,24 @@ def evaluate(args):
             all_gen_ligs.extend(gen_ligs)
             if gen_pdbs:
                 all_gen_pdbs.extend(gen_pdbs)
-            num_ligands += len(gen_ligs)
 
+            # Filter by diversity
+            if args.filter_diversity:
+                n_ligands = len(all_gen_ligs)
+                if args.arch == "pocket_flex":
+                    all_gen_ligs, all_gen_pdbs = util.filter_diverse_ligands_bulk(
+                        all_gen_ligs, all_gen_pdbs, threshold=args.diversity_threshold
+                    )
+                else:
+                    all_gen_ligs = util.filter_diverse_ligands_bulk(
+                        all_gen_ligs, threshold=args.diversity_threshold
+                    )
+                print(f"Diversity rate: {round(len(all_gen_ligs) / n_ligands, 2)}")
+
+            # Update number of generated ligands
+            num_ligands = len(all_gen_ligs)
+
+        # Update iteration counter
         k += 1
 
     # Finalize sampling
@@ -242,25 +257,13 @@ def evaluate(args):
     if args.arch == "pocket_flex":
         assert len(all_gen_pdbs) == len(all_gen_ligs)
         out_dict["gen_pdbs"] = all_gen_pdbs
-    out_dict["ref_lig"] = ref_lig
+    out_dict["ref_lig"] = ref_ligs[0]
     out_dict["ref_lig_with_hs"] = ref_lig_with_hs
     out_dict["ref_pdb"] = ref_pdb
     out_dict["ref_pdb_with_hs"] = ref_pdb_with_hs
     out_dict["run_time"] = run_time
     print(
         f"\n Run time={round(run_time, 2)}s for {len(out_dict['gen_ligs'])} molecules \n"
-    )
-
-    # Filter by diversity
-    print("Filtering ligands by diversity...")
-    if args.arch == "pocket_flex":
-        all_gen_ligs, all_gen_pdbs = util.filter_diverse_ligands_bulk(
-            all_gen_ligs, all_gen_pdbs, threshold=0.9
-        )
-    else:
-        all_gen_ligs = util.filter_diverse_ligands_bulk(all_gen_ligs, threshold=0.9)
-    print(
-        f"Number of ligands after filtering by diversity: {len(all_gen_ligs)} ligands ({args.sample_n_molecules_per_target - len(all_gen_ligs)} removed)"
     )
 
     # PoseBusters validity
@@ -464,18 +467,24 @@ def get_args():
 
     parser.add_argument("--coord_noise_scale", type=float, default=0.0)
 
+    # Sampling parameters
     parser.add_argument("--max_sample_iter", type=int, default=20)
     parser.add_argument("--sample_n_molecules_per_target", type=int, default=1)
     parser.add_argument("--sample_mol_sizes", action="store_true")
     parser.add_argument("--corrector_iters", type=int, default=0)
     parser.add_argument("--rotation_alignment", action="store_true")
     parser.add_argument("--permutation_alignment", action="store_true")
+    parser.add_argument("--save_traj", action="store_true")
 
+    # Filtering parameters
     parser.add_argument("--filter_valid_unique", action="store_true")
+    parser.add_argument("--filter_diversity", action="store_true")
+    parser.add_argument("--diversity_threshold", type=float, default=0.9)
     parser.add_argument("--filter_pb_valid", action="store_true")
     parser.add_argument("--filter_cond_substructure", action="store_true")
     parser.add_argument("--calculate_strain_energies", action="store_true")
 
+    # Generation parameters
     parser.add_argument("--batch_cost", type=int)
     parser.add_argument("--dataset_split", type=str, default=None)
     parser.add_argument("--ligand_time", type=float, default=None)
@@ -503,6 +512,8 @@ def get_args():
         type=str,
         choices=["conformer", "random", "harmonic"],
     )
+
+    # ODE/SDE sampling options
     parser.add_argument("--separate_pocket_interpolation", action="store_true")
     parser.add_argument("--separate_interaction_interpolation", action="store_true")
     parser.add_argument(

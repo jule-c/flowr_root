@@ -29,6 +29,13 @@ INPAINT_ENCODER = {
     "graph": [3, 8],
 }
 
+AFFINITY_PROP_NAMES = [
+    "pic50",
+    "pkd",
+    "pki",
+    "pec50",
+]
+
 ## **** GLOBAL LIGAND SIZE **** ##
 MAX_LIGAND_SIZE = 250
 

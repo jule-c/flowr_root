@@ -13,7 +13,7 @@ import torch
 import yaml
 from pymol import cmd
 from rdkit import Chem
-from rdkit.Chem import AllChem, DataStructs
+from rdkit.Chem import DataStructs, rdFingerprintGenerator
 
 import flowr.scriptutil as util
 from flowr.data.datamodules import GeometricInterpolantDM
@@ -82,7 +82,7 @@ def get_conditional_mode(args):
 
 def filter_substructure(
     gen_ligs: list[Chem.Mol],
-    ref_mol: Chem.Mol,
+    ref_mols: list[Chem.Mol],
     inpainting_mode: str,
     substructure_query: Optional[str] = None,
     max_fragment_cuts: int = 3,
@@ -101,7 +101,7 @@ def filter_substructure(
         Filtered list of generated molecules
     """
     filtered_ligs = []
-    for gen_mol in gen_ligs:
+    for ref_mol, gen_mol in zip(ref_mols, gen_ligs):
         if check_substructure_match(
             gen_mol,
             ref_mol,
@@ -315,8 +315,8 @@ def load_util(
         substructure_inpainting=args.substructure_inpainting,
         substructure=args.substructure,
         graph_inpainting=args.graph_inpainting,
-        dataset=args.dataset,
-        sample_mol_sizes=False,
+        dataset=getattr(args, "dataset", None),
+        sample_mol_sizes=args.sample_mol_sizes,
         vocab=vocab,
         vocab_charges=vocab_charges,
         vocab_hybridization=vocab_hybridization,
@@ -423,8 +423,8 @@ def load_util_mol(
         substructure_inpainting=args.substructure_inpainting,
         substructure=args.substructure,
         graph_inpainting=args.graph_inpainting,
-        dataset=args.dataset,
-        sample_mol_sizes=False,
+        dataset=getattr(args, "dataset", None),
+        sample_mol_sizes=args.sample_mol_sizes,
         vocab=vocab,
         vocab_charges=vocab_charges,
         vocab_hybridization=vocab_hybridization,
@@ -504,7 +504,9 @@ def load_data_from_lmdb(
     return dataset
 
 
-def load_data_from_pdb(args, remove_hs: bool, remove_aromaticity: bool):
+def load_data_from_pdb(
+    args, remove_hs: bool, remove_aromaticity: bool, ligand_idx: int = 0
+):
     # Load the data
     processing_params = {
         "add_hs": args.add_hs,
@@ -525,6 +527,7 @@ def load_data_from_pdb(args, remove_hs: bool, remove_aromaticity: bool):
         ligand_id=args.ligand_id,
         pdb_path=args.pdb_file,
         ligand_sdf_path=args.ligand_file,
+        ligand_idx=ligand_idx,
         **processing_params,
     )
     system = system.remove_hs(include_ligand=remove_hs)
@@ -586,7 +589,7 @@ def load_data_from_lmdb_mol(
     if sample:
         dataset = dataset.sample_n_molecules(sample_n_molecules, seed=args.seed)
     print(
-        f"Dataset split is set to {args.dataset_split}. Number of systems: {len(dataset)}"
+        f"Dataset split is set to {args.dataset_split}. Number of molecules: {len(dataset)}"
     )
     molecules = [molecule for molecule in dataset if molecule is not None]
     molecules = split_list(molecules, args.gpus)[args.mp_index - 1]
@@ -790,17 +793,16 @@ def get_fingerprints(
 
     Returns: a list of fingerprints
     """
+    morgan_gen = rdFingerprintGenerator.GetMorganGenerator(
+        fpSize=length, radius=radius, includeChirality=chiral
+    )
     if sanitize:
         fps = []
         for mol in mols:
             Chem.SanitizeMol(mol)
-            fps.append(
-                AllChem.GetMorganFingerprintAsBitVect(
-                    mol, radius, length, useChirality=chiral
-                )
-            )
+            fps.append(morgan_gen.GetFingerprint(mol))
     else:
-        fps = [AllChem.GetMorganFingerprintAsBitVect(m, radius, length) for m in mols]
+        fps = [morgan_gen.GetFingerprint(m) for m in mols]
     return fps
 
 
@@ -819,9 +821,10 @@ def filter_diverse_ligands(ligands, threshold=0.9):
     """
     selected_ligs = []
     selected_fps = []
+    morgan_gen = rdFingerprintGenerator.GetMorganGenerator(radius=2)
     for lig in ligands:
         # Compute the Morgan fingerprint with radius 2 (default bit vector size)
-        fp = AllChem.GetMorganFingerprint(lig, radius=2)
+        fp = morgan_gen.GetFingerprint(lig)
         # Check if fingerprint is too similar to any already selected one.
         if any(
             DataStructs.TanimotoSimilarity(fp, sel_fp) > threshold
@@ -932,3 +935,61 @@ def get_guidance_params(args) -> Dict[str, Any]:
         }
 
     return guidance_params
+
+
+def optimize_molecule_rdkit(mol):
+    """
+    Optimize a molecule using RDKit MMFF force field.
+
+    Args:
+        mol: RDKit Mol object with 3D conformer
+
+    Returns:
+        tuple: (optimized_mol, energy_diff, rmsd)
+            - optimized_mol: RDKit Mol with optimized conformer
+            - energy_diff: Energy change in kcal/mol (negative = stabilization)
+            - rmsd: RMSD between initial and optimized structure in Angstroms
+    """
+    from rdkit.Chem import AllChem, rdMolAlign
+
+    if mol is None:
+        return None, None, None
+
+    # Make a copy to preserve the original
+    mol_copy = Chem.Mol(mol)
+
+    try:
+        # Store initial positions for RMSD calculation
+        initial_mol = Chem.Mol(mol_copy)
+
+        # Set up MMFF force field
+        ff_props = AllChem.MMFFGetMoleculeProperties(mol_copy)
+        if ff_props is None:
+            # Fallback to UFF if MMFF fails
+            print("MMFF failed, using UFF instead")
+            initial_energy = AllChem.UFFGetMoleculeForceField(mol_copy).CalcEnergy()
+            AllChem.UFFOptimizeMolecule(mol_copy, maxIters=2000)
+            final_energy = AllChem.UFFGetMoleculeForceField(mol_copy).CalcEnergy()
+        else:
+            # Use MMFF
+            ff = AllChem.MMFFGetMoleculeForceField(mol_copy, ff_props)
+            initial_energy = ff.CalcEnergy()
+
+            # Optimize
+            ff.Minimize(maxIts=2000)
+
+            # Recalculate energy after optimization
+            ff = AllChem.MMFFGetMoleculeForceField(mol_copy, ff_props)
+            final_energy = ff.CalcEnergy()
+
+        # Calculate energy difference (in kcal/mol)
+        energy_diff = final_energy - initial_energy
+
+        # Calculate RMSD between initial and optimized structures
+        rmsd = rdMolAlign.GetBestRMS(initial_mol, mol_copy)
+
+        return mol_copy, energy_diff, rmsd
+
+    except Exception as e:
+        print(f"Error optimizing molecule: {e}")
+        return None, None, None

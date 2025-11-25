@@ -17,6 +17,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 from tqdm import tqdm
 
+from flowr.constants import AFFINITY_PROP_NAMES
 from flowr.data.preprocess_pdb import transform_pdb
 from flowr.util.molrepr import GeometricMol
 from flowr.util.pocket import (
@@ -662,6 +663,7 @@ def safe_geometric_mol_from_rdkit(
 def safe_load_mol_from_file(
     ligand_file_path: str = None,
     remove_hs: bool = False,
+    ligand_idx: int = 0,
 ):
     """Safely load an RDKit molecule from SDF or directly from a provided RDKit Mol object.
 
@@ -672,10 +674,10 @@ def safe_load_mol_from_file(
         Chem.Mol: The loaded RDKit molecule or None if loading fails.
     """
     if ligand_file_path.endswith(".sdf"):
-        mol = Chem.SDMolSupplier(str(ligand_file_path), removeHs=remove_hs)[0]
-        if mol is None:
+        mol = Chem.SDMolSupplier(str(ligand_file_path), removeHs=remove_hs)[ligand_idx]
+        if mol is None and ligand_idx == 0:
             mol = Chem.MolFromMolFile(str(ligand_file_path), removeHs=remove_hs)
-        if mol is None:
+        if mol is None and ligand_idx == 0:
             # Try with OpenBabel using temporary file
             with tempfile.NamedTemporaryFile(suffix=".mol", delete=False) as temp_file:
                 temp_mol_path = temp_file.name
@@ -714,6 +716,7 @@ def process_complex(
     ligand_id: str = None,
     ligand_mol: Chem.Mol = None,
     ligand_sdf_path: str = None,
+    ligand_idx: int = 0,
     txt_path: str = None,
     add_hs: bool = False,
     add_hs_and_optimize: bool = False,
@@ -773,6 +776,7 @@ def process_complex(
         mol = safe_load_mol_from_file(
             ligand_file_path=ligand_sdf_path,
             remove_hs=remove_hs,
+            ligand_idx=ligand_idx,
         )
         if mol is None:
             print(f"Could not read ligand from {ligand_sdf_path}. Skipping.")
@@ -941,6 +945,10 @@ def process_complex(
                 os.remove(tmp_pdb_path)
 
     # Get metadata
+    if not affinity:
+        for prop_name in mol.GetPropNames():
+            if prop_name.lower() in AFFINITY_PROP_NAMES:
+                affinity[prop_name.lower()] = float(mol.GetProp(prop_name))
     pdb_id = Path(pdb_path).stem
     metadata = {
         "system_id": pdb_id,
