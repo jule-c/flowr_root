@@ -29,7 +29,9 @@ This is a research repository introducing FLOWR.root.
 
 ## Installation
 
-- **GPU**: CUDA-compatible GPU with at least 40GB VRAM recommended for generation
+- **GPU**: CUDA-compatible GPU with at least 40GB VRAM recommended for inference
+
+- **Installation time** Installation takes roughly 5 minutes on a normal computer.
 
 - **Package Manager**: [mamba](https://mamba.readthedocs.io)  
   Install via:
@@ -89,6 +91,9 @@ sbatch scripts/generate_pdb.sl
 Generated ligands are saved as an SDF file at the specified location (save_dir) alongside the extracted pockets. 
 The SDF file also contains predicted affinity values (pIC50, pKi, pKd, pEC50)
 
+- **Output**: De-noised ligands are saved as an SDF file at the specified location (save_dir). 
+
+- **Runtime**: Depends on system size, hardware specs. and batch size, but roughly 15s for 100 ligands on an H100 GPU.
 
 ### Predicting Binding Affinities
 
@@ -99,7 +104,7 @@ Modify `scripts/predict_aff.sl` according to your requirements, then submit the 
 sbatch scripts/predict_aff.sl
 ```
 
-De-noised ligands are saved as an SDF file at the specified location (save_dir). 
+- **Output**: Ligands are saved as an SDF file at the specified location (save_dir). 
 The SDF file contains predicted affinity values (pIC50, pKi, pKd, pEC50)
 
 ---
