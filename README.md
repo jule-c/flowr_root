@@ -3,7 +3,7 @@
 
 This is a research repository introducing FLOWR.root. 
 
-**⚠️ PLEASE NOTE:** This is an early release. Currently, only ligand generation and affinity prediction scripts are provided alongside model weights (not fully trained). Full training details, additional generation modes, and (LoRA-)finetuning documentation will be added progressively over time. Final model weights will be shared in a few months.
+**⚠️ PLEASE NOTE:** This is an early release. Final weights with a fully converged model will be shared in a few months.
 
 ---
 
