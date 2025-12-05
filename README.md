@@ -14,6 +14,7 @@ This is a research repository introducing FLOWR.root.
   - [Data](#data)
   - [Generating Molecules from PDB/CIF](#generating-molecules-from-pdbcif)
   - [Predicting Binding Affinities](#predicting-binding-affinities)
+  - 
 - [Data Preprocessing](#data-preprocessing)
   - [Input Data Requirements](#input-data-requirements)
   - [Preprocessing Workflow](#preprocessing-workflow)
@@ -107,12 +108,20 @@ sbatch scripts/predict_aff.sl
 - **Output**: Ligands are saved as an SDF file at the specified location (save_dir). 
 The SDF file contains predicted affinity values (pIC50, pKi, pKd, pEC50)
 
----
+### Training
+To train FLOWR.root on preprocessed datasets downloaded from [Google Drive](https://drive.google.com/drive/u/0/folders/1NWpzTY-BG_9C4zXZndWlKwdu7UJNCYj8), modify `scripts/train.sh` to your needs and run
 
+```bash
+bash scripts/train.sh
+```
+
+- **Output**: Checkpoints will be saved at the specified location (save_dir). 
+
+---
 
 ## Data Preprocessing
 
-To train FLOWR.root on your own custom datasets, you'll need to preprocess your protein-ligand complexes into the required LMDB format. The `flowr/data/preprocess_data/` directory contains all necessary SLURM batch scripts to streamline this workflow.
+To train/finetune FLOWR.root on your own custom datasets, you'll need to preprocess your protein-ligand complexes into the required LMDB format. The `flowr/data/preprocess_data/` directory contains all necessary SLURM batch scripts to streamline this workflow.
 
 ### 📁 Input Data Requirements
 
