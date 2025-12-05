@@ -1,4 +1,8 @@
 # Flowr.root -- A flow matching based foundation model for joint multi-purpose structure-aware 3D ligand generation and affinity prediction
+
+[![arXiv](https://img.shields.io/badge/arXiv-2504.10564-b31b1b.svg)](https://arxiv.org/abs/2510.02578)
+
+
 ![FLOWR.root Overview](flowr_root.png)
 
 This is a research repository introducing FLOWR.root. 
