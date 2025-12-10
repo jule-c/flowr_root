@@ -21,6 +21,7 @@ from flowr.data.dataset import (
     DatasetSubset,
     GeometricDataset,
     GeometricMolLMDBDataset,
+    GeometricMolSDFDataset,
     PocketComplexLMDBDataset,
 )
 from flowr.data.interpolate import (
@@ -35,6 +36,13 @@ from flowr.data.interpolate import (
     extract_substructure,
 )
 from flowr.data.preprocess_pdbs import process_complex
+from flowr.eval.evaluate_xtb import (
+    get_molecule_charge,
+    parse_xtb_output,
+    parse_xtbtopo_mol,
+    run_xtb_optimization,
+    sdf_to_xyz,
+)
 from flowr.util.functional import (
     add_and_optimize_hs,
 )
@@ -596,6 +604,52 @@ def load_data_from_lmdb_mol(
     return molecules
 
 
+def load_data_from_sdf_mol(
+    args: Namespace,
+    remove_hs: bool,
+    remove_aromaticity: bool,
+    transform: Optional[Callable] = None,
+    sample: bool = False,
+    sample_n_molecules: int = None,
+    sample_n_molecules_per_mol: int = None,
+):
+    """Load the dataset from an LMDB file.
+    Args:
+        args: Command line arguments containing the data path and other parameters.
+        transform: Optional transformation function to apply to the dataset.
+        sample: Whether to sample molecules from the dataset.
+        sample_n_molecules: Number of molecules to subsample from the dataset.
+        sample_n_molecules_per_mol: Number of molecules to sample per input molecule.
+
+    Returns:
+        A list of molecules from the dataset.
+    """
+    dataset = GeometricMolSDFDataset(
+        sdf_path=args.sdf_path,
+        ligand_idx=args.ligand_idx,
+        transform=transform,
+        remove_hs=remove_hs,
+        remove_aromaticity=remove_aromaticity,
+        skip_non_valid=False,
+    )
+    if sample:
+        assert (
+            sample_n_molecules is not None or sample_n_molecules_per_mol is not None
+        ), "Must specify sample_n_molecules or sample_n_molecules_per_mol when sampling."
+        assert not (
+            sample_n_molecules is not None and sample_n_molecules_per_mol is not None
+        ), "Cannot specify both sample_n_molecules and sample_n_molecules_per_mol."
+        if sample_n_molecules_per_mol is not None:
+            dataset = dataset.sample_n_molecules_per_mol(sample_n_molecules_per_mol)
+        elif sample_n_molecules is not None:
+            dataset = dataset.sample_n_molecules(sample_n_molecules, seed=args.seed)
+
+    print(f"Number of molecules: {len(dataset)}")
+    molecules = [molecule for molecule in dataset if molecule is not None]
+    molecules = split_list(molecules, args.gpus)[args.mp_index - 1]
+    return molecules
+
+
 def get_dataloader(
     args: Namespace,
     dataset: GeometricDataset,
@@ -937,6 +991,37 @@ def get_guidance_params(args) -> Dict[str, Any]:
     return guidance_params
 
 
+def optimize_molecule_xtb(mol, temp_dir):
+    """Process a single molecule: run xTB optimization, parse output, and return the optimized molecule."""
+
+    # Create paths within the temp directory
+    xyz_filename = os.path.join(temp_dir, "mol.xyz")
+    output_prefix = "mol"
+    xtb_topo_filename = os.path.join(temp_dir, f"{output_prefix}.xtbtopo.mol")
+
+    sdf_to_xyz(mol, xyz_filename)
+
+    # Get the formal charge of the molecule
+    charge = get_molecule_charge(mol)
+
+    try:
+        # Pass the charge to the xTB optimization
+        xtb_output = run_xtb_optimization(xyz_filename, output_prefix, charge, temp_dir)
+        total_energy_gain, total_rmsd = parse_xtb_output(xtb_output)
+
+        if not os.path.exists(xtb_topo_filename):
+            raise FileNotFoundError(
+                f"Expected xtbtopo.mol file not found: '{xtb_topo_filename}'"
+            )
+
+        optimized_mol = parse_xtbtopo_mol(xtb_topo_filename)
+        return optimized_mol, total_energy_gain, total_rmsd
+
+    except Exception as e:
+        print(f"Error processing molecule: {e}")
+        return None, None, None
+
+
 def optimize_molecule_rdkit(mol):
     """
     Optimize a molecule using RDKit MMFF force field.
@@ -959,6 +1044,9 @@ def optimize_molecule_rdkit(mol):
     mol_copy = Chem.Mol(mol)
 
     try:
+        # Get initial conformer
+        conf = mol_copy.GetConformer()
+
         # Store initial positions for RMSD calculation
         initial_mol = Chem.Mol(mol_copy)
 

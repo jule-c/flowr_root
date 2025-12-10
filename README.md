@@ -17,6 +17,7 @@ This is a research repository introducing FLOWR.root.
 - [Getting Started](#getting-started)
   - [Data](#data)
   - [Generating Molecules from PDB/CIF](#generating-molecules-from-pdbcif)
+  - [Generating Molecules from SDF (ligand-only)](#generating-molecules-from-sdf)
   - [Predicting Binding Affinities](#predicting-binding-affinities)
   - [Training](#training)
 - [Data Preprocessing](#data-preprocessing)
@@ -93,12 +94,29 @@ Modify `scripts/generate_pdb.sl` according to your requirements, then submit the
 sbatch scripts/generate_pdb.sl
 ```
 
-Generated ligands are saved as an SDF file at the specified location (save_dir) alongside the extracted pockets. 
-The SDF file also contains predicted affinity values (pIC50, pKi, pKd, pEC50)
+**Conditional Generation Options:**
+- `--substructure_inpainting`: Enable substructure-constrained generation
+- `--substructure`: Atom indices that you want to change (!) (e.g., `21 23 30 31 32 33 34 35`)
+- `--scaffold_inpainting`: Scaffold-constrained generation (using RDKit to extract RDKit)
+- `--func_group_inpainting`: Functional group-constrained generation (using RDKit to extract all functional groups)
+- `--core_inpainting`: Core-constrained generation (using RDKit to extract all cores)
+- `--linker_inpainting`: Linker-constrained generation mode (using RDKit to extract all linkers)
+- `--interaction_inpainting`: Interaction-constrained generation mode
+- `--compute_interactions`: Needed for interaction_inpainting (using ProLIF to extract interactions)
 
-- **Output**: De-noised ligands are saved as an SDF file at the specified location (save_dir). 
+**Post-processing Options:**
+- `--filter_valid_unique`: Filter for valid and unique molecules
+- `--filter_diversity`: Apply diversity filtering
+- `--diversity_threshold`: Tanimoto similarity threshold for diversity (default: 0.9)
+- `--add_hs_and_optimize_gen_ligs`: Optimize geometries (using RDKit)
+- `--filter_cond_substructure`: Filter to ensure inpainting constraint is satisfied
+- `--filter_pb_valid`: Filter by PoseBusters validity for generated molecules (using PoseBusters)
+- `--calculate_strain_energies`: Calculate strain energies for generated molecules (using RDKit)
+- `--compute_interaction_recovery`: Calculate interaction recovery (using ProLIF)
 
+- **Output**: Generated ligands are saved as an SDF file at the specified location (save_dir) alongside the extracted pockets. The SDF file also contains predicted affinity values (pIC50, pKi, pKd, pEC50)
 - **Runtime**: Depends on system size, hardware specs. and batch size, but roughly 15s for 100 ligands on an H100 GPU.
+
 
 ### Predicting Binding Affinities
 
@@ -111,6 +129,43 @@ sbatch scripts/predict_aff.sl
 
 - **Output**: Ligands are saved as an SDF file at the specified location (save_dir). 
 The SDF file contains predicted affinity values (pIC50, pKi, pKd, pEC50)
+
+
+### Generating Molecules from SDF (Ligand-Only)
+
+For ligand-only generation without a protein context, you can use the SDF-based generation script. All inpainting modes can be used here as well.
+Note, use the flowr_root_v2_mol.ckpt for that!
+
+Modify `scripts/generate_sdf.sl` according to your requirements:
+
+**Conditional Generation Options:**
+- `--substructure_inpainting`: Enable substructure-constrained generation
+- `--substructure`: Atom indices that you want to change (!) (e.g., `21 23 30 31 32 33 34 35`)
+- `--scaffold_inpainting`: Scaffold-constrained generation (using RDKit to extract RDKit)
+- `--func_group_inpainting`: Functional group-constrained generation (using RDKit to extract all functional groups)
+- `--core_inpainting`: Core-constrained generation (using RDKit to extract all cores)
+- `--linker_inpainting`: Linker-constrained generation mode (using RDKit to extract all linkers)
+
+**Post-processing Options:**
+- `--filter_valid_unique`: Filter for valid and unique molecules
+- `--filter_diversity`: Apply diversity filtering
+- `--diversity_threshold`: Tanimoto similarity threshold for diversity (default: 0.9)
+- `--add_hs_gen_mols`: Add hydrogens to generated molecules (using RDKit)
+- `--optimize_gen_mols_rdkit`: Optimize geometries (using RDKit)
+- `--optimize_gen_mols_xtb`: Optimize geometries (using xTB)
+- `--calculate_strain_energies`: Calculate strain energies for generated molecules (using RDKit)
+- `--filter_cond_substructure`: Filter to ensure inpainting constraint is satisfied
+
+Submit the job via SLURM:
+
+```bash
+sbatch scripts/generate_sdf.sl
+```
+
+- **Output**: Generated ligands are saved as an SDF file at the specified location (save_dir).
+
+- **Runtime**: Depends on the number of molecules, hardware specs, and batch size.
+
 
 ### Training
 To train FLOWR.root on preprocessed datasets downloaded from [Google Drive](https://drive.google.com/drive/u/0/folders/1NWpzTY-BG_9C4zXZndWlKwdu7UJNCYj8), modify `scripts/train.sh` to your needs and run

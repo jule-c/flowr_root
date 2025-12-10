@@ -774,6 +774,7 @@ def build_model(
         or args.substructure_inpainting,
         self_cond=args.self_condition,
         coord_skip_connect=not args.no_coord_skip_connect,
+        coord_update_every_n=getattr(args, "coord_update_every_n", None),
         pocket_enc=pocket_enc,
     )
 
@@ -1124,6 +1125,7 @@ def load_model(
             use_inpaint_mode_embed=hparams["use_inpaint_mode_embed"],
             self_cond=hparams["self_cond"],
             coord_skip_connect=hparams["coord_skip_connect"],
+            coord_update_every_n=hparams.get("coord_update_every_n", None),
             pocket_enc=pocket_enc,
         )
     elif args.arch == "pocket_flex":
@@ -1444,6 +1446,10 @@ def load_mol_model(
     checkpoint = torch.load(args.ckpt_path if ckpt_path is None else ckpt_path)
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
+    # Set dataset and save paths
+    hparams["data_path"] = getattr(args, "data_path", None)
+    hparams["save_dir"] = args.save_dir
+    # Set sampling params
     hparams["integration-steps"] = args.integration_steps
     hparams["sampling_strategy"] = args.ode_sampling_strategy
     hparams["use_inpaint_mode_embed"] = (
@@ -1461,13 +1467,7 @@ def load_mol_model(
     hparams["fragment_inpainting"] = args.fragment_inpainting
     hparams["substructure_inpainting"] = args.substructure_inpainting
     hparams["substructure"] = args.substructure
-    hparams["data_path"] = getattr(args, "data_path", None)
-    hparams["save_dir"] = args.save_dir
-    hparams["add_feats"] = hparams.get("add_feats", False)
-    hparams["use_fourier_time_embed"] = hparams.get("use_fourier_time_embed", False)
-    hparams["use_rbf"] = hparams.get("use_rbf", False)
-    hparams["use_distances"] = hparams.get("use_distances", False)
-    hparams["use_crossproducts"] = hparams.get("use_crossproducts", False)
+    # Learning rate and optimizer params
     hparams["lr"] = args.lr if getattr(args, "lr", None) else hparams.get("lr", 1e-4)
     hparams["lr_schedule"] = (
         args.lr_schedule
@@ -1494,6 +1494,24 @@ def load_mol_model(
         if getattr(args, "beta2", None) is not None
         else hparams.get("beta2", 0.95)
     )
+    # Loss weights
+    hparams["coord_loss_weight"] = getattr(args, "coord_loss_weight", None)
+    hparams["type_loss_weight"] = getattr(args, "type_loss_weight", None)
+    hparams["bond_loss_weight"] = getattr(args, "bond_loss_weight", None)
+    hparams["charge_loss_weight"] = getattr(args, "charge_loss_weight", None)
+    hparams["hybridization_loss_weight"] = getattr(
+        args, "hybridization_loss_weight", None
+    )
+    hparams["distance_loss_weight_lig"] = getattr(
+        args, "distance_loss_weight_lig", None
+    )
+    hparams["distance_loss_weight_lig_pocket"] = getattr(
+        args, "distance_loss_weight_lig_pocket", None
+    )
+    hparams["angle_loss_weight"] = getattr(args, "angle_loss_weight", None)
+    hparams["angle_huber_delta"] = getattr(args, "angle_huber_delta", None)
+    hparams["affinity_loss_weight"] = getattr(args, "affinity_loss_weight", None)
+    hparams["docking_loss_weight"] = getattr(args, "docking_loss_weight", None)
 
     # Number of corrector iterations
     if args.corrector_iters > 0:
@@ -1550,6 +1568,7 @@ def load_mol_model(
             use_inpaint_mode_embed=hparams["use_inpaint_mode_embed"],
             self_cond=hparams["self_cond"],
             coord_skip_connect=hparams["coord_skip_connect"],
+            coord_update_every_n=hparams.get("coord_update_every_n", None),
         )
     elif args.arch == "transformer":
         from flowr.models.fm_mol_transformer import LigandCFM
@@ -1751,6 +1770,7 @@ def build_mol_model(
             or args.substructure_inpainting,
             self_cond=args.self_condition,
             coord_skip_connect=not args.no_coord_skip_connect,
+            coord_update_every_n=getattr(args, "coord_update_every_n", None),
         )
 
     type_mask_index = None

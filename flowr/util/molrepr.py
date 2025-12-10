@@ -1330,9 +1330,19 @@ class GeometricMolBatch(SmolBatch[GeometricMol]):
         }
 
     @staticmethod
-    def from_bytes(data: bytes, remove_hs: bool = False) -> GeometricMolBatch:
+    def from_bytes(
+        data: bytes,
+        remove_hs: bool = False,
+        remove_aromaticity: bool = False,
+        keep_orig_data: bool = False,
+    ) -> GeometricMolBatch:
         mols = [
-            GeometricMol.from_bytes(mol_bytes, remove_hs=remove_hs)
+            GeometricMol.from_bytes(
+                mol_bytes,
+                remove_hs=remove_hs,
+                remove_aromaticity=remove_aromaticity,
+                keep_orig_data=keep_orig_data,
+            )
             for mol_bytes in tqdm(pickle.loads(data))
         ]
         failed_mols = mols.count(None)
@@ -1343,6 +1353,46 @@ class GeometricMolBatch(SmolBatch[GeometricMol]):
     @staticmethod
     def from_list(mols: list[GeometricMol]) -> GeometricMolBatch:
         return GeometricMolBatch(mols)
+
+    @staticmethod
+    def from_sdf(
+        sdf_path: str,
+        ligand_idx: int | None = None,
+        add_feats: bool = False,
+        remove_hs: bool = False,
+        remove_aromaticity: bool = False,
+        keep_orig_data: bool = False,
+    ) -> GeometricMolBatch:
+        suppl = Chem.SDMolSupplier(sdf_path, sanitize=True, removeHs=False)
+        if ligand_idx is not None and ligand_idx != -1:
+            suppl = [suppl[ligand_idx]]
+        mols = []
+        for mol in tqdm(suppl):
+            if mol is None:
+                continue
+            geom_mol = GeometricMol.from_rdkit(mol, infer_bonds=False, kekulize=False)
+            if keep_orig_data:
+                geom_mol.orig_mol = geom_mol._copy_with()
+            if remove_hs:
+                geom_mol = geom_mol.remove_hs(remove_aromaticity=remove_aromaticity)
+            if add_feats:
+                rdkit_mol = geom_mol.to_rdkit(sanitise=True)
+                hybridization = torch.tensor(
+                    smolRD.retrieve_hybridization_from_mol(rdkit_mol)
+                )
+                rdkit_feats_cont = torch.tensor(
+                    smolRD.retrieve_rdkit_cont_feats_from_mol(rdkit_mol)
+                ).float()
+                rdkit_feats_disc = torch.tensor(
+                    smolRD.retrieve_rdkit_disc_feats_from_mol(rdkit_mol)
+                ).float()
+                geom_mol._hybridization = hybridization
+                geom_mol._rdkit_feats_cont = rdkit_feats_cont
+                geom_mol._rdkit_feats_disc = rdkit_feats_disc
+
+            mols.append(geom_mol)
+
+        return GeometricMolBatch.from_list(mols)
 
     # TODO add bonds and charges
     @staticmethod
@@ -1518,8 +1568,7 @@ class GeometricMolBatch(SmolBatch[GeometricMol]):
         atomics_arr = np.load(batch_dir / "atomics.npy", mmap_mode=mmap_mode)
         atomics = torch.from_numpy(atomics_arr)
 
-        bonds = None
-
+        # bonds = None
         # bonds_path = batch_dir / "bonds.npy"
         # if edges_path.exists():
         #     bonds_arr = np.load(bonds_path, mmap_mode=mmap_mode)

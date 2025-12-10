@@ -234,6 +234,7 @@ class LigandDecoder(torch.nn.Module):
         # Training features
         self_cond: bool = False,
         intermediate_coord_updates: bool = True,
+        coord_update_every_n: Optional[int] = None,
         coord_skip_connect: bool = True,
         graph_inpainting: bool = False,
         # Pocket conditioning
@@ -266,6 +267,7 @@ class LigandDecoder(torch.nn.Module):
         self.use_crossproducts = use_crossproducts
         self.use_inpaint_mode_embed = use_inpaint_mode_embed
         self.intermediate_coord_updates = intermediate_coord_updates
+        self.coord_update_every_n = coord_update_every_n
         self.interactions = n_interaction_types is not None
         self.coord_skip_connect = coord_skip_connect
         self.graph_inpainting = graph_inpainting
@@ -366,24 +368,40 @@ class LigandDecoder(torch.nn.Module):
         self.coord_emb = torch.nn.Linear(coord_proj_feats, d_equi, bias=False)
 
         # *** Layer stack ***
-        enc_layer = SemlaLayer(
-            d_equi,
-            d_inv,
-            d_message,
-            n_attn_heads,
-            d_message_ff,
-            d_inv_cond=d_pocket_inv,
-            d_self_edge_in=d_edge,
-            d_cond_edge_in=d_cond_edge_in,
-            use_distances=self.use_distances,
-            use_crossproducts=self.use_crossproducts,
-            intermediate_coord_updates=self.intermediate_coord_updates,
-            zero_com=False,
-            eps=eps,
-        )
-        layers = self._get_clones(enc_layer, n_layers - 1)
+        # Create n_layers - 1 encoder layers with conditional coord updates
+        layers = []
+        for i in range(n_layers - 1):
+            # Determine if this layer should have intermediate coord updates
+            if intermediate_coord_updates:
+                if coord_update_every_n is not None:
+                    # Enable coord updates every Nth layer (symmetric distribution)
+                    layer_updates = i % coord_update_every_n == coord_update_every_n - 1
+                else:
+                    # Enable coord updates for all layers
+                    layer_updates = True
+            else:
+                # Disable all intermediate coord updates
+                layer_updates = False
+
+            enc_layer = SemlaLayer(
+                d_equi,
+                d_inv,
+                d_message,
+                n_attn_heads,
+                d_message_ff,
+                d_inv_cond=d_pocket_inv,
+                d_self_edge_in=d_edge,
+                d_cond_edge_in=d_cond_edge_in,
+                use_distances=self.use_distances,
+                use_crossproducts=self.use_crossproducts,
+                intermediate_coord_updates=layer_updates,
+                zero_com=False,
+                eps=eps,
+            )
+            layers.append(enc_layer)
 
         # Create one final layer which also produces edge feature outputs
+        # The final decoder layer does not have intermediate coord updates
         dec_layer = SemlaLayer(
             d_equi,
             d_inv,
@@ -565,6 +583,7 @@ class LigandDecoder(torch.nn.Module):
             "flow_interactions": self.flow_interactions,
             "predict_interactions": self.predict_interactions,
             "coord_skip_connect": self.coord_skip_connect,
+            "coord_update_every_n": self.coord_update_every_n,
             "use_rbf": self.use_rbf,
             "use_lig_pocket_rbf": self.use_lig_pocket_rbf,
             "use_distances": self.use_distances,
@@ -745,7 +764,7 @@ class LigandDecoder(torch.nn.Module):
 
         # Iterate over Semla layers
         for layer in self.layers:
-            equis, invs, coords, edges, interaction_feats = layer(
+            equis, invs, coords, _edges, _interaction_feats = layer(
                 equis,
                 invs,
                 edges,
@@ -758,6 +777,12 @@ class LigandDecoder(torch.nn.Module):
                 cond_edges=interaction_feats,
                 cond_node_mask=pocket_atom_mask,
                 cond_adj_matrix=cond_adj_matrix,
+            )
+            edges = _edges if _edges is not None else edges
+            interaction_feats = (
+                (_interaction_feats)
+                if _interaction_feats is not None
+                else interaction_feats
             )
 
         if self.interactions or self.predict_affinity or self.predict_docking_score:
@@ -934,6 +959,7 @@ class LigandGenerator(torch.nn.Module):
         # Training features
         self_cond: bool = False,
         coord_skip_connect: bool = True,
+        coord_update_every_n: Optional[int] = None,
         graph_inpainting: Optional[str] = None,
         use_inpaint_mode_embed: bool = False,
         # Numerical stability
@@ -982,6 +1008,7 @@ class LigandGenerator(torch.nn.Module):
             use_fourier_time_embed=use_fourier_time_embed,
             self_cond=self_cond,
             coord_skip_connect=coord_skip_connect,
+            coord_update_every_n=coord_update_every_n,
             graph_inpainting=graph_inpainting,
             use_inpaint_mode_embed=False,
             eps=eps,

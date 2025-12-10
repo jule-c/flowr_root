@@ -691,3 +691,76 @@ class SDFDataset(torch.utils.data.Dataset):
     @property
     def hparams(self):
         return {}
+
+
+class GeometricMolSDFDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        sdf_path: str,
+        ligand_idx: int | None = None,
+        remove_hs: bool = False,
+        remove_aromaticity: bool = False,
+        transform=None,
+        save_name: str = "sdf_mol_data",
+        **kwargs,
+    ):
+        """
+        Constructor for SDFDataset.
+        """
+        super().__init__()
+
+        # Check if there's already a .smol file in the parent directory
+        smol_file = Path(sdf_path).parent / f"{save_name}.smol"
+        if smol_file.exists():
+            # Load existing data
+            print(f"Loading existing data from {smol_file}")
+            bytes_data = smol_file.read_bytes()
+            self._data = GeometricMolBatch.from_bytes(
+                bytes_data,
+                remove_hs=remove_hs,
+                remove_aromaticity=remove_aromaticity,
+                keep_orig_data=True,
+            )
+        else:
+            # Create new data from SDF
+            print(f"Creating data from SDF: {sdf_path}")
+            self._data = GeometricMolBatch.from_sdf(
+                sdf_path=sdf_path,
+                ligand_idx=ligand_idx,
+                remove_hs=remove_hs,
+                remove_aromaticity=remove_aromaticity,
+                keep_orig_data=True,
+            )
+            self.save(smol_file.parent, name=save_name)
+
+        self._num_graphs = len(self._data)
+        self.transform = transform
+
+    def save(self, save_dir, name="data"):
+        save_dir = Path(save_dir)
+        save_file = save_dir / f"{name}.smol"
+        bytes_data = self._data.to_bytes()
+        save_file.write_bytes(bytes_data)
+
+    def sample_n_molecules_per_mol(self, n_items):
+        mol_samples = [[mol for _ in range(n_items)] for mol in self._data.to_list()]
+        mol_samples = list(itertools.chain(*mol_samples))
+        data = GeometricMolBatch.from_list(mol_samples)
+        return GeometricDataset(data, GeometricMolBatch, transform=self.transform)
+
+    def __getitem__(self, idx):
+        molecule = self._data[idx]
+        if self.transform is not None:
+            molecule = self.transform(molecule)
+        return molecule
+
+    def __len__(self) -> int:
+        return self._num_graphs
+
+    @property
+    def lengths(self):
+        return []
+
+    @property
+    def hparams(self):
+        return {}

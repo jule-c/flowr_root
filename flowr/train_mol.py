@@ -152,9 +152,7 @@ if __name__ == "__main__":
     parser.add_argument("--load_ckpt", type=str, default=None)
     parser.add_argument("--load_pretrained_ckpt", type=str, default=None)
     parser.add_argument("--lora_finetuning", action="store_true")
-    parser.add_argument(
-        "--save_dir", type=str, default="."
-    )
+    parser.add_argument("--save_dir", type=str, default=".")
     parser.add_argument("--val_check_epochs", type=int, default=None)
     parser.add_argument("--val_check_interval", type=float, default=0.5)
     parser.add_argument("--wandb", action="store_true")
@@ -246,6 +244,7 @@ if __name__ == "__main__":
     parser.add_argument("--ema_decay", type=float, default=0.998)
     parser.add_argument("--self_condition", action="store_true", default=False)
     parser.add_argument("--no_coord_skip_connect", action="store_true")
+    parser.add_argument("--coord_update_every_n", type=int, default=3)
 
     ################################ INTERPOLATION ################################
     parser.add_argument("--scale_coords", action="store_true")

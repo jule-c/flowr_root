@@ -1521,9 +1521,50 @@ def evaluate_posecheck_list(
     return pc_dict
 
 
+def calc_strain(
+    mol: Chem.Mol,
+    add_hs: bool = True,
+    n_steps: int = 1000,
+    force_field_name: str = "MMFF94s",
+):
+    if add_hs:
+        mol = Chem.AddHs(mol, addCoords=True)
+
+    try:
+        if force_field_name == "MMFF94s":
+            mol_properties = AllChem.MMFFGetMoleculeProperties(
+                mol, mmffVariant="MMFF94s"
+            )
+            force_field = AllChem.MMFFGetMoleculeForceField(
+                mol, mol_properties, confId=0
+            )
+        elif force_field_name == "MMFF94":
+            mol_properties = AllChem.MMFFGetMoleculeProperties(mol)
+            force_field = AllChem.MMFFGetMoleculeForceField(
+                mol, mol_properties, confId=0
+            )
+        elif force_field_name == "UFF":
+            force_field = AllChem.UFFGetMoleculeForceField(mol, confId=0)
+
+        start_energy = force_field.CalcEnergy()
+        not_converged = force_field.Minimize(maxIts=n_steps)
+        if not_converged:
+            print(
+                "Energy minimization did not converge - using intermediate state for strain calculation"
+            )
+        final_energy = force_field.CalcEnergy()
+        strain_energy = start_energy - final_energy
+        assert strain_energy > 0, "Strain energy should be positive"
+        return strain_energy
+    except Exception:
+        print("Force field error - skipping strain calculation")
+        return np.nan
+
+
 def evaluate_strain(
     gen_ligs: list[Chem.Mol],
-    n_steps: int = 1000,
+    n_steps: int = 500,
+    add_hs: bool = True,
     force_field_name: str = "MMFF94s",
     return_list: bool = False,
 ):
@@ -1536,38 +1577,10 @@ def evaluate_strain(
     strain_energies = []
     for mol in gen_ligs:
         new_mol = Mol(mol)
-        new_mol = Chem.AddHs(new_mol, addCoords=True)
-
-        try:
-            if force_field_name == "MMFF94s":
-                mol_properties = AllChem.MMFFGetMoleculeProperties(
-                    new_mol, mmffVariant="MMFF94s"
-                )
-                force_field = AllChem.MMFFGetMoleculeForceField(
-                    new_mol, mol_properties, confId=0
-                )
-            elif force_field_name == "MMFF94":
-                mol_properties = AllChem.MMFFGetMoleculeProperties(new_mol)
-                force_field = AllChem.MMFFGetMoleculeForceField(
-                    new_mol, mol_properties, confId=0
-                )
-            elif force_field_name == "UFF":
-                force_field = AllChem.UFFGetMoleculeForceField(new_mol, confId=0)
-
-            start_energy = force_field.CalcEnergy()
-            not_converged = force_field.Minimize(maxIts=n_steps)
-            if not_converged:
-                print(
-                    "Energy minimization did not converge - using intermediate state for strain calculation"
-                )
-            final_energy = force_field.CalcEnergy()
-            strain_energy = start_energy - final_energy
-            assert strain_energy > 0, "Strain energy should be positive"
-            strain_energies.append(strain_energy)
-
-        except Exception:
-            print("Force field error - skipping strain calculation")
-            strain_energies.append(np.nan)
+        strain_energy = calc_strain(
+            new_mol, add_hs=add_hs, n_steps=n_steps, force_field_name=force_field_name
+        )
+        strain_energies.append(strain_energy)
 
     if return_list:
         return strain_energies
