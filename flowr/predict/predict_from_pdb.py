@@ -5,6 +5,8 @@ from collections import defaultdict
 from pathlib import Path
 
 import torch
+from rdkit import Chem
+from tqdm import tqdm
 
 import flowr.util.rdkit as smolRD
 from flowr.data.dataset import GeometricDataset
@@ -37,7 +39,10 @@ def create_list_defaultdict():
 
 
 def get_dataset(system, transform, vocab, interpolant, args, hparams):
-    systems = PocketComplexBatch([system])
+    if isinstance(system, list):
+        systems = PocketComplexBatch(system)
+    else:
+        systems = PocketComplexBatch([system])
     dataset = GeometricDataset(
         systems, data_cls=PocketComplexBatch, transform=transform
     )
@@ -79,25 +84,62 @@ def predict(args):
     )
 
     # Load the data
-    system = load_data_from_pdb(
-        args,
-        remove_hs=hparams["remove_hs"],
-        remove_aromaticity=hparams["remove_aromaticity"],
-    )
-    dataset = get_dataset(system, transform, vocab, interpolant, args, hparams)
+    if args.multiple_ligands:
+        try:
+            assert (
+                args.ligand_file is not None
+            ), "Please provide a ligand SDF file with --ligand_file."
+            n_ligands = len(Chem.SDMolSupplier(str(args.ligand_file)))
+        except Exception:
+            raise ValueError("Could not read ligands from SDF file.")
+        systems = []
+        for ligand_idx in range(n_ligands):
+            system = load_data_from_pdb(
+                args,
+                remove_hs=hparams["remove_hs"],
+                remove_aromaticity=hparams["remove_aromaticity"],
+                ligand_idx=ligand_idx,
+            )
+            systems.append(system)
+        dataset = get_dataset(systems, transform, vocab, interpolant, args, hparams)
+
+    else:
+        system = load_data_from_pdb(
+            args,
+            remove_hs=hparams["remove_hs"],
+            remove_aromaticity=hparams["remove_aromaticity"],
+        )
+        dataset = get_dataset(system, transform, vocab, interpolant, args, hparams)
     dataloader = get_dataloader(args, dataset, interpolant)
 
     global_start = time.time()
-    batch = next(iter(dataloader))
-    gen_lig_with_aff = predict_affinity_batch(
-        args,
-        model=model,
-        prior=batch[0],
-        posterior=batch[1],
-        noise_scale=args.coord_noise_scale,
-        eps=1e-4,
-        seed=args.seed,
-    )
+
+    if args.multiple_ligands:
+        for batch in tqdm(
+            dataloader,
+            desc=f"Predicting affinity for all {n_ligands} ligands in the SDF...",
+        ):
+            prior, posterior, _, _ = batch
+            gen_lig_with_aff = predict_affinity_batch(
+                args,
+                model=model,
+                prior=prior,
+                posterior=posterior,
+                noise_scale=args.coord_noise_scale,
+                eps=1e-4,
+            )
+    else:
+        print("\nPredicting affinity...\n")
+        batch = next(iter(dataloader))
+        gen_lig_with_aff = predict_affinity_batch(
+            args,
+            model=model,
+            prior=batch[0],
+            posterior=batch[1],
+            noise_scale=args.coord_noise_scale,
+            eps=1e-4,
+            seed=args.seed,
+        )
 
     # Total run time
     global_run_time = time.time() - global_start
@@ -118,7 +160,7 @@ def get_args():
     parser.add_argument('--ligand_id', type=str, default=None)
     parser.add_argument('--pdb_file', type=str, default=None)
     parser.add_argument('--ligand_file', type=str, default=None)
-    parser.add_argument('--ligand_idx', type=int, default=None)
+    parser.add_argument('--multiple_ligands', action='store_true')
     parser.add_argument('--res_txt_file', type=str, default=None)
     parser.add_argument('--data_path', type=str, default=None)
     parser.add_argument('--dataset', type=str, default=None)
