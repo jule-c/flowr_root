@@ -5,9 +5,6 @@
 .DS_Store
 .virtual_documents/
 
-# Jupyter notebook checkpoints
-notebooks/.ipynb_checkpoints/
-
 # Python cache files
 __pycache__/
 */__pycache__/

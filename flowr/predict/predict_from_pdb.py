@@ -118,6 +118,7 @@ def get_args():
     parser.add_argument('--ligand_id', type=str, default=None)
     parser.add_argument('--pdb_file', type=str, default=None)
     parser.add_argument('--ligand_file', type=str, default=None)
+    parser.add_argument('--ligand_idx', type=int, default=None)
     parser.add_argument('--res_txt_file', type=str, default=None)
     parser.add_argument('--data_path', type=str, default=None)
     parser.add_argument('--dataset', type=str, default=None)

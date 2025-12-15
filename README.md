@@ -17,7 +17,7 @@ This is a research repository introducing FLOWR.root.
 - [Getting Started](#getting-started)
   - [Data](#data)
   - [Generating Molecules from PDB/CIF](#generating-molecules-from-pdbcif)
-  - [Generating Molecules from SDF (ligand-only)](#generating-molecules-from-sdf)
+  - [Generating Molecules from SDF (Ligand-only)](#generating-molecules-from-sdf)
   - [Predicting Binding Affinities](#predicting-binding-affinities)
   - [Training](#training)
 - [Data Preprocessing](#data-preprocessing)
@@ -131,7 +131,7 @@ sbatch scripts/predict_aff.sl
 The SDF file contains predicted affinity values (pIC50, pKi, pKd, pEC50)
 
 
-### Generating Molecules from SDF (Ligand-Only)
+### Generating Molecules from SDF (Ligand-only)
 
 For ligand-only generation without a protein context, you can use the SDF-based generation script. All inpainting modes can be used here as well.
 Note, use the flowr_root_v2_mol.ckpt for that!
