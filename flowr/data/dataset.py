@@ -318,6 +318,28 @@ class BaseLMDBDataset(ABC, torch.utils.data.Dataset):
         # Get dataset length but don't store the environment
         self._get_length()
 
+        # Close the environment after getting length to avoid fork issues
+        # It will be reopened lazily in each worker process
+        self._close_env()
+
+    def _close_env(self):
+        """Close the LMDB environment if open."""
+        if self._env is not None:
+            self._env.close()
+            self._env = None
+
+    def __getstate__(self):
+        """Prepare state for pickling - exclude LMDB environment."""
+        state = self.__dict__.copy()
+        # Don't pickle the LMDB environment - it will be reopened in workers
+        state["_env"] = None
+        return state
+
+    def __setstate__(self, state):
+        """Restore state after unpickling."""
+        self.__dict__.update(state)
+        # _env is already None from __getstate__, will be lazily reopened
+
     @property
     def env(self) -> lmdb.Environment:
         """Get LMDB environment"""
@@ -405,6 +427,9 @@ class PocketComplexLMDBDataset(BaseLMDBDataset):
 
         # Get the molecule sizes
         self._get_lengths()
+
+        # Close the environment after initialization to avoid fork issues
+        self._close_env()
 
     def _load_item(self, key: bytes, txn) -> any:
         """Load and process a single item from LMDB."""
@@ -564,6 +589,9 @@ class GeometricMolLMDBDataset(BaseLMDBDataset):
         """
         # Get the molecule sizes
         self._get_lengths()
+
+        # Close the environment after initialization to avoid fork issues
+        self._close_env()
 
     def _load_item(self, key: bytes, txn) -> any:
         """Load and process a single item from LMDB."""

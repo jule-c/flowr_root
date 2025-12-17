@@ -15,6 +15,7 @@ from flowr.gen.generate import generate_molecules
 from flowr.scriptutil import (
     load_mol_model,
 )
+from flowr.util.device import get_device
 from flowr.util.metrics import evaluate_pb_validity_mol, evaluate_strain
 from flowr.util.molrepr import GeometricMolBatch
 from flowr.util.rdkit import write_sdf_file
@@ -63,7 +64,7 @@ def evaluate(args):
     ) = load_mol_model(
         args,
     )
-    model = model.to("cuda")
+    model = model.to(get_device())
     model.eval()
     print("Model complete.")
 

@@ -53,6 +53,12 @@ This is a research repository introducing FLOWR.root.
    mamba env create -f environment.yml
    ```
 
+   If you are on a MacBook (tested on Apple M3 Max), install via:
+
+   ```bash
+   mamba env create -f environment_mac.yml
+   ```
+
 2. **Activate the Environment**  
 
    ```bash
@@ -71,6 +77,7 @@ This is a research repository introducing FLOWR.root.
 ## Tutorial
 
 A Jupyter Notebook tutorial is provided at examples/examples.ipynb alongside a few protein-ligand complexes to play around with!
+You can also run this on your MacBook - install the respective environment and you are good to go (see above).
 
 ---
 
@@ -115,8 +122,9 @@ sbatch scripts/generate_pdb.sl
 
 - `--filter_valid_unique`: Filter for valid and unique molecules
 - `--filter_diversity`: Apply diversity filtering
-- `--diversity_threshold`: Tanimoto similarity threshold for diversity (default: 0.9)
-- `--add_hs_and_optimize_gen_ligs`: Optimize geometries (using RDKit)
+- `--diversity_threshold`: Tanimoto similarity threshold for diversity (default: 0.7)
+- `--optimize_gen_ligs`: Optimize geometries in-pocket (using RDKit)
+- `--optimize_gen_ligs_hs`: Optimize ligand hydrogens in-pocket (using RDKit)
 - `--filter_cond_substructure`: Filter to ensure inpainting constraint is satisfied
 - `--filter_pb_valid`: Filter by PoseBusters validity for generated molecules (using PoseBusters)
 - `--calculate_strain_energies`: Calculate strain energies for generated molecules (using RDKit)

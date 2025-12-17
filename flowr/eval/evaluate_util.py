@@ -36,6 +36,7 @@ from useful_rdkit_utils import (
     get_min_ring_frequency,
 )
 
+from flowr.util.device import get_map_location
 from posebusters import PoseBusters
 from posebusters.modules.distance_geometry import (
     _get_angle_atom_indices,
@@ -279,11 +280,16 @@ def gather_predictions_mol(args, multiple_files=False):
             raise FileNotFoundError(
                 f"No predictions files found in {args.save_dir} with the specified pattern."
             )
-        loaded = [torch.load(pred, weights_only=False) for pred in predictions]
+        loaded = [
+            torch.load(pred, map_location=get_map_location(), weights_only=False)
+            for pred in predictions
+        ]
         predictions = list(chain.from_iterable(loaded))
     else:
         predictions = torch.load(
-            Path(args.save_dir) / "predictions.pt", weights_only=False
+            Path(args.save_dir) / "predictions.pt",
+            map_location=get_map_location(),
+            weights_only=False,
         )
 
     return predictions

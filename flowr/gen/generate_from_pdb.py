@@ -22,7 +22,11 @@ from flowr.scriptutil import (
 from flowr.util.functional import (
     LigandPocketOptimization,
 )
-from flowr.util.metrics import calc_strain, evaluate_pb_validity, evaluate_strain
+from flowr.util.metrics import (
+    calc_strain,
+    evaluate_pb_validity,
+    evaluate_strain,
+)
 from flowr.util.pocket import PocketComplexBatch
 from flowr.util.rdkit import write_sdf_file
 
@@ -95,6 +99,7 @@ def evaluate(args):
         args,
         remove_hs=hparams["remove_hs"],
         remove_aromaticity=hparams["remove_aromaticity"],
+        canonicalize_conformer=args.canonicalize_conformer,
     )
     dataset = get_dataset(system, transform, vocab, interpolant, args, hparams)
 
@@ -184,6 +189,7 @@ def evaluate(args):
                     inpainting_mode=inpainting_mode,
                     substructure_query=args.substructure,
                     max_fragment_cuts=3,
+                    canonicalize_conformer=args.canonicalize_conformer,
                 )
                 print(
                     f"Substructure match rate: {round(len(gen_ligs) / num_sampled, 2)}"
@@ -266,71 +272,140 @@ def evaluate(args):
         f"\n Run time={round(run_time, 2)}s for {len(out_dict['gen_ligs'])} molecules \n"
     )
 
-    # PoseBusters validity
-    if args.filter_pb_valid:
-        pb_valid = evaluate_pb_validity(
-            all_gen_ligs,
-            pdb_file=ref_pdb_with_hs,
-            return_list=True,
-        )
-        all_gen_ligs = [lig for lig, valid in zip(all_gen_ligs, pb_valid) if valid]
-        print(
-            f"PB-validity (mean): {np.mean(pb_valid)}, PB-validity (std): {np.std(pb_valid)}"
-        )
-
     # Protonate generated ligands:
-    if args.add_hs_and_optimize_gen_ligs:
-        assert hparams[
-            "remove_hs"
-        ], "The model outputs protonated ligands, no need for additional protonation."
+    if args.optimize_gen_ligs:
+        start_time = time.time()
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
-        print("Protonating ligands...")
+        print("Protonating and optimizing ligands in-pocket...")
         optimizer = LigandPocketOptimization(
             pocket_cutoff=args.pocket_cutoff, strip_invalid=True
         )
+        if hparams["remove_hs"]:
+            all_gen_ligs_hs = [Chem.AddHs(lig, addCoords=True) for lig in all_gen_ligs]
+        else:
+            all_gen_ligs_hs = all_gen_ligs
+        all_gen_ligs_hs_before = [Chem.Mol(lig) for lig in all_gen_ligs_hs]
         # Create a partial function binding pdb_file and optimizer
         if args.arch == "pocket_flex":
             process_lig_partial = partial(
                 util.process_lig_wrapper,
                 optimizer=optimizer,
+                add_ligand_hs=False,
+                only_ligand_hs=False,
                 optimize_pocket_hs=True,
                 process_pocket=True,
             )
             with Pool(processes=args.num_workers) as pool:
-                all_gen_ligs_hs = pool.map(
-                    process_lig_partial, zip(all_gen_ligs, all_gen_pdbs)
+                all_gen_ligs_hs_optim = pool.map(
+                    process_lig_partial, zip(all_gen_ligs_hs, all_gen_pdbs)
                 )
         else:
             process_lig_partial = partial(
                 util.process_lig,
                 pdb_file=ref_pdb_with_hs,
                 optimizer=optimizer,
+                add_ligand_hs=False,
+                only_ligand_hs=False,
                 process_pocket=True,
             )
             with Pool(processes=args.num_workers) as pool:
-                all_gen_ligs_hs = pool.map(process_lig_partial, all_gen_ligs)
+                all_gen_ligs_hs_optim = pool.map(process_lig_partial, all_gen_ligs_hs)
 
-        all_gen_ligs_hs = [Chem.Mol(lig) for lig in all_gen_ligs_hs]
-        out_dict["gen_ligs_hs"] = all_gen_ligs_hs
+        ref_strain_energy = calc_strain(
+            ref_lig_with_hs,
+            add_hs=False,
+        )
+        print(f"Reference ligand strain energy: {round(ref_strain_energy, 2)}")
+        util.evaluate_optimization(
+            ligs=all_gen_ligs_hs_before,
+            optim_ligs=all_gen_ligs_hs_optim,
+        )
+        out_dict["gen_ligs_hs_optim"] = all_gen_ligs_hs_optim
         print("Done!")
+        print(
+            f"Protonation and ligand optimization time: {round(time.time() - start_time, 2)}s"
+        )
+    elif args.optimize_gen_ligs_hs:
+        start_time = time.time()
+        print(
+            "Protonating generated ligands and optimizing ligand hydrogens in-pocket..."
+        )
+        # Add hydrogens to generated ligands
+        all_gen_ligs_hs = [Chem.AddHs(lig, addCoords=True) for lig in all_gen_ligs]
+        all_gen_ligs_hs_before = [Chem.Mol(lig) for lig in all_gen_ligs_hs]
+        # Protonate and only optimize ligand hydrogens
+        optimizer = LigandPocketOptimization(
+            pocket_cutoff=args.pocket_cutoff, strip_invalid=True
+        )
+        process_lig_partial = partial(
+            util.process_lig,
+            pdb_file=ref_pdb_with_hs,
+            optimizer=optimizer,
+            add_ligand_hs=False,
+            only_ligand_hs=True,
+            process_pocket=True,
+        )
+        with Pool(processes=args.num_workers) as pool:
+            all_gen_ligs_hs_optim = pool.map(
+                process_lig_partial, all_gen_ligs_hs_before
+            )
+        out_dict["gen_ligs_hs_optim-hs"] = all_gen_ligs_hs_optim
+        # Evaluate optimization
+        util.evaluate_optimization(
+            ligs=all_gen_ligs_hs_before,
+            optim_ligs=all_gen_ligs_hs_optim,
+        )
+        # Calculate strain energy of reference ligand
+        ref_strain_energy = calc_strain(
+            ref_lig_with_hs,
+            add_hs=False,
+        )
+        print(f"Reference ligand strain energy: {round(ref_strain_energy, 2)}")
+        print("Done!")
+        print(
+            f"Protonation and ligand hydrogen optimization time: {round(time.time() - start_time, 2)}s"
+        )
+    else:
+        if not hparams["remove_hs"]:
+            all_gen_ligs_hs_optim = (
+                all_gen_ligs  # No optimization needed, model generated with hydrogens
+            )
+        else:
+            print("Protonating generated ligands...")
+            all_gen_ligs_hs_optim = [
+                Chem.AddHs(lig, addCoords=True) for lig in all_gen_ligs
+            ]
 
-    if args.calculate_strain_energies:
-        # Calculate strain energies
+    # Calculate strain energies
+    if args.calculate_strain_energies and not (
+        args.optimize_gen_ligs or args.optimize_gen_ligs_hs
+    ):
         print("Calculating strain energies...")
         ref_strain_energy = calc_strain(
             ref_lig_with_hs,
             add_hs=False,
         )
         gen_strain_energies = evaluate_strain(
-            all_gen_ligs_hs if args.add_hs_and_optimize_gen_ligs else all_gen_ligs,
-            add_hs=(
-                False
-                if args.add_hs_and_optimize_gen_ligs
-                else True if hparams["remove_hs"] else False
-            ),
+            all_gen_ligs_hs_optim,
+            add_hs=False,
         )
         print(f"Reference ligand strain energy: {round(ref_strain_energy, 2)}")
         print(f"Generated ligands strain energy: {gen_strain_energies}")
+
+    # PoseBusters validity
+    if args.filter_pb_valid:
+        print("Filtering by PoseBusters validity...")
+        pb_valid = evaluate_pb_validity(
+            all_gen_ligs_hs_optim,
+            pdb_file=args.pdb_file,
+            return_list=True,
+        )
+        all_gen_ligs_hs_optim = [
+            lig for lig, valid in zip(all_gen_ligs_hs_optim, pb_valid) if valid
+        ]
+        print(
+            f"PB-validity (mean): {np.mean(pb_valid)}, PB-validity (std): {np.std(pb_valid)}"
+        )
 
     # Save out_dict as pickle file
     target_name = Path(args.pdb_file).stem if args.pdb_file else args.pdb_id
@@ -341,20 +416,24 @@ def evaluate(args):
     torch.save(out_dict, str(predictions))
 
     # Save ligands as SDF
+    ## Save unoptimized ligands
     sdf_dir = Path(args.save_dir) / f"samples_{target_name}.sdf"
     write_sdf_file(sdf_dir, all_gen_ligs, name=target_name)
-    if args.add_hs_and_optimize_gen_ligs:
-        sdf_dir = Path(args.save_dir) / f"samples_{target_name}_protonated.sdf"
-        write_sdf_file(sdf_dir, all_gen_ligs_hs, name=target_name)
+    ## Save protonated and optimized ligands
+    if args.optimize_gen_ligs:
+        sdf_dir = Path(args.save_dir) / f"samples_{target_name}_hs_optimized-full.sdf"
+    else:
+        sdf_dir = Path(args.save_dir) / f"samples_{target_name}_hs_optimized-hs.sdf"
+    write_sdf_file(sdf_dir, all_gen_ligs_hs_optim, name=target_name)
 
     # Save ligand-pocket complexes
     if args.arch == "pocket_flex":
         gen_complexes_dir = Path(args.save_dir) / "gen_complexes_protonated"
         if not gen_complexes_dir.exists():
             gen_complexes_dir.mkdir(parents=True, exist_ok=True)
-        if args.add_hs_and_optimize_gen_ligs:
+        if args.optimize_gen_ligs:
             util.write_ligand_pocket_complex_pdb(
-                all_gen_ligs_hs,
+                all_gen_ligs_hs_optim,
                 all_gen_pdbs,
                 gen_complexes_dir,
                 complex_name=target_name,
@@ -374,8 +453,8 @@ def evaluate(args):
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         # Split the list into chunks of size args.num_workers
         chunks = [
-            all_gen_ligs_hs[i : i + args.num_workers]
-            for i in range(0, len(all_gen_ligs_hs), args.num_workers)
+            all_gen_ligs_hs_optim[i : i + args.num_workers]
+            for i in range(0, len(all_gen_ligs_hs_optim), args.num_workers)
         ]
         process_interaction_partial = partial(
             util.process_interaction,
@@ -383,8 +462,7 @@ def evaluate(args):
             pdb_file=ref_pdb_with_hs,
             pocket_cutoff=args.pocket_cutoff,
             save_dir=args.save_dir,
-            remove_hs=hparams["remove_hs"],
-            add_hs_and_optimize_gen_ligs=args.add_hs_and_optimize_gen_ligs,
+            add_hs_and_optimize_gen_ligs=False,
         )
         recovery_rates = []
         tanimoto_sims = []
@@ -428,8 +506,9 @@ def get_args():
     parser.add_argument('--ligand_id', type=str, default=None)
     parser.add_argument('--pdb_file', type=str, default=None)
     parser.add_argument('--ligand_file', type=str, default=None)
-    parser.add_argument('--ligand_idx', type=int, default=None)
     parser.add_argument('--res_txt_file', type=str, default=None)
+    parser.add_argument('--chain_id', type=str, default=None)
+    parser.add_argument('--canonicalize_conformer', action='store_true')
 
     parser.add_argument('--pocket_noise', type=str, choices=["apo", "random", "fix"], default="fix")
     parser.add_argument('--cut_pocket', action='store_true')
@@ -439,7 +518,8 @@ def get_args():
     parser.add_argument('--compute_interaction_recovery', action='store_true')
     parser.add_argument('--add_hs', action='store_true')
     parser.add_argument('--add_hs_and_optimize', action='store_true')
-    parser.add_argument('--add_hs_and_optimize_gen_ligs', action='store_true')
+    parser.add_argument('--optimize_gen_ligs', action='store_true')
+    parser.add_argument('--optimize_gen_ligs_hs', action='store_true')
     parser.add_argument('--kekulize', action='store_true')
     parser.add_argument('--use_pdbfixer', action='store_true')
     parser.add_argument('--add_bonds_to_protein', action='store_true')

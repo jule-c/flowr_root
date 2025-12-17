@@ -1,6 +1,8 @@
 import lightning as L
 import torch
 
+from flowr.util.device import dict_to_device, get_device, get_device_string
+
 
 def predict_affinity_batch(
     args,
@@ -10,7 +12,7 @@ def predict_affinity_batch(
     noise_scale: float = 0.1,
     eps=1e-4,
     seed: int = 42,
-    device="cuda",
+    device=None,
 ):
     """Predict ligand affinity for a batch of protein-ligand complexes.
 
@@ -19,13 +21,17 @@ def predict_affinity_batch(
         model: Trained flow-based molecular generation model.
         prior: Prior distribution samples (noise) for ligand generation.
         posterior: Target data containing ground truth ligand-pocket complexes.
-        device (str, optional): PyTorch device for computation. Defaults to "cuda".
+        device (str, optional): PyTorch device for computation. Defaults to auto-detected device.
         save_traj (bool, optional): Whether to save generation trajectory. Defaults to False.
         iter (str, optional): Iteration identifier for seed. Defaults to 0.
 
     Returns:
         list[rdkit.Chem.Mol]: Generated ligand molecules as RDKit Mol objects with affinity annotations
     """
+    # Use auto-detected device if not specified
+    if device is None:
+        device = get_device()
+
     # Seed for reproducibility
     torch.manual_seed(seed)
     L.seed_everything(args.seed)
@@ -34,7 +40,7 @@ def predict_affinity_batch(
     lig_prior = model.builder.extract_ligand_from_complex(prior)
     lig_prior["interactions"] = prior["interactions"]
     lig_prior["fragment_mask"] = prior["fragment_mask"]
-    lig_prior = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_prior.items()}
+    lig_prior = dict_to_device(lig_prior, device)
 
     # Get ligand and add noise to ligand coordinates
     lig_data = model.builder.extract_ligand_from_complex(posterior)
@@ -43,15 +49,13 @@ def predict_affinity_batch(
     lig_data["fragment_mode"] = posterior["fragment_mode"]
     noise = torch.randn_like(lig_data["coords"])
     lig_data["coords"] = lig_data["coords"] + noise * noise_scale
-    lig_data = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_data.items()}
+    lig_data = dict_to_device(lig_data, device)
 
     # Get pocket data
     pocket_data = model.builder.extract_pocket_from_complex(posterior)
     pocket_data["interactions"] = posterior["interactions"]
     pocket_data["complex"] = posterior["complex"]
-    pocket_data = {
-        k: v.cuda() if torch.is_tensor(v) else v for k, v in pocket_data.items()
-    }
+    pocket_data = dict_to_device(pocket_data, device)
 
     # Build starting times for the integrator
     ## In affinity mode use the provided reference data and only add a bit of noise to the coordinates

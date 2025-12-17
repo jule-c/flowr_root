@@ -158,6 +158,7 @@ class SmolDM(L.LightningDataModule):
                     num_workers=self._num_workers,
                     pin_memory=True,
                     persistent_workers=self._num_workers > 0,
+                    # worker_init_fn=worker_init_fn,
                     collate_fn=partial(self._collate, dataset="train"),
                 )
                 return dataloader
@@ -199,6 +200,7 @@ class SmolDM(L.LightningDataModule):
                 batch_sampler=batch_sampler,
                 num_workers=self._num_workers,
                 pin_memory=True,
+                # worker_init_fn=worker_init_fn,
                 collate_fn=partial(self._collate, dataset="train"),
             )
         else:
@@ -209,6 +211,7 @@ class SmolDM(L.LightningDataModule):
                 num_workers=self._num_workers,
                 pin_memory=True,
                 persistent_workers=self._num_workers > 0,
+                # worker_init_fn=worker_init_fn,
                 collate_fn=partial(self._collate, dataset="train"),
             )
         return dataloader
@@ -235,6 +238,7 @@ class SmolDM(L.LightningDataModule):
             num_workers=self._num_workers,
             pin_memory=True,
             persistent_workers=self._num_workers > 0,
+            # worker_init_fn=worker_init_fn,
             collate_fn=partial(self._collate, dataset="val"),
         )
 
@@ -262,6 +266,7 @@ class SmolDM(L.LightningDataModule):
             num_workers=self._num_workers,
             pin_memory=True,
             persistent_workers=self._num_workers > 0,
+            # worker_init_fn=worker_init_fn,
             collate_fn=partial(self._collate, dataset="test"),
         )
 

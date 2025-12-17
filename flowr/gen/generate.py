@@ -3,13 +3,14 @@ from pathlib import Path
 import torch
 
 import flowr.util.rdkit as smolRD
+from flowr.util.device import dict_to_device, get_device
 
 
 def generate_molecules(
     args,
     model,
     prior,
-    device="cuda",
+    device=None,
     save_traj=False,
     iter="",
 ):
@@ -31,13 +32,16 @@ def generate_molecules(
             - _generate_mols(): Convert generated coordinates to RDKit molecules
         prior: Prior distribution samples (noise) for ligand generation
         posterior: Target data containing ground truth ligand-pocket complexes
-        device (str, optional): PyTorch device for computation. Defaults to "cuda".
+        device (str, optional): PyTorch device for computation. Defaults to auto-detected device.
         save_traj (bool, optional): Whether to save generation trajectory. Defaults to False.
         iter (str, optional): Iteration identifier for file naming. Defaults to "".
 
     Returns:
         list[rdkit.Chem.Mol]: Generated ligand molecules as RDKit Mol objects
     """
+    # Use auto-detected device if not specified
+    if device is None:
+        device = get_device()
 
     # Get molecule data
     prior = {k: v.to(device) if torch.is_tensor(v) else v for k, v in prior.items()}
@@ -69,7 +73,7 @@ def generate_ligands_per_target(
     prior,
     posterior,
     pocket_noise="fix",
-    device="cuda",
+    device=None,
     save_traj=False,
     iter="",
     guidance_params: dict | None = None,
@@ -100,7 +104,7 @@ def generate_ligands_per_target(
         prior: Prior distribution samples (noise) for ligand generation
         posterior: Target data containing ground truth ligand-pocket complexes
         pocket_noise: Type of pocket noise ("apo", "holo", "random")
-        device (str, optional): PyTorch device for computation. Defaults to "cuda".
+        device (str, optional): PyTorch device for computation. Defaults to auto-detected device.
         save_traj (bool, optional): Whether to save generation trajectory. Defaults to False.
         iter (str, optional): Iteration identifier for file naming. Defaults to "".
 
@@ -113,6 +117,9 @@ def generate_ligands_per_target(
                 - generated_ligands: list[rdkit.Chem.Mol] - Generated ligand molecules
                 - generated_pdbs: list[str] - Paths to generated PDB files with pocket conformations
     """
+    # Use auto-detected device if not specified
+    if device is None:
+        device = get_device()
 
     assert (
         len(set([cmpl.metadata["system_id"] for cmpl in posterior["complex"]])) == 1
@@ -123,16 +130,14 @@ def generate_ligands_per_target(
     lig_prior["interactions"] = prior["interactions"]
     lig_prior["fragment_mask"] = prior["fragment_mask"]
     lig_prior["fragment_mode"] = prior["fragment_mode"]
-    lig_prior = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_prior.items()}
+    lig_prior = dict_to_device(lig_prior, device)
     if args.arch == "pocket_flex" and pocket_noise == "apo":
         pocket_prior = model.builder.extract_pocket_from_complex(prior)
     else:
         pocket_prior = model.builder.extract_pocket_from_complex(posterior)
     pocket_prior["interactions"] = posterior["interactions"]
     pocket_prior["complex"] = posterior["complex"]
-    pocket_prior = {
-        k: v.cuda() if torch.is_tensor(v) else v for k, v in pocket_prior.items()
-    }
+    pocket_prior = dict_to_device(pocket_prior, device)
 
     # Build starting times for the integrator
     lig_times_cont = torch.zeros(prior["coords"].size(0), device=device)
@@ -228,6 +233,7 @@ def generate_ligands_per_target(
 
 def generate_n_ligands(args, hparams, model, batch, batch_idx=0):
     prior, data, interpolated, _ = batch
+    device = get_device()
 
     assert (
         len(set([cmpl.metadata["system_id"] for cmpl in data["complex"]])) == 1
@@ -237,21 +243,19 @@ def generate_n_ligands(args, hparams, model, batch, batch_idx=0):
     lig_prior = model.builder.extract_ligand_from_complex(prior)
     lig_prior["interactions"] = prior["interactions"]
     lig_prior["fragment_mask"] = prior["fragment_mask"]
-    lig_prior = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_prior.items()}
+    lig_prior = dict_to_device(lig_prior, device)
     if args.arch == "pocket_flex" and hparams["pocket_noise"] == "apo":
         pocket_prior = model.builder.extract_pocket_from_complex(prior)
     else:
         pocket_prior = model.builder.extract_pocket_from_complex(data)
     pocket_prior["interactions"] = data["interactions"]
     pocket_prior["complex"] = data["complex"]
-    pocket_prior = {
-        k: v.cuda() if torch.is_tensor(v) else v for k, v in pocket_prior.items()
-    }
+    pocket_prior = dict_to_device(pocket_prior, device)
 
     # specify times
-    lig_times = torch.zeros(prior["coords"].size(0), device="cuda")
-    pocket_times = torch.zeros(pocket_prior["coords"].size(0), device="cuda")
-    interaction_times = torch.zeros(prior["coords"].size(0), device="cuda")
+    lig_times = torch.zeros(prior["coords"].size(0), device=device)
+    pocket_times = torch.zeros(pocket_prior["coords"].size(0), device=device)
+    interaction_times = torch.zeros(prior["coords"].size(0), device=device)
     prior_times = [lig_times, pocket_times, interaction_times]
 
     k = 0
@@ -326,7 +330,7 @@ def generate_ligands_per_target_selective(
     posterior_target,
     posterior_untarget,
     pocket_noise="fix",
-    device="cuda",
+    device=None,
     save_traj=False,
     iter="",
     guidance_params: dict | None = None,
@@ -357,7 +361,7 @@ def generate_ligands_per_target_selective(
         prior: Prior distribution samples (noise) for ligand generation
         posterior: Target data containing ground truth ligand-pocket complexes
         pocket_noise: Type of pocket noise ("apo", "holo", "random")
-        device (str, optional): PyTorch device for computation. Defaults to "cuda".
+        device (str, optional): PyTorch device for computation. Defaults to auto-detected device.
         save_traj (bool, optional): Whether to save generation trajectory. Defaults to False.
         iter (str, optional): Iteration identifier for file naming. Defaults to "".
 
@@ -370,6 +374,9 @@ def generate_ligands_per_target_selective(
                 - generated_ligands: list[rdkit.Chem.Mol] - Generated ligand molecules
                 - generated_pdbs: list[str] - Paths to generated PDB files with pocket conformations
     """
+    # Use auto-detected device if not specified
+    if device is None:
+        device = get_device()
 
     assert (
         len(set([cmpl.metadata["system_id"] for cmpl in posterior_target["complex"]]))
@@ -381,7 +388,7 @@ def generate_ligands_per_target_selective(
     lig_prior["interactions"] = prior["interactions"]
     lig_prior["fragment_mask"] = prior["fragment_mask"]
     lig_prior["fragment_mode"] = prior["fragment_mode"]
-    lig_prior = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_prior.items()}
+    lig_prior = dict_to_device(lig_prior, device)
 
     # Pocket data target
     if args.arch == "pocket_flex" and pocket_noise == "apo":
@@ -390,9 +397,7 @@ def generate_ligands_per_target_selective(
         pocket_data_target = model.builder.extract_pocket_from_complex(posterior_target)
     pocket_data_target["interactions"] = posterior_target["interactions"]
     pocket_data_target["complex"] = posterior_target["complex"]
-    pocket_data_target = {
-        k: v.cuda() if torch.is_tensor(v) else v for k, v in pocket_data_target.items()
-    }
+    pocket_data_target = dict_to_device(pocket_data_target, device)
 
     # Pocket data off-target
     if args.arch == "pocket_flex" and pocket_noise == "apo":
@@ -403,10 +408,7 @@ def generate_ligands_per_target_selective(
         )
     pocket_data_untarget["interactions"] = posterior_untarget["interactions"]
     pocket_data_untarget["complex"] = posterior_untarget["complex"]
-    pocket_data_untarget = {
-        k: v.cuda() if torch.is_tensor(v) else v
-        for k, v in pocket_data_untarget.items()
-    }
+    pocket_data_untarget = dict_to_device(pocket_data_untarget, device)
 
     # Build starting times for the integrator
     lig_times_cont = torch.zeros(prior["coords"].size(0), device=device)

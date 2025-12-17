@@ -5,7 +5,7 @@ import warnings
 from argparse import Namespace
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 
 import lightning as L
 import numpy as np
@@ -36,17 +36,13 @@ from flowr.data.interpolate import (
     extract_substructure,
 )
 from flowr.data.preprocess_pdbs import process_complex
-from flowr.eval.evaluate_xtb import (
-    get_molecule_charge,
-    parse_xtb_output,
-    parse_xtbtopo_mol,
-    run_xtb_optimization,
-    sdf_to_xyz,
-)
 from flowr.util.functional import (
-    add_and_optimize_hs,
+    optimize_ligand_in_pocket,
 )
-from flowr.util.metrics import interaction_recovery_per_complex
+from flowr.util.metrics import (
+    calculate_minimization_metrics,
+    interaction_recovery_per_complex,
+)
 from flowr.util.pocket import PROLIF_INTERACTIONS
 from flowr.util.rdkit import ConformerGenerator, write_sdf_file
 
@@ -80,7 +76,11 @@ def get_conditional_mode(args):
                     else (
                         "fragment"
                         if args.fragment_inpainting
-                        else "substructure" if args.substructure_inpainting else None
+                        else (
+                            "substructure"
+                            if args.substructure_inpainting
+                            else "interaction" if args.interaction_inpainting else None
+                        )
                     )
                 )
             )
@@ -94,6 +94,7 @@ def filter_substructure(
     inpainting_mode: str,
     substructure_query: Optional[str] = None,
     max_fragment_cuts: int = 3,
+    canonicalize_conformer: Optional[bool] = False,
 ):
     """
     Filter a list of generated molecules to only those that match the required substructure.
@@ -103,7 +104,7 @@ def filter_substructure(
         ref_mols: List of reference RDKit molecules
         inpainting_mode: One of ['scaffold', 'func_group', 'linker', 'core',
                         'fragment', 'substructure', 'interaction']
-        substructure_query: SMILES/SMARTS string for substructure mode
+        substructure_query: SMILES/SMARTS string for substructure mode or list of atom IDs
         max_fragment_cuts: Maximum cuts for fragment mode
     Returns:
         Filtered list of generated molecules
@@ -116,6 +117,7 @@ def filter_substructure(
             inpainting_mode,
             substructure_query=substructure_query,
             max_fragment_cuts=max_fragment_cuts,
+            canonicalize_conformer=canonicalize_conformer,
         ):
             filtered_ligs.append(gen_mol)
     return filtered_ligs
@@ -127,6 +129,7 @@ def check_substructure_match(
     inpainting_mode: str,
     substructure_query: Optional[str] = None,
     max_fragment_cuts: int = 3,
+    canonicalize_conformer: Optional[bool] = False,
 ) -> bool:
     """
     Check if a generated molecule contains the required substructure based on the inpainting mode.
@@ -513,7 +516,12 @@ def load_data_from_lmdb(
 
 
 def load_data_from_pdb(
-    args, remove_hs: bool, remove_aromaticity: bool, ligand_idx: int = 0
+    args,
+    remove_hs: bool,
+    remove_aromaticity: bool,
+    ligand_idx: int = 0,
+    chain_id: Optional[str] = None,
+    canonicalize_conformer: Optional[bool] = False,
 ):
     # Load the data
     processing_params = {
@@ -536,6 +544,8 @@ def load_data_from_pdb(
         pdb_path=args.pdb_file,
         ligand_sdf_path=args.ligand_file,
         ligand_idx=ligand_idx,
+        canonicalize_conformer=canonicalize_conformer,
+        chain_id=chain_id,
         **processing_params,
     )
     system = system.remove_hs(include_ligand=remove_hs)
@@ -768,7 +778,12 @@ def write_ligand_pocket_complex_sdf(
 
 
 def process_lig_wrapper(
-    pair, optimizer, optimize_pocket_hs=False, process_pocket=False
+    pair: tuple,
+    optimizer: Callable,
+    optimize_pocket_hs: bool = False,
+    add_ligand_hs: bool = True,
+    only_ligand_hs: bool = False,
+    process_pocket: bool = False,
 ):
     """
     Wrapper for process_lig to enable pickling.
@@ -776,6 +791,10 @@ def process_lig_wrapper(
     Args:
         pair (tuple): A tuple containing (lig, pdb_file).
         optimizer: The optimizer to pass to process_lig.
+        optimize_pocket_hs: Whether to optimize pocket hydrogens.
+        add_ligand_hs: Whether to add hydrogens to the ligand.
+        only_ligand_hs: Whether to only optimize ligand hydrogens.
+        process_pocket: Whether to process the pocket.
 
     Returns:
         The processed ligand.
@@ -785,40 +804,162 @@ def process_lig_wrapper(
         lig,
         pdb_file=pdb_file,
         optimizer=optimizer,
+        add_ligand_hs=add_ligand_hs,
+        only_ligand_hs=only_ligand_hs,
         optimize_pocket_hs=optimize_pocket_hs,
         process_pocket=process_pocket,
     )
 
 
 def process_lig(
-    lig, pdb_file, optimizer, optimize_pocket_hs=False, process_pocket=False
+    lig: Chem.Mol,
+    pdb_file: str,
+    optimizer: Callable,
+    optimize_pocket_hs: bool = False,
+    add_ligand_hs: bool = True,
+    process_pocket: bool = False,
+    only_ligand_hs: bool = False,
 ):
     """
-    Add hydrogens to a ligand and optimize it.
+    Optimize the ligand in the pocket using the specified optimizer.
+    Args:
+        lig: RDKit ligand molecule.
+        pdb_file: Path to the pocket PDB file.
+        optimizer: The optimizer function to use.
+        optimize_pocket_hs: Whether to optimize pocket hydrogens.
+        add_ligand_hs: Whether to add hydrogens to the ligand.
+        process_pocket: Whether to process the pocket.
+        only_ligand_hs: Whether to only optimize ligand hydrogens.
+    Returns:
+        The optimized ligand.
     """
-    return add_and_optimize_hs(
+    # Optimize the ligand in the pocket
+    lig_optim = optimize_ligand_in_pocket(
         lig,
         pdb_file,
         optimizer=optimizer,
+        add_ligand_hs=add_ligand_hs,
         optimize_pocket_hs=optimize_pocket_hs,
         process_pocket=process_pocket,
+        only_ligand_hs=only_ligand_hs,
+    )
+    return lig_optim
+
+
+def optimize_lig(
+    gen_lig: Chem.Mol,
+    ref_lig: Chem.Mol,
+    pdb_file: str,
+    add_ligand_hs: bool = True,
+    pocket_distance: float = 5.0,
+    n_steps: int = 200,
+    distance_constraint: float = 1.0,
+):
+    """
+    Optimize the ligand in the pocket using MMFF optimization.
+
+    Args:
+        gen_lig: Generated RDKit ligand molecule.
+        ref_lig: Reference RDKit ligand molecule.
+        pdb_file: Path to the pocket PDB file.
+        pocket_distance: Distance cutoff for pocket residues.
+        n_steps: Number of optimization steps.
+        distance_constraint: Distance constraint for optimization.
+    Returns:
+        The optimized ligand.
+    """
+    from flowr.util.functional import setup_minimize
+
+    lig_optim = setup_minimize(
+        gen_lig,
+        ref_lig=ref_lig,
+        pdb_file=pdb_file,
+        add_ligand_hs=add_ligand_hs,
+        pocket_distance=pocket_distance,
+        n_steps=n_steps,
+        distance_constraint=distance_constraint,
+    )
+    return lig_optim
+
+
+def optimize_ligs(
+    gen_ligs: List[Chem.Mol],
+    ref_lig: Chem.Mol,
+    pdb_file: str,
+    add_ligand_hs: bool = True,
+    pocket_distance: float = 5.0,
+    n_steps: int = 200,
+    distance_constraint: float = 1.0,
+):
+    """
+    Optimize the ligand in the pocket using MMFF optimization.
+
+    Args:
+        gen_ligs: List of generated RDKit ligand molecules.
+        ref_lig: Reference RDKit ligand molecule.
+        pdb_file: Path to the pocket PDB file.
+        pocket_distance: Distance cutoff for pocket residues.
+        n_steps: Number of optimization steps.
+        distance_constraint: Distance constraint for optimization.
+    Returns:
+        The optimized ligand.
+    """
+    from flowr.util.functional import setup_minimize_list
+
+    ligs_optim = setup_minimize_list(
+        gen_ligs,
+        ref_lig=ref_lig,
+        pdb_file=pdb_file,
+        add_ligand_hs=add_ligand_hs,
+        pocket_distance=pocket_distance,
+        n_steps=n_steps,
+        distance_constraint=distance_constraint,
+    )
+    return ligs_optim
+
+
+def evaluate_optimization(
+    ligs: List[Chem.Mol],
+    optim_ligs: List[Chem.Mol],
+):
+    # Calculate RMSD and strains for each pair
+    strains_before_minimization = []
+    strains_after_minimization = []
+    rmsds_before_after = []
+    for mol_before, mol_after in zip(ligs, optim_ligs):
+        strain_before, strain_after, rmsd_value = calculate_minimization_metrics(
+            mol_before, mol_after
+        )
+        strains_before_minimization.append(strain_before)
+        strains_after_minimization.append(strain_after)
+        rmsds_before_after.append(rmsd_value)
+    print(
+        f"Strain before minimization - Mean: {np.nanmean(strains_before_minimization):.3f}, "
+        f"Std: {np.nanstd(strains_before_minimization):.3f}"
+    )
+    print(
+        f"Strain after minimization - Mean: {np.nanmean(strains_after_minimization):.3f}, "
+        f"Std: {np.nanstd(strains_after_minimization):.3f}"
+    )
+    print(
+        f"RMSD (before -> after) - Mean: {np.nanmean(rmsds_before_after):.3f}, "
+        f"Std: {np.nanstd(rmsds_before_after):.3f}"
     )
 
 
 def process_interaction(
-    gen_lig,
-    ref_lig,
-    pdb_file,
-    pocket_cutoff,
-    save_dir,
-    remove_hs,
-    add_hs_and_optimize_gen_ligs,
+    gen_lig: Chem.Mol,
+    ref_lig: Chem.Mol,
+    pdb_file: str,
+    pocket_cutoff: float,
+    save_dir: str,
+    add_hs_and_optimize_gen_ligs: bool,
 ):
     recovery_rate, tanimoto_sim = interaction_recovery_per_complex(
         gen_ligs=gen_lig,
         native_lig=ref_lig,
         pdb_file=pdb_file,
-        add_optimize_gen_lig_hs=remove_hs and not add_hs_and_optimize_gen_ligs,
+        add_optimize_gen_lig_hs=add_hs_and_optimize_gen_ligs,
         add_optimize_ref_lig_hs=False,
         optimize_pocket_hs=False,
         process_pocket=False,
@@ -991,37 +1132,6 @@ def get_guidance_params(args) -> Dict[str, Any]:
     return guidance_params
 
 
-def optimize_molecule_xtb(mol, temp_dir):
-    """Process a single molecule: run xTB optimization, parse output, and return the optimized molecule."""
-
-    # Create paths within the temp directory
-    xyz_filename = os.path.join(temp_dir, "mol.xyz")
-    output_prefix = "mol"
-    xtb_topo_filename = os.path.join(temp_dir, f"{output_prefix}.xtbtopo.mol")
-
-    sdf_to_xyz(mol, xyz_filename)
-
-    # Get the formal charge of the molecule
-    charge = get_molecule_charge(mol)
-
-    try:
-        # Pass the charge to the xTB optimization
-        xtb_output = run_xtb_optimization(xyz_filename, output_prefix, charge, temp_dir)
-        total_energy_gain, total_rmsd = parse_xtb_output(xtb_output)
-
-        if not os.path.exists(xtb_topo_filename):
-            raise FileNotFoundError(
-                f"Expected xtbtopo.mol file not found: '{xtb_topo_filename}'"
-            )
-
-        optimized_mol = parse_xtbtopo_mol(xtb_topo_filename)
-        return optimized_mol, total_energy_gain, total_rmsd
-
-    except Exception as e:
-        print(f"Error processing molecule: {e}")
-        return None, None, None
-
-
 def optimize_molecule_rdkit(mol):
     """
     Optimize a molecule using RDKit MMFF force field.
@@ -1044,9 +1154,6 @@ def optimize_molecule_rdkit(mol):
     mol_copy = Chem.Mol(mol)
 
     try:
-        # Get initial conformer
-        conf = mol_copy.GetConformer()
-
         # Store initial positions for RMSD calculation
         initial_mol = Chem.Mol(mol_copy)
 

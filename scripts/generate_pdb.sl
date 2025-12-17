@@ -68,25 +68,34 @@ python -m flowr.gen.generate_from_pdb \
     --cut_pocket \
     --pocket_cutoff 7 \
     --gpus "$num_gpus" \
+    --num_workers "$num_workers" \
     --batch_cost $batch_cost \
     --ckpt_path "$ckpt" \
     --save_dir "$save_dir" \
-    --max_sample_iter 20 \
+    --max_sample_iter 30 \
     --coord_noise_scale $coord_noise_std \
     --sample_n_molecules_per_target $n_molecules_per_target \
     --categorical_strategy uniform-sample \
+    --ode_sampling_strategy "$sampling_strategy" \
     --filter_valid_unique \
-    # --substructure_inpainting \
-    # --substructure 10 11 12 33 34 \
-    # --filter_pb_valid \
+    --filter_diversity \
+    --diversity_threshold 0.7 \
+    # --sample_mol_sizes \
+    # --optimize_gen_ligs \
+    # --optimize_gen_ligs_hs \
+    # --calculate_strain_energies \
+    # --filter_cond_substructure \
     # --interaction_inpainting \
     # --compute_interactions \
     # --compute_interaction_recovery \
-    # --add_hs_and_optimize_gen_ligs \
     # --func_group_inpainting \
-    # --scaffold_inpainting \
-    # --substructure_inpainting \
-    # --substructure 'c1ccccc1' \
     # --linker_inpainting \
-    # --sample_mol_sizes \
+    # --scaffold_inpainting \
+    # --core_inpainting \
+    # --substructure_inpainting \
+    # --substructure 0 2 8 9 10 11 12 13 23 24 25 26 27 28 29 \
+    # --filter_pb_valid \
+    # --canonicalize_conformer \
+    # --save_traj \
+    # --use_sde_simulation \
 

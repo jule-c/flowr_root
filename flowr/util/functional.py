@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 import warnings
@@ -7,12 +8,13 @@ from typing import Optional, Union
 
 import biotite.structure.io.pdb as pdb
 import hydride
+import MDAnalysis as mda
 import numpy as np
 import pdbinf
 import prolif as plf
 import torch
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdDetermineBonds, rdForceFieldHelpers
+from rdkit.Chem import AllChem, Mol, rdDetermineBonds, rdForceFieldHelpers
 from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
@@ -945,9 +947,11 @@ class LigandPocketOptimization:
         ligand: Chem.Mol,
         pdb_file: str,
         method: str = "prolif_mmff",
+        add_ligand_hs: bool = True,
         process_pocket: bool = False,
         return_pocket: bool = False,
         optimize_pocket_hs: bool = False,
+        only_ligand_hs: bool = True,
     ):
         if method == "mmff":
             ligand = self._mmff_add_and_optimize_ligand_hs(ligand, pdb_file)
@@ -955,20 +959,24 @@ class LigandPocketOptimization:
             ligand = self._openmm_add_and_optimize_ligand_hs(ligand, pdb_file)
         elif method == "prolif_mmff":
             if return_pocket:
-                ligand, pocket = self._prolif_mmff_add_and_optimize_ligand_hs(
+                ligand, pocket = self._prolif_mmff_optimize_ligand(
                     ligand,
                     pdb_file,
+                    add_ligand_hs=add_ligand_hs,
                     process_pocket=process_pocket,
                     return_pocket=True,
                     optimize_pocket_hs=optimize_pocket_hs,
+                    only_ligand_hs=only_ligand_hs,
                 )
                 return ligand, pocket
             else:
-                ligand = self._prolif_mmff_add_and_optimize_ligand_hs(
+                ligand = self._prolif_mmff_optimize_ligand(
                     ligand,
                     pdb_file,
+                    add_ligand_hs=add_ligand_hs,
                     process_pocket=process_pocket,
                     optimize_pocket_hs=optimize_pocket_hs,
+                    only_ligand_hs=only_ligand_hs,
                 )
         return ligand
 
@@ -1195,17 +1203,20 @@ class LigandPocketOptimization:
 
         return ligand_with_H
 
-    def _prolif_mmff_add_and_optimize_ligand_hs(
+    def _prolif_mmff_optimize_ligand(
         self,
         ligand: Chem.Mol,
         pdb_file: str,
         max_iter: int = 200,
+        add_ligand_hs: bool = True,
         process_pocket: bool = False,
         return_pocket: bool = False,
+        only_ligand_hs: bool = False,
         optimize_pocket_hs: bool = False,
+        distance_constraint: float = 1.0,
     ):
         # create complex from pocket residues and ligand including cleaning up stuff and sanitizing
-        ligand_mol = ligand_from_mol(ligand, add_hydrogens=True)
+        ligand_mol = ligand_from_mol(ligand, add_hydrogens=add_ligand_hs)
         pocket_mol = self.pocket_from_pdb(
             pdb_file,
             ligand_mol,
@@ -1225,25 +1236,35 @@ class LigandPocketOptimization:
                 f"Returning non-optimized ligand. Could not get MMFF properties for combined molecule with PDB {pdb_file}"
             )
             if return_pocket:
-                return ligand_mol, pocket_mol
-            return ligand_mol
+                return Chem.Mol(ligand_mol), pocket_mol
+            return Chem.Mol(ligand_mol)
         # constrain position of heavy atoms and certain hydrogens
         num_ligand_atoms = ligand_mol.GetNumAtoms()
         for atom in cpx.GetAtoms():
-            if optimize_pocket_hs:
-                if atom.GetAtomicNum() != 1:
-                    ff.AddFixedPoint(atom.GetIdx())
-                # constrain hydrogen bound to backbone nitrogen fragment
-                elif (
-                    atom.GetNeighbors()[0].GetPDBResidueInfo().GetName().strip() == "N"
-                    and atom.GetIdx() >= num_ligand_atoms
-                ):
-                    ff.AddFixedPoint(atom.GetIdx())
+            if only_ligand_hs:
+                # constrain everything except ligand hydrogens
+                if atom.GetIdx() < num_ligand_atoms:
+                    if atom.GetAtomicNum() != 1:
+                        ff.AddFixedPoint(atom.GetIdx())
             else:
-                # constrain heavy atom
-                if atom.GetIdx() >= num_ligand_atoms:
-                    ff.AddFixedPoint(atom.GetIdx())
-                elif atom.GetIdx() < num_ligand_atoms and atom.GetAtomicNum() != 1:
+                if atom.GetIdx() < num_ligand_atoms and atom.GetSymbol() != "H":
+                    ff.MMFFAddPositionConstraint(
+                        atom.GetIdx(), distance_constraint, 999.0
+                    )
+
+            # constrain pocket atoms
+            if atom.GetIdx() >= num_ligand_atoms:
+                if optimize_pocket_hs:
+                    if atom.GetAtomicNum() != 1:
+                        ff.AddFixedPoint(atom.GetIdx())
+                    # constrain hydrogen bound to backbone nitrogen fragment
+                    elif (
+                        atom.GetNeighbors()[0].GetPDBResidueInfo().GetName().strip()
+                        == "N"
+                        and atom.GetIdx() >= num_ligand_atoms
+                    ):
+                        ff.AddFixedPoint(atom.GetIdx())
+                else:
                     ff.AddFixedPoint(atom.GetIdx())
 
         # minimize
@@ -1266,8 +1287,8 @@ class LigandPocketOptimization:
                 prot_idx += 1
 
         if return_pocket:
-            return ligand_mol, pocket_mol
-        return ligand_mol
+            return Chem.Mol(ligand_mol), pocket_mol
+        return Chem.Mol(ligand_mol)
 
     def pocket_from_pdb(
         self,
@@ -1525,14 +1546,16 @@ class LigandPocketOptimization:
             # infer sidechain bonds from template
             block = pdbinf.STANDARD_AA_DOC[resname]
         except KeyError:
-            from MDAnalysis.converters.RDKit import PERIODIC_TABLE
+            from rdkit.Chem import GetPeriodicTable
+
+            _periodic_table = GetPeriodicTable()
 
             # skip ions
             if len(atoms_subset) == 1:
                 # strip lone hydrogens and other atoms that aren't delt with by rdkit
                 if self.strip_invalid and (
                     (ion := atoms_subset[0]).GetAtomicNum() == 1
-                    or PERIODIC_TABLE.GetDefaultValence(ion.GetAtomicNum()) == -1
+                    or _periodic_table.GetDefaultValence(ion.GetAtomicNum()) == -1
                 ):
                     warnings.warn(
                         f"Found lone {ion.GetSymbol()} atom for residue {resid!s},"
@@ -1604,14 +1627,11 @@ class LigandPocketOptimization:
         self, mol: Chem.Mol, sanitize: bool = True, reorder: bool = True
     ) -> Chem.Mol:
 
-        from MDAnalysis.converters.RDKit import (
-            _infer_bo_and_charges,
-            _standardize_patterns,
-        )
+        from MDAnalysis.converters.RDKitInferring import MDAnalysisInferrer
 
         try:
-            _infer_bo_and_charges(mol)
-            mol = _standardize_patterns(mol)
+            MDAnalysisInferrer._infer_bo_and_charges(mol)
+            mol = MDAnalysisInferrer(sanitize=sanitize)._standardize_patterns(mol)
         except Exception:
             if sanitize:
                 raise
@@ -1623,7 +1643,11 @@ class LigandPocketOptimization:
         return mol
 
     def assign_charges(self, mol: Chem.Mol) -> None:
-        from MDAnalysis.converters.RDKit import PERIODIC_TABLE
+        from MDAnalysis.converters.RDKitInferring import MDAnalysisInferrer
+        from rdkit.Chem import GetPeriodicTable
+
+        _periodic_table = GetPeriodicTable()
+        MONATOMIC_CATION_CHARGES = MDAnalysisInferrer.MONATOMIC_CATION_CHARGES
 
         cysteines = {"CYS", "CYX"}
 
@@ -1634,7 +1658,7 @@ class LigandPocketOptimization:
 
             if pdb_name in self.radical_replaces_charge:
                 unpaired = (
-                    PERIODIC_TABLE.GetDefaultValence(atom.GetAtomicNum())
+                    _periodic_table.GetDefaultValence(atom.GetAtomicNum())
                     - atom.GetTotalValence()
                 )
                 if unpaired < 0:
@@ -1659,18 +1683,13 @@ class LigandPocketOptimization:
                 atom.SetFormalCharge(1)
 
             else:
-                from MDAnalysis.converters.RDKit import (
-                    MONATOMIC_CATION_CHARGES,
-                    PERIODIC_TABLE,
-                )
-
                 if (
                     atom.GetDegree() == 0
                     and atom.GetAtomicNum() in MONATOMIC_CATION_CHARGES
                 ):
                     chg = MONATOMIC_CATION_CHARGES[atom.GetAtomicNum()]
                 else:
-                    chg = atom.GetTotalValence() - PERIODIC_TABLE.GetDefaultValence(
+                    chg = atom.GetTotalValence() - _periodic_table.GetDefaultValence(
                         atom.GetAtomicNum()
                     )
                 atom.SetFormalCharge(chg)
@@ -1781,6 +1800,337 @@ def add_and_optimize_hs(
             method=optim_method,
             process_pocket=process_pocket,
             optimize_pocket_hs=optimize_pocket_hs,
+            only_ligand_hs=True,
         )
     except Exception:
         return None
+
+
+def optimize_ligand_in_pocket(
+    ligand: Chem.Mol,
+    pdb_file: str,
+    optimizer: LigandPocketOptimization,
+    method: str = "prolif_mmff",
+    add_ligand_hs: bool = True,
+    process_pocket: bool = False,
+    optimize_pocket_hs: bool = False,
+    only_ligand_hs: bool = False,
+):
+    """Optimize ligand in the context of the protein pocket using the specified method.
+    Args:
+        ligand: RDKit molecule of the ligand
+        pdb_file: path to the protein PDB file
+        method: optimization method, either "prolif_mmff" or "mmff_add_ligand_hs"
+        process_pocket: whether to process the pocket around the ligand
+        optimize_pocket_hs: whether to optimize pocket hydrogens
+    Returns:
+        optimized RDKit molecule of the ligand
+    """
+    try:
+        return optimizer(
+            ligand,
+            pdb_file,
+            method=method,
+            add_ligand_hs=add_ligand_hs,
+            process_pocket=process_pocket,
+            optimize_pocket_hs=optimize_pocket_hs,
+            only_ligand_hs=only_ligand_hs,
+        )
+    except Exception as e:
+        logging.warning(f"Ligand optimization failed: {e}")
+        logging.warning("Returning non-optimized ligand.")
+        return ligand
+
+
+# ==============================================================================
+# ==============================================================================
+# Pocket-constrained Ligand minimization!
+# ==============================================================================
+# ==============================================================================
+
+
+# ==============================================================================
+# Pocket Extraction
+# ==============================================================================
+
+
+def extract_pocket_mol(
+    protein_filepath: str,
+    native_ligand: Mol,
+    distance_from_ligand: float = 5.0,
+    ligand_resname: str = "UNL",
+) -> Optional[Mol]:
+    """
+    Extract pocket residues around the native ligand as an RDKit molecule.
+
+    Args:
+        protein_filepath: Path to the protein PDB file.
+        native_ligand: RDKit molecule of the native ligand (used to define pocket center).
+        distance_from_ligand: Distance threshold in Angstroms for pocket extraction.
+        ligand_resname: Residue name to assign to the ligand in the merged universe.
+
+    Returns:
+        RDKit molecule representing the pocket, or None if extraction fails.
+    """
+    try:
+        universe = mda.Universe(protein_filepath)
+        ligand = mda.Universe(native_ligand)
+        ligand.add_TopologyAttr("resname", [ligand_resname])
+
+        complx = mda.Merge(universe.atoms, ligand.atoms)
+
+        # Select protein atoms within distance of ligand, excluding hydrogens
+        selections = [
+            "protein",
+            f"around {distance_from_ligand} resname {ligand_resname}",
+            "not type H",
+        ]
+        selection = "(" + ") and (".join(selections) + ")"
+        atom_group: mda.AtomGroup = complx.select_atoms(selection)
+
+        pocket_mol = None
+        if len(atom_group) > 10:
+            # Build selection for complete residues
+            segids = {}
+            for residue in atom_group.residues:
+                segid = residue.segid
+                resid = residue.resid
+                if segid in segids:
+                    segids[segid].append(resid)
+                else:
+                    segids[segid] = [resid]
+
+            selections = []
+            for segid, resids in segids.items():
+                resids_str = " ".join([str(resid) for resid in set(resids)])
+                selections.append(f"((resid {resids_str}) and (segid {segid}))")
+
+            pocket_selection = " or ".join(selections)
+            protein_pocket: mda.AtomGroup = universe.select_atoms(pocket_selection)
+            pocket_mol = protein_pocket.atoms.convert_to("RDKIT")
+        else:
+            logging.warning(
+                "Pocket quite small (<10 atoms), falling back to PDB parsing"
+            )
+
+        # Fallback: try to load directly from PDB
+        if pocket_mol is None:
+            pocket_mol = Chem.MolFromPDBFile(
+                protein_filepath, removeHs=False, proximityBonding=False
+            )
+
+        return pocket_mol
+
+    except Exception as e:
+        logging.warning(f"Failed to extract pocket: {e}")
+        return None
+
+
+# ==============================================================================
+# Complex Minimizer
+# ==============================================================================
+
+
+class ComplexMinimizer:
+    """
+    Minimizes a ligand within a protein pocket context using MMFF force field.
+
+    The protein pocket atoms are kept fixed while the ligand is minimized
+    with position constraints on heavy atoms.
+    """
+
+    def __init__(
+        self,
+        pocket_mol: Mol,
+        n_steps: int = 200,
+        distance_constraint: float = 1.0,
+    ) -> None:
+        """
+        Initialize the minimizer.
+
+        Args:
+            pocket_mol: RDKit molecule representing the pocket (with hydrogens).
+            n_steps: Maximum number of minimization steps.
+            distance_constraint: Position constraint distance in Angstroms.
+        """
+        self.pocket_mol = pocket_mol
+        self.n_steps = n_steps
+        self.distance_constraint = distance_constraint
+
+    def minimize_ligand(
+        self,
+        ligand_mol: Mol,
+        add_hs: bool = True,
+        ignore_pocket: bool = False,
+    ) -> Optional[Mol]:
+        """
+        Minimize a ligand within the pocket context.
+
+        Args:
+            ligand_mol: RDKit molecule of the ligand to minimize.
+            ignore_pocket: If True, minimize ligand in isolation.
+
+        Returns:
+            Minimized ligand molecule with hydrogens, or None if minimization fails.
+        """
+        if add_hs:
+            ligand = Chem.AddHs(ligand_mol, addCoords=True)
+        else:
+            ligand = ligand_mol
+
+        if not ignore_pocket and self.pocket_mol is not None:
+            complx = Chem.CombineMols(self.pocket_mol, ligand)
+            n_pocket_atoms = self.pocket_mol.GetNumAtoms()
+        elif ignore_pocket:
+            logging.warning("Ignoring pocket for minimization.")
+            complx = ligand
+            n_pocket_atoms = 0
+        else:
+            logging.warning("No pocket provided for minimization.")
+            return None
+
+        try:
+            Chem.SanitizeMol(complx)
+        except Exception as e:
+            logging.warning(f"Failed to sanitize complex: {e}")
+            return None
+
+        try:
+            mol_properties = AllChem.MMFFGetMoleculeProperties(
+                complx, mmffVariant="MMFF94s"
+            )
+            if mol_properties is None:
+                logging.warning("Could not get MMFF properties for complex")
+                return None
+
+            mmff = AllChem.MMFFGetMoleculeForceField(
+                complx,
+                mol_properties,
+                confId=0,
+                nonBondedThresh=10.0,
+                ignoreInterfragInteractions=False,
+            )
+            if mmff is None:
+                logging.warning("Could not create MMFF force field")
+                return None
+
+            mmff.Initialize()
+
+            # Add position constraints on ligand heavy atoms
+            for idx in range(n_pocket_atoms, complx.GetNumAtoms()):
+                atom = complx.GetAtomWithIdx(idx)
+                if atom.GetSymbol() != "H":
+                    mmff.MMFFAddPositionConstraint(idx, self.distance_constraint, 999.0)
+
+            # Fix pocket atoms in place
+            if not ignore_pocket and n_pocket_atoms > 0:
+                for i in range(n_pocket_atoms):
+                    mmff.AddFixedPoint(i)
+
+            # Perform minimization
+            result = mmff.Minimize(maxIts=self.n_steps)
+            if result != 0:
+                logging.debug("Minimization did not converge")
+
+            # Extract minimized ligand
+            minimized_frags = Chem.GetMolFrags(complx, asMols=True)
+            minimized_ligand = minimized_frags[-1]
+
+            return minimized_ligand
+
+        except Exception as e:
+            logging.warning(f"MMFF minimization exception: {e}")
+            logging.warning("Returning non-optimized ligand.")
+            return ligand
+
+
+def setup_minimize(
+    gen_lig: Mol,
+    ref_lig: Mol,
+    pdb_file: str,
+    add_ligand_hs: bool = True,
+    pocket_distance: float = 5.0,
+    n_steps: int = 1000,
+    distance_constraint: float = 1.0,
+) -> Optional[Mol]:
+    """
+    Set up and run minimization for a generated ligand.
+
+    Args:
+        gen_lig: Generated ligand molecule to minimize.
+        ref_lig: Reference ligand used to define the pocket.
+        pdb_file: Path to the protein PDB file.
+        pocket_distance: Distance from ligand for pocket extraction (Angstroms).
+        n_steps: Maximum number of minimization steps.
+        distance_constraint: Position constraint distance in Angstroms.
+
+    Returns:
+    Molecules after minimization -> list[Optional[Mol]]
+    """
+    # Extract pocket around reference ligand
+    pocket_mol = extract_pocket_mol(
+        protein_filepath=pdb_file,
+        native_ligand=ref_lig,
+        distance_from_ligand=pocket_distance,
+    )
+
+    if pocket_mol is None:
+        logging.warning(f"Could not extract pocket from {pdb_file}")
+        logging.warning("Returning non-optimized ligands.")
+        return gen_lig
+
+    # Run minimization
+    minimizer = ComplexMinimizer(
+        pocket_mol,
+        n_steps=n_steps,
+        distance_constraint=distance_constraint,
+    )
+    mol_optim = minimizer.minimize_ligand(gen_lig, add_hs=add_ligand_hs)
+    return mol_optim
+
+
+def setup_minimize_list(
+    gen_ligs: list[Mol],
+    ref_lig: Mol,
+    pdb_file: str,
+    add_ligand_hs: bool = True,
+    pocket_distance: float = 5.0,
+    n_steps: int = 1000,
+    distance_constraint: float = 1.0,
+) -> Optional[Mol]:
+    """
+    Set up and run minimization for a list of generated ligands.
+
+    Args:
+        gen_ligs: List of generated ligand molecules to minimize.
+        ref_lig: Reference ligand used to define the pocket.
+        pdb_file: Path to the protein PDB file.
+        pocket_distance: Distance from ligand for pocket extraction (Angstroms).
+        n_steps: Maximum number of minimization steps.
+        distance_constraint: Position constraint distance in Angstroms.
+
+    Returns:
+    Molecules after minimization -> list[Optional[Mol]]
+    """
+    # Extract pocket around reference ligand
+    pocket_mol = extract_pocket_mol(
+        protein_filepath=pdb_file,
+        native_ligand=ref_lig,
+        distance_from_ligand=pocket_distance,
+    )
+
+    if pocket_mol is None:
+        logging.warning(f"Could not extract pocket from {pdb_file}.")
+        logging.warning("Returning non-optimized ligands.")
+        return gen_ligs
+
+    # Run minimization
+    minimizer = ComplexMinimizer(
+        pocket_mol,
+        n_steps=n_steps,
+        distance_constraint=distance_constraint,
+    )
+    ligs_optim = [
+        minimizer.minimize_ligand(gen_lig, add_hs=add_ligand_hs) for gen_lig in gen_ligs
+    ]
+    return ligs_optim

@@ -19,6 +19,7 @@ from flowr.predict.predict import predict_affinity_batch
 from flowr.scriptutil import (
     load_model,
 )
+from flowr.util.device import get_device
 from flowr.util.pocket import PocketComplexBatch
 
 warnings.filterwarnings(
@@ -69,7 +70,7 @@ def predict(args):
     ) = load_model(
         args,
     )
-    model = model.to("cuda")
+    model = model.to(get_device())
     model.eval()
     print("Model complete.")
 

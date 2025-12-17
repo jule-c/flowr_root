@@ -174,6 +174,28 @@ def save_systems_(args, systems, split):
     print(f"Saved {len(systems)} systems to {save_file.resolve()}")
 
 
+def canonicalize_atom_order(mol_conformer):
+    """
+    Renumber conformer atoms to match canonical SMILES atom ordering.
+    Preserves 3D coordinates and explicit Hs.
+    """
+    # Generate SMILES with explicit Hs
+    smiles = Chem.MolToSmiles(mol_conformer, allHsExplicit=True)
+    mol_canonical = Chem.MolFromSmiles(smiles)
+
+    # Get mapping
+    match = mol_conformer.GetSubstructMatch(mol_canonical)
+
+    if not match or len(match) != mol_canonical.GetNumAtoms():
+        raise ValueError(
+            f"Substructure match failed. Got {len(match)} of {mol_canonical.GetNumAtoms()} atoms"
+        )
+
+    mol_reordered = Chem.RenumberAtoms(mol_conformer, list(match))
+
+    return mol_reordered
+
+
 def process_pdb(
     pdb_file: str,
     txt_path: str = None,
@@ -664,6 +686,7 @@ def safe_load_mol_from_file(
     ligand_file_path: str = None,
     remove_hs: bool = False,
     ligand_idx: int = 0,
+    canonicalize_conformer: bool = False,
 ):
     """Safely load an RDKit molecule from SDF or directly from a provided RDKit Mol object.
 
@@ -707,6 +730,13 @@ def safe_load_mol_from_file(
     else:
         raise ValueError("Ligand file must be in SDF or PDB format")
 
+    if mol is not None and canonicalize_conformer:
+        try:
+            print(f"Canonicalizing atom order for {ligand_file_path}")
+            mol = canonicalize_atom_order(mol)
+        except Exception as e:
+            print(f"Could not canonicalize conformer for {ligand_file_path}: {e}")
+
     return mol
 
 
@@ -718,6 +748,8 @@ def process_complex(
     ligand_sdf_path: str = None,
     ligand_idx: int = 0,
     txt_path: str = None,
+    chain_id: str = None,
+    canonicalize_conformer: bool = False,
     add_hs: bool = False,
     add_hs_and_optimize: bool = False,
     add_rdkit_feats: bool = False,
@@ -777,6 +809,7 @@ def process_complex(
             ligand_file_path=ligand_sdf_path,
             remove_hs=remove_hs,
             ligand_idx=ligand_idx,
+            canonicalize_conformer=canonicalize_conformer,
         )
         if mol is None:
             print(f"Could not read ligand from {ligand_sdf_path}. Skipping.")

@@ -19,6 +19,7 @@ from flowr.gen.generate import generate_ligands_per_target_selective
 from flowr.scriptutil import (
     load_model,
 )
+from flowr.util.device import get_device
 from flowr.util.functional import (
     LigandPocketOptimization,
 )
@@ -77,7 +78,7 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to("cuda")
+    model = model.to(get_device())
     model.eval()
     print("Model complete.")
 

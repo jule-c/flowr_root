@@ -1561,6 +1561,41 @@ def calc_strain(
         return np.nan
 
 
+def calculate_minimization_metrics(
+    mol_before: Optional[Mol],
+    mol_after: Optional[Mol],
+) -> tuple[float, float, float]:
+    """
+    Calculate strain and RMSD metrics for a molecule before and after minimization.
+
+    Args:
+        mol_before: Molecule before minimization (with hydrogens).
+        mol_after: Molecule after minimization (with hydrogens).
+
+    Returns:
+        Tuple of (strain_before, strain_after, rmsd_before_after).
+        Returns (np.nan, np.nan, np.nan) if calculation fails.
+    """
+    if mol_before is None or mol_after is None:
+        return np.nan, np.nan, np.nan
+
+    try:
+        # Calculate strain before minimization
+        strain_before = evaluate_strain([mol_before], add_hs=False, return_list=True)[0]
+
+        # Calculate strain after minimization
+        strain_after = evaluate_strain([mol_after], add_hs=False, return_list=True)[0]
+
+        # Calculate all-atom RMSD without alignment
+        rmsd_value = AllChem.CalcRMS(mol_before, mol_after)
+
+        return strain_before, strain_after, rmsd_value
+
+    except Exception as e:
+        print(f"Failed to calculate metrics: {e}")
+        return np.nan, np.nan, np.nan
+
+
 def evaluate_strain(
     gen_ligs: list[Chem.Mol],
     n_steps: int = 500,

@@ -18,6 +18,7 @@ from flowr.predict.predict import predict_affinity_batch
 from flowr.scriptutil import (
     load_model,
 )
+from flowr.util.device import get_device
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -64,7 +65,7 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to("cuda")
+    model = model.to(get_device())
     model.eval()
     print("Model complete.")
 

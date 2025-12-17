@@ -20,6 +20,7 @@ from flowr.models.losses import LossComputer
 from flowr.models.mol_builder import MolBuilder
 from flowr.models.score_modifier import MaxGaussianModifier, MinGaussianModifier
 from flowr.models.semla import MolecularGenerator
+from flowr.util.device import get_device
 from flowr.util.tokeniser import Vocabulary
 
 _T = torch.Tensor
@@ -796,7 +797,7 @@ class LigandPocketCFM(pl.LightningModule):
         inpaint_mode = (
             torch.stack(
                 [
-                    torch.tensor(inpaint_mode_encoder[mode]).to("cuda")
+                    torch.tensor(inpaint_mode_encoder[mode]).to(get_device())
                     for mode in batch["fragment_mode"]
                 ],
                 dim=0,
