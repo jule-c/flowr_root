@@ -1,4 +1,4 @@
-name: flowr_root_test
+name: flowr_root
 channels:
   - pytorch
   - nvidia
