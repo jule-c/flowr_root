@@ -49,10 +49,9 @@ sample_mol_sizes="_fixed-mol-size"
 # CONDITIONAL GENERATION
 conditional_generation=""
 #conditional_generation="_interaction-cond"
-#conditional_generation="_func-group-cond"
-#conditional_generation="_scaffold-cond"
-#conditional_generation="_linker-cond"
-#conditional_generation="_substructure-cond"
+#conditional_generation="_func-group-inpaint"
+#conditional_generation="_scaffold-inpaint"
+#conditional_generation="_substructure-inpaint"
 
 # SAVE DIR
 save_dir="$data_path/processed$conditional_generation$sample_mol_sizes$noise_inject$sampling_steps"
@@ -81,19 +80,22 @@ python -m flowr.gen.generate_from_pdb \
     --filter_diversity \
     --diversity_threshold 0.7 \
     # --sample_mol_sizes \
+    # --scaffold_inpainting \
+    # --func_group_inpainting \
+    # --fragment_inpainting \
+    # --fragment_growing \
+    # --scaffold_inpainting \
+    # --func_group_inpainting \
+    # --substructure_inpainting \
+    # --substructure 0 2 8 9 10 11 12 13 23 24 25 26 27 28 29 \
+    # --filter_cond_substructure \
+    # --interaction_conditional \
+    # --compute_interactions \
+    # --compute_interaction_recovery \
     # --optimize_gen_ligs \
     # --optimize_gen_ligs_hs \
     # --calculate_strain_energies \
-    # --filter_cond_substructure \
-    # --interaction_inpainting \
-    # --compute_interactions \
-    # --compute_interaction_recovery \
-    # --func_group_inpainting \
-    # --linker_inpainting \
-    # --scaffold_inpainting \
-    # --core_inpainting \
-    # --substructure_inpainting \
-    # --substructure 0 2 8 9 10 11 12 13 23 24 25 26 27 28 29 \
+    # --calculate_pb_valid \
     # --filter_pb_valid \
     # --canonicalize_conformer \
     # --save_traj \

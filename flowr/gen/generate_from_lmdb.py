@@ -17,7 +17,6 @@ from flowr.gen.generate import generate_ligands_per_target
 from flowr.scriptutil import (
     load_model,
 )
-from flowr.util.device import get_device
 from flowr.util.pocket import PocketComplexBatch
 
 warnings.filterwarnings(
@@ -65,7 +64,7 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to(get_device())
+    model = model.to("cuda")
     model.eval()
     print("Model complete.")
 
@@ -132,21 +131,43 @@ def evaluate(args):
                 batch_end = time.time()
                 times.append((batch_end - batch_start) / args.batch_cost)
 
-                # validity of generated ligands
+                # Validity of generated ligands
                 validity = np.mean(
                     [smolRD.mol_is_valid(mol, connected=True) for mol in gen_ligs]
                 )
                 validities.append(validity)
 
-                # filter ligands if specified
+                # Filter by validity and uniqueness
                 if args.filter_valid_unique:
-                    validity_rate = (1 - validity) + 1
+                    num_sampled = len(gen_ligs)
+                    gen_ligs = smolRD.sanitize_list(
+                        gen_ligs,
+                        filter_uniqueness=False,
+                        sanitize=True,
+                    )
+                    print(f"Validity rate: {round(len(gen_ligs) / num_sampled, 2)}")
                     gen_ligs = smolRD.sanitize_list(
                         gen_ligs,
                         filter_uniqueness=True,
+                        sanitize=False,
                     )
+                    print(f"Uniqueness rate: {round(len(gen_ligs) / num_sampled, 2)}")
+
+                # Add to global ligand list
                 all_gen_ligs.extend(gen_ligs)
-                num_ligands += len(gen_ligs)
+
+                # Filter by diversity
+                if args.filter_diversity:
+                    n_ligands = len(all_gen_ligs)
+                    all_gen_ligs = util.filter_diverse_ligands_bulk(
+                        all_gen_ligs, threshold=args.diversity_threshold
+                    )
+                    print(f"Diversity rate: {round(len(all_gen_ligs) / n_ligands, 2)}")
+
+                # Update number of generated ligands
+                num_ligands = len(all_gen_ligs)
+
+            # Update iteration counter
             k += 1
 
         # Save timings
@@ -197,7 +218,14 @@ def evaluate(args):
         out_dict["properties"].append(properties)
         # Save the ligands as SDF file as well to preserve properties
         system_id = posterior["complex"][0].metadata["system_id"]
-        sdf_path = Path(args.save_dir) / "gen_sdfs" / f"gen_ligs_{system_id}.sdf"
+        if args.filter_valid_unique:
+            sdf_path = (
+                Path(args.save_dir)
+                / "gen_sdfs_valid_unique"
+                / f"gen_ligs_{system_id}.sdf"
+            )
+        else:
+            sdf_path = Path(args.save_dir) / "gen_sdfs" / f"gen_ligs_{system_id}.sdf"
         sdf_path.parent.mkdir(parents=True, exist_ok=True)
         smolRD.write_sdf_file(str(sdf_path), all_gen_ligs, name=False)
 
@@ -248,6 +276,7 @@ def get_args():
     parser.add_argument("--ckpt_path", type=str)
     parser.add_argument("--lora_finetuned", action="store_true")
     parser.add_argument("--data_path", type=str)
+    parser.add_argument("--splits_path", type=str, default=None)
     parser.add_argument("--dataset", type=str)
     parser.add_argument("--save_dir", type=str)
     parser.add_argument("--save_file", type=str)
@@ -259,7 +288,10 @@ def get_args():
     parser.add_argument("--sample_mol_sizes", action="store_true")
     parser.add_argument("--corrector_iters", type=int, default=0)
 
+    # Filtering parameters
     parser.add_argument("--filter_valid_unique", action="store_true")
+    parser.add_argument("--filter_diversity", action="store_true")
+    parser.add_argument("--diversity_threshold", type=float, default=0.9)
 
     parser.add_argument("--batch_cost", type=int)
     parser.add_argument("--dataset_split", type=str, default="test", choices=["train", "val", "test", "all"], required=True)
@@ -267,12 +299,13 @@ def get_args():
     parser.add_argument("--pocket_time", type=float, default=None)
     parser.add_argument("--interaction_time", type=float, default=None)
     parser.add_argument("--resampling_steps", type=int, default=None)
-    parser.add_argument("--interaction_inpainting", action="store_true")
+    parser.add_argument("--interaction_conditional", action="store_true")
     parser.add_argument("--scaffold_inpainting", action="store_true")
     parser.add_argument("--func_group_inpainting", action="store_true")
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--core_inpainting", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
+    parser.add_argument("--fragment_growing", action="store_true")
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument(
         "--substructure",

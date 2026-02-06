@@ -47,12 +47,15 @@ python -m flowr.train \
     --use_rbf \
     --use_lig_pocket_rbf \
     --use_fourier_time_embed \
-    --coord_loss_weight 2.0 \
+    --coord_loss_weight 3.0 \
     --type_loss_weight 1.0 \
     --bond_loss_weight 3.0 \
     --charge_loss_weight 2.0 \
     --hybridization_loss_weight 1.0 \
-    --distance_loss_weight_lig_pocket 2.0 \
+    --bond_angle_loss_weight 10.0 \
+    --bond_angle_huber_delta 0.5 \
+    --bond_length_loss_weight 5.0 \
+    --distance_loss_weight_lig_pocket 10.0 \
     --coord_noise_std_dev 0.3 \
     --coord_noise_schedule "constant_decay" \
     --coord_noise_scale 0.0 \
@@ -78,13 +81,11 @@ python -m flowr.train \
     --remove_aromaticity \
     --mixed_uncond_inpaint \
     --fragment_inpainting \
+    --fragment_growing \
     --scaffold_inpainting \
     --func_group_inpainting \
-    --linker_inpainting \
-    --interaction_inpainting \
-    --core_inpainting \
-    # --predict_affinity \
-    # --affinity_loss_weight 1.0 \
+    --predict_affinity \
+    --affinity_loss_weight 1.0 \
     # --distance_loss_weight_lig 2.0 \
     # --use_t_loss_weights \
     # --use_bucket_sampler \

@@ -19,7 +19,6 @@ from flowr.gen.generate import generate_ligands_per_target_selective
 from flowr.scriptutil import (
     load_model,
 )
-from flowr.util.device import get_device
 from flowr.util.functional import (
     LigandPocketOptimization,
 )
@@ -78,7 +77,7 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to(get_device())
+    model = model.to("cuda")
     model.eval()
     print("Model complete.")
 
@@ -469,11 +468,12 @@ def get_args():
     parser.add_argument("--pocket_time", type=float, default=None)
     parser.add_argument("--interaction_time", type=float, default=None)
     parser.add_argument("--fixed_interactions", action="store_true")
-    parser.add_argument("--interaction_inpainting", action="store_true")
+    parser.add_argument("--interaction_conditional", action="store_true")
     parser.add_argument("--scaffold_inpainting", action="store_true")
     parser.add_argument("--func_group_inpainting", action="store_true")
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
+    parser.add_argument("--fragment_growing", action="store_true")
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--core_inpainting", action="store_true")
     parser.add_argument("--substructure_inpainting", action="store_true")

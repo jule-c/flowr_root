@@ -29,7 +29,6 @@ from torch.utils.data import ConcatDataset
 from torchmetrics import MetricCollection
 
 import flowr.constants as constants
-import flowr.scriptutil as util
 import flowr.util.functional as smolF
 import flowr.util.rdkit as smolRD
 from flowr.callbacks import EMA, EMAModelCheckpoint
@@ -48,7 +47,6 @@ from flowr.data.interpolate import (
 from flowr.data.util import Statistics
 from flowr.models.integrator import Integrator
 from flowr.models.pocket import LigandGenerator, PocketEncoder
-from flowr.util.device import get_device, get_map_location
 from flowr.util.pocket import PROLIF_INTERACTIONS
 from flowr.util.tokeniser import (
     Vocabulary,
@@ -92,8 +90,12 @@ def get_precision(args):
     # return "16-mixed" if args.mixed_precision else "32"
 
 
-def get_warm_up_steps(args, train_steps):
-    return min(train_steps // 20, 5000)  # 5% of training
+def get_warm_up_steps(train_steps):
+    """
+    Warmup steps for flow matching training.
+    """
+    warmup_fraction = 0.01  # 1% is standard
+    return int(train_steps * warmup_fraction)
 
 
 class dotdict(dict):
@@ -393,10 +395,17 @@ def _build_vocab_pocket_res(pocket_noise="apo"):
     return Vocabulary(tokens)
 
 
-# TODO support multi gpus
-def calc_train_steps(dm, epochs, acc_batches):
+def calc_train_steps(dm, epochs, acc_batches, gpus=1, num_nodes=1):
+    """
+    Calculate total training steps accounting for distributed training.
+
+    In DDP, each GPU processes (total_batches / world_size) batches per epoch.
+    world_size = gpus * num_nodes
+    """
     dm.setup("train")
-    steps_per_epoch = math.ceil(len(dm.train_dataloader()) / acc_batches)
+    total_batches = len(dm.train_dataloader())
+    world_size = gpus * num_nodes
+    steps_per_epoch = math.ceil(total_batches / (acc_batches * world_size))
     return steps_per_epoch * epochs
 
 
@@ -571,11 +580,13 @@ def _inject_lora(lora_rank: int, lora_alpha: float, mod: torch.nn.Module):
 # *****************************************************************************
 
 
-def build_trainer(args, model=None):
+def build_trainer(
+    args, model=None, monitor_metric="val-pb_validity", save_top_k: int = 3
+):
     epochs = 1 if args.trial_run else args.epochs
 
     project_name = f"{PROJECT_PREFIX}-{args.dataset}"
-    precision = util.get_precision(args)
+    precision = get_precision(args)
     print(f"Using precision '{precision}'")
 
     lr_logger = LearningRateMonitor(logging_interval="step")
@@ -604,18 +615,18 @@ def build_trainer(args, model=None):
         )
         checkpoint_callback = EMAModelCheckpoint(
             dirpath=args.save_dir,
-            save_top_k=3,
+            save_top_k=save_top_k,
             # monitor="val-fc-validity",
-            monitor="val-pb_validity",
+            monitor=monitor_metric,
             mode="max",
             save_last=True,
         )
     else:
         checkpoint_callback = ModelCheckpoint(
             dirpath=args.save_dir,
-            save_top_k=3,
+            save_top_k=save_top_k,
             # monitor="val-fc-validity",
-            monitor="val-pb_validity",
+            monitor=monitor_metric,
             mode="max",
             save_last=True,
         )
@@ -718,6 +729,7 @@ def build_model(
         else None
     )
 
+    # Build model
     fixed_equi = args.pocket_fixed_equi
     pocket_d_equi = 1 if fixed_equi else args.n_coord_sets
     pocket_d_inv = args.pocket_d_model
@@ -767,100 +779,59 @@ def build_model(
         use_fourier_time_embed=args.use_fourier_time_embed,
         graph_inpainting=args.graph_inpainting,
         use_inpaint_mode_embed=args.scaffold_inpainting
-        or args.functional_group_inpainting
-        or args.interaction_inpainting
+        or args.func_group_inpainting
+        or args.interaction_conditional
         or args.core_inpainting
         or args.linker_inpainting
         or args.fragment_inpainting
+        or args.fragment_growing
         or args.substructure_inpainting,
         self_cond=args.self_condition,
         coord_skip_connect=not args.no_coord_skip_connect,
         coord_update_every_n=getattr(args, "coord_update_every_n", None),
         pocket_enc=pocket_enc,
     )
-
     if args.load_pretrained_ckpt:
-        print(f"Loading pretrained checkpoint from {args.load_pretrained_ckpt}...")
-        state_dict = torch.load(
-            args.load_pretrained_ckpt, map_location=get_map_location()
-        )["state_dict"]
-        # Remove the prefix from the state dict keys
-        state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
-        gen.load_state_dict(state_dict, strict=False)
+        gen.load_state_dict(
+            torch.load(args.load_pretrained_ckpt)["state_dict"], strict=False
+        )
 
-        if args.lora_finetuning:
-            from flowr.models.lora import LinearWithLoRA
-            from flowr.models.pocket import SemlaCondAttention
+    # Coordinate scaling
+    coord_scale = 1.0  # defaults to 1.0 for pocket models
 
-            lora_rank, lora_alpha = 32, 64
-
-            def _inject_lora(mod):
-                for name, child in mod.named_children():
-                    # skip the entire cross-attention blocks
-                    if isinstance(child, SemlaCondAttention):
-                        continue
-                    # wrap any pure Linear
-                    if isinstance(child, torch.nn.Linear):
-                        setattr(
-                            mod,
-                            name,
-                            LinearWithLoRA(child, rank=lora_rank, alpha=lora_alpha),
-                        )
-                    else:
-                        _inject_lora(child)
-
-            # inject LoRA into the ligand generator
-            _inject_lora(gen.ligand_dec)
-            # freeze all parameters except LoRA and conditional attention
-            for n, p in gen.ligand_dec.named_parameters():
-                if "lora" in n:
-                    p.requires_grad = True
-                elif "cond_attention" in n or "equi_attn" in n or "inv_attn" in n:
-                    p.requires_grad = True
-                else:
-                    p.requires_grad = False
-            # fully train pocket encoding
-            if gen.pocket_enc is not None:
-                for p in gen.pocket_enc.parameters():
-                    p.requires_grad = True
-        print("Done.")
-
-    coord_scale = 1.0
+    # Categorical sampling strategies
     type_mask_index = None
     bond_mask_index = None
-
     if args.categorical_strategy == "mask":
         type_mask_index = vocab.indices_from_tokens(["<MASK>"])[0]
         bond_mask_index = BOND_MASK_INDEX
         train_strategy = "mask"
         sampling_strategy = "mask"
-
     elif args.categorical_strategy == "uniform-sample":
         train_strategy = "ce"
         sampling_strategy = "uniform-sample"
-
     elif args.categorical_strategy == "prior-sample":
         train_strategy = "ce"
         sampling_strategy = "uniform-sample"
-
     elif args.categorical_strategy == "velocity-sample":
         train_strategy = "ce"
         sampling_strategy = "velocity-sample"
-
     else:
         raise ValueError(
             f"Interpolation '{args.categorical_strategy}' is not supported."
         )
 
     # Training steps
-    train_steps = calc_train_steps(dm, args.epochs, args.acc_batches) // args.gpus
+    train_steps = calc_train_steps(
+        dm, args.epochs, args.acc_batches, args.gpus, args.num_nodes
+    )
     print(f"Total training steps {train_steps}")
     if args.lr_schedule in ["cosine", "constant"]:
-        warm_up_steps = get_warm_up_steps(args, train_steps)
-        print(f"Warmup steps {warm_up_steps}")
+        warm_up_steps = get_warm_up_steps(train_steps)
     else:
         warm_up_steps = 0
 
+    # Build integrator
     if args.arch == "pocket":
         from flowr.models.integrator import Integrator
     elif args.arch == "pocket_flex":
@@ -881,16 +852,10 @@ def build_model(
         use_cosine_scheduler=args.use_cosine_scheduler,
     )
 
-    if args.arch == "pocket":
-        from flowr.models.fm_pocket import LigandPocketCFM
-    elif args.arch == "transformer":
-        from flowr.models.fm_transformer import LigandPocketCFM
+    # Build model
+    from flowr.models.fm_pocket import LigandPocketCFM
 
-    CFM = (
-        LigandPocketCFM
-        if args.arch in ["pocket", "transformer"]
-        else LigandPocketFlexCFM if args.arch == "pocket_flex" else LigandCFM
-    )
+    CFM = LigandPocketCFM
     fm_model = CFM(
         gen,
         vocab,
@@ -922,6 +887,14 @@ def build_model(
         confidence_gen_steps=args.confidence_gen_steps,
         affinity_loss_weight=args.affinity_loss_weight,
         docking_loss_weight=args.docking_loss_weight,
+        bond_angle_loss_weight=args.bond_angle_loss_weight,
+        bond_angle_huber_delta=args.bond_angle_huber_delta,
+        dihedral_loss_weight=args.dihedral_loss_weight,
+        dihedral_huber_delta=args.dihedral_huber_delta,
+        energy_loss_weight=args.energy_loss_weight,
+        energy_loss_weighting=args.energy_loss_weighting,
+        energy_loss_decay_rate=args.energy_loss_decay_rate,
+        bond_length_loss_weight=args.bond_length_loss_weight,
         pocket_noise=args.pocket_noise,
         pairwise_metrics=False,
         use_ema=args.use_ema,
@@ -931,6 +904,7 @@ def build_model(
         distill=False,
         lr_schedule=args.lr_schedule,
         lr_gamma=args.lr_gamma,
+        cosine_decay_fraction=getattr(args, "cosine_decay_fraction", 1.0),
         warm_up_steps=warm_up_steps,
         total_steps=train_steps,
         train_mols=train_mols,
@@ -943,12 +917,13 @@ def build_model(
         data_path=args.data_path,
         flow_interactions=args.flow_interactions,
         predict_interactions=args.predict_interactions,
-        interaction_inpainting=args.interaction_inpainting,
+        interaction_conditional=args.interaction_conditional,
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         linker_inpainting=args.linker_inpainting,
         core_inpainting=args.core_inpainting,
         fragment_inpainting=args.fragment_inpainting,
+        fragment_growing=args.fragment_growing,
         substructure_inpainting=args.substructure_inpainting,
         graph_inpainting=args.graph_inpainting is not None,
         mixed_uncond_inpaint=args.mixed_uncond_inpaint,
@@ -966,52 +941,51 @@ def load_model(
     return_info: bool = True,
     dataset_info: Optional[dict] = None,
 ):
-    checkpoint = torch.load(
-        args.ckpt_path if ckpt_path is None else ckpt_path,
-        map_location=get_map_location(),
-    )
+    checkpoint = torch.load(args.ckpt_path if ckpt_path is None else ckpt_path)
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
+    # Set sampling hyperparameters
     hparams["integration-steps"] = args.integration_steps
     hparams["sampling_strategy"] = args.ode_sampling_strategy
     hparams["use_inpaint_mode_embed"] = (
         hparams.get("scaffold_inpainting", False)
         or hparams.get("func_group_inpainting", False)
-        or hparams.get("interaction_inpainting", False)
+        or hparams.get("interaction_conditional", False)
         or hparams.get("core_inpainting", False)
         or hparams.get("linker_inpainting", False)
         or hparams.get("fragment_inpainting", False)
+        or hparams.get("fragment_growing", False)
         or hparams.get("substructure_inpainting", False)
     )
-    hparams["interaction_inpainting"] = args.interaction_inpainting
+    hparams["interaction_conditional"] = args.interaction_conditional
     hparams["scaffold_inpainting"] = args.scaffold_inpainting
     hparams["func_group_inpainting"] = args.func_group_inpainting
     hparams["linker_inpainting"] = args.linker_inpainting
     hparams["core_inpainting"] = args.core_inpainting
     hparams["fragment_inpainting"] = args.fragment_inpainting
+    hparams["fragment_growing"] = args.fragment_growing
     hparams["substructure_inpainting"] = args.substructure_inpainting
     hparams["substructure"] = args.substructure
     hparams["data_path"] = args.data_path
     hparams["save_dir"] = args.save_dir
-    hparams["predict_affinity"] = hparams.get("predict_affinity", False)
-    hparams["predict_docking_score"] = hparams.get("predict_docking_score", False)
-    hparams["add_feats"] = hparams.get("add_feats", False)
-    hparams["use_fourier_time_embed"] = hparams.get("use_fourier_time_embed", False)
-    hparams["use_lig_pocket_rbf"] = hparams.get("use_lig_pocket_rbf", False)
-    hparams["use_rbf"] = hparams.get("use_rbf", False)
-    hparams["use_distances"] = hparams.get("use_distances", False)
-    hparams["use_crossproducts"] = hparams.get("use_crossproducts", False)
+    # Set optimizer hyperparameters
     hparams["lr"] = args.lr if getattr(args, "lr", None) else hparams.get("lr", 1e-4)
     hparams["lr_schedule"] = (
         args.lr_schedule
         if getattr(args, "lr_schedule", None) is not None
         else hparams.get("lr_schedule", "exponential")
     )
+    hparams["cosine_decay_fraction"] = (
+        args.cosine_decay_fraction
+        if getattr(args, "cosine_decay_fraction", None) is not None
+        else hparams.get("cosine_decay_fraction", 1.0)
+    )
     hparams["lr_gamma"] = (
         args.lr_gamma
         if getattr(args, "lr_gamma", None) is not None
         else hparams.get("lr_gamma", 0.995)
     )
+    hparams["warm_up_steps"] = 0
     hparams["weight_decay"] = (
         args.weight_decay
         if getattr(args, "weight_decay", None) is not None
@@ -1027,6 +1001,30 @@ def load_model(
         if getattr(args, "beta2", None) is not None
         else hparams.get("beta2", 0.95)
     )
+    # Set loss weights
+    hparams["coord_loss_weight"] = getattr(args, "coord_loss_weight", None)
+    hparams["type_loss_weight"] = getattr(args, "type_loss_weight", None)
+    hparams["bond_loss_weight"] = getattr(args, "bond_loss_weight", None)
+    hparams["charge_loss_weight"] = getattr(args, "charge_loss_weight", None)
+    hparams["hybridization_loss_weight"] = getattr(
+        args, "hybridization_loss_weight", None
+    )
+    hparams["distance_loss_weight_lig"] = getattr(
+        args, "distance_loss_weight_lig", None
+    )
+    hparams["distance_loss_weight_lig_pocket"] = getattr(
+        args, "distance_loss_weight_lig_pocket", None
+    )
+    hparams["bond_angle_loss_weight"] = getattr(args, "bond_angle_loss_weight", None)
+    hparams["bond_angle_huber_delta"] = getattr(args, "bond_angle_huber_delta", None)
+    hparams["dihedral_loss_weight"] = getattr(args, "dihedral_loss_weight", None)
+    hparams["dihedral_huber_delta"] = getattr(args, "dihedral_huber_delta", None)
+    hparams["bond_length_loss_weight"] = getattr(args, "bond_length_loss_weight", None)
+    hparams["affinity_loss_weight"] = getattr(args, "affinity_loss_weight", None)
+    hparams["docking_loss_weight"] = getattr(args, "docking_loss_weight", None)
+    hparams["energy_loss_weight"] = getattr(args, "energy_loss_weight", None)
+    hparams["energy_loss_weighting"] = getattr(args, "energy_loss_weighting", None)
+    hparams["energy_loss_decay_rate"] = getattr(args, "energy_loss_decay_rate", None)
 
     # Number of corrector iterations
     if args.corrector_iters > 0:
@@ -1219,9 +1217,7 @@ def load_model(
         _hparams["lora_alpha"] = args.lora_alpha
 
         # Load the pretrained weights
-        state_dict = torch.load(args.ckpt_path, map_location=get_map_location())[
-            "state_dict"
-        ]
+        state_dict = torch.load(args.ckpt_path)["state_dict"]
         state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
         egnn = copy.deepcopy(egnn_gen)
         egnn.load_state_dict(state_dict, strict=True)
@@ -1273,9 +1269,7 @@ def load_model(
 
     elif getattr(args, "freeze_layers", None):
         print("Applying freeze_layers finetuning...")
-        state_dict = torch.load(args.ckpt_path, map_location=get_map_location())[
-            "state_dict"
-        ]
+        state_dict = torch.load(args.ckpt_path)["state_dict"]
         state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
         egnn = copy.deepcopy(egnn_gen)
         egnn.load_state_dict(state_dict, strict=True)
@@ -1387,9 +1381,7 @@ def load_model(
 
     elif getattr(args, "affinity_finetuning", None):
         print("Applying affinity_finetuning...")
-        state_dict = torch.load(args.ckpt_path, map_location=get_map_location())[
-            "state_dict"
-        ]
+        state_dict = torch.load(args.ckpt_path)["state_dict"]
         state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
         egnn = copy.deepcopy(egnn_gen)
         egnn.load_state_dict(state_dict, strict=True)
@@ -1455,10 +1447,7 @@ def load_mol_model(
     return_info: bool = True,
     dataset_info: Optional[dict] = None,
 ):
-    checkpoint = torch.load(
-        args.ckpt_path if ckpt_path is None else ckpt_path,
-        map_location=get_map_location(),
-    )
+    checkpoint = torch.load(args.ckpt_path if ckpt_path is None else ckpt_path)
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
     # Set dataset and save paths
@@ -1480,6 +1469,7 @@ def load_mol_model(
     hparams["linker_inpainting"] = args.linker_inpainting
     hparams["core_inpainting"] = args.core_inpainting
     hparams["fragment_inpainting"] = args.fragment_inpainting
+    hparams["fragment_growing"] = args.fragment_growing
     hparams["substructure_inpainting"] = args.substructure_inpainting
     hparams["substructure"] = args.substructure
     # Learning rate and optimizer params
@@ -1523,8 +1513,14 @@ def load_mol_model(
     hparams["distance_loss_weight_lig_pocket"] = getattr(
         args, "distance_loss_weight_lig_pocket", None
     )
-    hparams["angle_loss_weight"] = getattr(args, "angle_loss_weight", None)
-    hparams["angle_huber_delta"] = getattr(args, "angle_huber_delta", None)
+    hparams["bond_angle_loss_weight"] = getattr(args, "bond_angle_loss_weight", None)
+    hparams["bond_angle_huber_delta"] = getattr(args, "bond_angle_huber_delta", None)
+    hparams["dihedral_loss_weight"] = getattr(args, "dihedral_loss_weight", None)
+    hparams["dihedral_huber_delta"] = getattr(args, "dihedral_huber_delta", None)
+    hparams["bond_length_loss_weight"] = getattr(args, "bond_length_loss_weight", None)
+    hparams["energy_loss_weight"] = getattr(args, "energy_loss_weight", None)
+    hparams["energy_loss_weighting"] = getattr(args, "energy_loss_weighting", None)
+    hparams["energy_loss_decay_rate"] = getattr(args, "energy_loss_decay_rate", None)
     hparams["affinity_loss_weight"] = getattr(args, "affinity_loss_weight", None)
     hparams["docking_loss_weight"] = getattr(args, "docking_loss_weight", None)
 
@@ -1555,58 +1551,35 @@ def load_mol_model(
     )
     # n_aromatic_types = vocab_aromatic.size if vocab_aromatic is not None else None
 
-    if args.arch == "flowr":
-        from flowr.models.fm_mol import LigandCFM
+    from flowr.models.fm_mol import LigandCFM
 
-        gen = LigandGenerator(
-            hparams["d_equi"],
-            hparams["d_inv"],
-            hparams["d_message"],
-            hparams["n_layers"],
-            hparams["n_attn_heads"],
-            hparams["d_message_ff"],
-            hparams["d_edge"],
-            emb_size=hparams["emb_size"],
-            n_atom_types=n_atom_types,
-            n_charge_types=n_charge_types,
-            n_bond_types=n_bond_types,
-            n_extra_atom_feats=(
-                n_hybridization_types  # + n_aromatic_types
-                if hparams["add_feats"]
-                else None
-            ),
-            use_rbf=hparams["use_rbf"],
-            use_sphcs=hparams["use_sphcs"],
-            use_distances=hparams["use_distances"],
-            use_crossproducts=hparams["use_crossproducts"],
-            use_fourier_time_embed=hparams["use_fourier_time_embed"],
-            use_inpaint_mode_embed=hparams["use_inpaint_mode_embed"],
-            self_cond=hparams["self_cond"],
-            coord_skip_connect=hparams["coord_skip_connect"],
-            coord_update_every_n=hparams.get("coord_update_every_n", None),
-        )
-    elif args.arch == "transformer":
-        from flowr.models.fm_mol_transformer import LigandCFM
-        from flowr.models.transformer.components import TransformerModule
-
-        gen = TransformerModule(
-            spatial_dim=3,
-            n_atom_types=n_atom_types,
-            n_charge_types=n_charge_types,
-            n_hybridization_types=n_hybridization_types,
-            predict_charges=True,
-            num_heads=hparams["n_attn_heads"],
-            num_layers=hparams["n_layers"],
-            hidden_dim=hparams["d_model"],
-            activation="SiLU",
-            implementation="reimplemented",
-            cross_attention=True,
-            add_sinusoid_posenc=True,
-            concat_combine_input=False,
-            custom_weight_init=None,
-        )
-    else:
-        raise ValueError(f"Unknown architecture {args.arch}")
+    gen = LigandGenerator(
+        hparams["d_equi"],
+        hparams["d_inv"],
+        hparams["d_message"],
+        hparams["n_layers"],
+        hparams["n_attn_heads"],
+        hparams["d_message_ff"],
+        hparams["d_edge"],
+        emb_size=hparams["emb_size"],
+        n_atom_types=n_atom_types,
+        n_charge_types=n_charge_types,
+        n_bond_types=n_bond_types,
+        n_extra_atom_feats=(
+            n_hybridization_types  # + n_aromatic_types
+            if hparams["add_feats"]
+            else None
+        ),
+        use_rbf=hparams["use_rbf"],
+        use_sphcs=hparams["use_sphcs"],
+        use_distances=hparams["use_distances"],
+        use_crossproducts=hparams["use_crossproducts"],
+        use_fourier_time_embed=hparams["use_fourier_time_embed"],
+        use_inpaint_mode_embed=hparams["use_inpaint_mode_embed"],
+        self_cond=hparams["self_cond"],
+        coord_skip_connect=hparams["coord_skip_connect"],
+        coord_update_every_n=hparams.get("coord_update_every_n", None),
+    )
 
     # Check if the model has been LoRA finetuned
     if hparams.get("lora_finetuning", False):
@@ -1659,9 +1632,7 @@ def load_mol_model(
         _hparams["lora_alpha"] = args.lora_alpha
 
         # Load the pretrained weights
-        state_dict = torch.load(args.ckpt_path, map_location=get_map_location())[
-            "state_dict"
-        ]
+        state_dict = torch.load(args.ckpt_path)["state_dict"]
         state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
         egnn = copy.deepcopy(gen)
         egnn.load_state_dict(state_dict, strict=True)
@@ -1735,67 +1706,47 @@ def build_mol_model(
     )
     n_aromatic_types = vocab_aromatic.size if vocab_aromatic is not None else 0
 
-    if args.arch == "transformer":
-        from flowr.models.fm_mol_transformer import LigandCFM
-        from flowr.models.transformer.components import TransformerModule
+    from flowr.models.fm_mol import LigandCFM
 
-        gen = TransformerModule(
-            spatial_dim=3,
-            n_atom_types=n_atom_types,
-            n_charge_types=n_charge_types,
-            n_hybridization_types=n_hybridization_types,
-            predict_charges=True,
-            num_heads=args.n_attn_heads,
-            num_layers=args.n_layers,
-            hidden_dim=args.d_model,
-            activation="SiLU",
-            implementation="reimplemented",
-            cross_attention=True,
-            add_sinusoid_posenc=True,
-            concat_combine_input=False,
-            custom_weight_init=None,
-        )
-    else:
-        from flowr.models.fm_mol import LigandCFM
-
-        gen = LigandGenerator(
-            args.n_coord_sets,
-            args.d_model,
-            args.d_message,
-            args.n_layers,
-            args.n_attn_heads,
-            args.d_message_hidden,
-            args.d_edge,
-            emb_size=args.emb_size,
-            n_atom_types=n_atom_types,
-            n_charge_types=n_charge_types,
-            n_bond_types=n_bond_types,
-            n_extra_atom_feats=(
-                (n_hybridization_types + n_aromatic_types) if args.add_feats else None
-            ),
-            use_rbf=args.use_rbf,
-            use_sphcs=args.use_sphcs,
-            use_distances=args.use_distances,
-            use_crossproducts=args.use_crossproducts,
-            use_fourier_time_embed=args.use_fourier_time_embed,
-            graph_inpainting=args.graph_inpainting,
-            use_inpaint_mode_embed=args.scaffold_inpainting
-            or args.func_group_inpainting
-            or args.core_inpainting
-            or args.linker_inpainting
-            or args.fragment_inpainting
-            or args.substructure_inpainting,
-            self_cond=args.self_condition,
-            coord_skip_connect=not args.no_coord_skip_connect,
-            coord_update_every_n=getattr(args, "coord_update_every_n", None),
-        )
+    gen = LigandGenerator(
+        args.n_coord_sets,
+        args.d_model,
+        args.d_message,
+        args.n_layers,
+        args.n_attn_heads,
+        args.d_message_hidden,
+        args.d_edge,
+        emb_size=args.emb_size,
+        n_atom_types=n_atom_types,
+        n_charge_types=n_charge_types,
+        n_bond_types=n_bond_types,
+        n_extra_atom_feats=(
+            (n_hybridization_types + n_aromatic_types) if args.add_feats else None
+        ),
+        use_rbf=args.use_rbf,
+        use_sphcs=args.use_sphcs,
+        use_distances=args.use_distances,
+        use_crossproducts=args.use_crossproducts,
+        use_fourier_time_embed=args.use_fourier_time_embed,
+        graph_inpainting=args.graph_inpainting,
+        use_inpaint_mode_embed=args.scaffold_inpainting
+        or args.func_group_inpainting
+        or args.core_inpainting
+        or args.linker_inpainting
+        or args.fragment_inpainting
+        or args.fragment_growing
+        or args.substructure_inpainting,
+        self_cond=args.self_condition,
+        coord_skip_connect=not args.no_coord_skip_connect,
+        coord_update_every_n=getattr(args, "coord_update_every_n", None),
+    )
 
     type_mask_index = None
     bond_mask_index = None
 
     if args.categorical_strategy == "mask":
         type_mask_index = vocab.indices_from_tokens(["<MASK>"])[0]
-        bond_mask_index = util.BOND_MASK_INDEX
+        bond_mask_index = BOND_MASK_INDEX
         train_strategy = "mask"
         sampling_strategy = "mask"
 
@@ -1817,11 +1768,12 @@ def build_mol_model(
         )
 
     # Training steps
-    train_steps = util.calc_train_steps(dm, args.epochs, args.acc_batches) // args.gpus
+    train_steps = calc_train_steps(
+        dm, args.epochs, args.acc_batches, args.gpus, args.num_nodes
+    )
     print(f"Total training steps {train_steps}")
     if args.lr_schedule in ["cosine", "constant"]:
-        warm_up_steps = get_warm_up_steps(args, train_steps)
-        print(f"Warmup steps {warm_up_steps}")
+        warm_up_steps = get_warm_up_steps(train_steps)
     else:
         warm_up_steps = 0
 
@@ -1862,6 +1814,14 @@ def build_mol_model(
         charge_loss_weight=args.charge_loss_weight,
         hybridization_loss_weight=args.hybridization_loss_weight,
         distance_loss_weight_lig=args.distance_loss_weight_lig,
+        bond_angle_loss_weight=args.bond_angle_loss_weight,
+        bond_angle_huber_delta=args.bond_angle_huber_delta,
+        energy_loss_weight=args.energy_loss_weight,
+        energy_loss_weighting=args.energy_loss_weighting,
+        energy_loss_decay_rate=args.energy_loss_decay_rate,
+        bond_length_loss_weight=args.bond_length_loss_weight,
+        dihedral_loss_weight=args.dihedral_loss_weight,
+        dihedral_huber_delta=args.dihedral_huber_delta,
         pairwise_metrics=False,
         use_ema=args.use_ema,
         compile_model=False,
@@ -1869,6 +1829,7 @@ def build_mol_model(
         distill=False,
         lr_schedule=args.lr_schedule,
         lr_gamma=args.lr_gamma,
+        cosine_decay_fraction=getattr(args, "cosine_decay_fraction", 1.0),
         warm_up_steps=warm_up_steps,
         total_steps=train_steps,
         train_mols=train_mols,
@@ -1884,6 +1845,7 @@ def build_mol_model(
         linker_inpainting=args.linker_inpainting,
         core_inpainting=args.core_inpainting,
         fragment_inpainting=args.fragment_inpainting,
+        fragment_growing=args.fragment_growing,
         substructure_inpainting=args.substructure_inpainting,
         graph_inpainting=args.graph_inpainting is not None,
         mixed_uncond_inpaint=args.mixed_uncond_inpaint,
@@ -1952,20 +1914,25 @@ def build_data_statistic(args):
         assert args.data_paths is None, "Both data_path and data_paths provided."
         data_path = args.data_path
 
+    stat_path = (
+        os.path.join(data_path, "processed")
+        if getattr(args, "statistics_path", None) is None
+        else getattr(args, "statistics_path")
+    )
     train_statistics = Statistics.get_statistics(
-        os.path.join(data_path, "processed"),
+        stat_path,
         "train",
         dataset=args.dataset,
         remove_hs=args.remove_hs,
     )
     val_statistics = Statistics.get_statistics(
-        os.path.join(data_path, "processed"),
+        stat_path,
         "val",
         dataset=args.dataset,
         remove_hs=args.remove_hs,
     )
     test_statistics = Statistics.get_statistics(
-        os.path.join(data_path, "processed"),
+        stat_path,
         "test",
         dataset=args.dataset,
         remove_hs=args.remove_hs,
@@ -1990,6 +1957,7 @@ def build_dm(
     train_dataset: Optional[Callable] = None,
     val_dataset: Optional[Callable] = None,
     test_dataset: Optional[Callable] = None,
+    read_only: bool = True,
 ):
     """
     Build a data module for training, validation, and testing.
@@ -2093,8 +2061,8 @@ def build_dm(
         pocket_noise_std=args.pocket_coord_noise_std,
         use_interactions=args.flow_interactions
         or args.predict_interactions
-        or args.interaction_inpainting,
-        rotate_complex=args.arch == "transformer",
+        or args.interaction_conditional,
+        rotate_complex=False,
     )
     # Build datasets
     if args.dataset == "spindr" and args.use_smol:
@@ -2139,7 +2107,6 @@ def build_dm(
     else:
         if train_dataset is None and val_dataset is None and test_dataset is None:
             # Handle multiple data paths for concatenated datasets
-            # Handle multiple data paths for concatenated datasets
             if hasattr(args, "data_paths") and args.data_paths is not None:
                 print(
                     "Multiple data paths detected. Using concatenated datasets and weighted sampling."
@@ -2181,13 +2148,18 @@ def build_dm(
                         remove_hs=args.remove_hs,
                         remove_aromaticity=args.remove_aromaticity,
                         skip_non_valid=False,
+                        read_only=read_only,
                     )
                     datasets.append(dataset)
                     dataset_sizes.append(len(dataset))
                     all_lengths.extend(dataset.lengths)
 
                     # Load splits for this dataset
-                    splits_path = os.path.join(data_path, "splits.npz")
+                    splits_path = getattr(args, "splits_paths", None) or os.path.join(
+                        data_path, "splits.npz"
+                    )
+                    if isinstance(splits_path, list):
+                        splits_path = splits_path[i]
                     if not os.path.exists(splits_path):
                         raise ValueError(
                             f"Splits file {splits_path} not found. Please create it using create_data_statistics.py."
@@ -2233,11 +2205,14 @@ def build_dm(
                     remove_hs=args.remove_hs,
                     remove_aromaticity=args.remove_aromaticity,
                     skip_non_valid=False,
+                    read_only=read_only,
                 )
                 dataset_lengths = torch.tensor(dataset.lengths)
 
                 # Get dataset splits
-                splits_path = os.path.join(args.data_path, "splits.npz")
+                splits_path = getattr(args, "splits_path", None) or os.path.join(
+                    args.data_path, "splits.npz"
+                )
                 if os.path.exists(splits_path):
                     idx_train, idx_val, idx_test = make_splits(splits=splits_path)
                 else:
@@ -2355,7 +2330,7 @@ def build_dm(
         interaction_time_alpha=args.time_alpha,
         interaction_time_beta=args.time_beta,
         flow_interactions=args.flow_interactions,
-        interaction_inpainting=args.interaction_inpainting,
+        interaction_conditional=args.interaction_conditional,
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         substructure_inpainting=args.substructure_inpainting,
@@ -2363,6 +2338,7 @@ def build_dm(
         linker_inpainting=args.linker_inpainting,
         core_inpainting=args.core_inpainting,
         fragment_inpainting=args.fragment_inpainting,
+        fragment_growing=args.fragment_growing,
         max_fragment_cuts=args.max_fragment_cuts,
         graph_inpainting=args.graph_inpainting,
         mixed_uncond_inpaint=args.mixed_uncond_inpaint,
@@ -2371,7 +2347,7 @@ def build_dm(
             len(PROLIF_INTERACTIONS) + 1
             if args.flow_interactions
             or args.predict_interactions
-            or args.interaction_inpainting
+            or args.interaction_conditional
             else None
         ),
         dataset=args.dataset,
@@ -2405,16 +2381,17 @@ def build_dm(
             len(PROLIF_INTERACTIONS) + 1
             if args.flow_interactions
             or args.predict_interactions
-            or args.interaction_inpainting
+            or args.interaction_conditional
             else None
         ),
         flow_interactions=args.flow_interactions,
-        interaction_inpainting=args.interaction_inpainting,
+        interaction_conditional=args.interaction_conditional,
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         linker_inpainting=args.linker_inpainting,
         core_inpainting=args.core_inpainting,
         fragment_inpainting=args.fragment_inpainting,
+        fragment_growing=args.fragment_growing,
         max_fragment_cuts=args.max_fragment_cuts,
         substructure_inpainting=args.substructure_inpainting,
         substructure=args.substructure,
@@ -2423,20 +2400,22 @@ def build_dm(
         rotation_alignment=(
             args.linker_inpainting
             or args.fragment_inpainting
+            or args.fragment_growing
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
-            or args.interaction_inpainting
+            or args.interaction_conditional
             or args.core_inpainting
         )
         and args.rotation_alignment,
         permutation_alignment=(
             args.linker_inpainting
             or args.fragment_inpainting
+            or args.fragment_growing
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
-            or args.interaction_inpainting
+            or args.interaction_conditional
             or args.core_inpainting
         )
         and args.permutation_alignment,
@@ -2479,19 +2458,20 @@ def load_dm(
     atom_types_distribution=None,
     bond_types_distribution=None,
     train_mode: bool = False,
+    read_only: bool = True,
 ):
     """Load utility functions and interpolant for evaluation."""
 
     coord_std = hparams["coord_scale"]
 
-    n_bond_types = util.get_n_bond_types(args.categorical_strategy)
+    n_bond_types = get_n_bond_types(args.categorical_strategy)
     n_charge_types = vocab_charges.size
     n_hybridization_types = (
         vocab_hybridization.size if vocab_hybridization is not None else None
     )
     n_aromatic_types = vocab_aromatic.size if vocab_aromatic is not None else None
     transform = partial(
-        util.complex_transform,
+        complex_transform,
         vocab=vocab,
         vocab_charges=vocab_charges,
         vocab_hybridization=vocab_hybridization,
@@ -2502,7 +2482,7 @@ def load_dm(
         pocket_noise_std=args.pocket_coord_noise_std,
         use_interactions=args.flow_interactions
         or args.predict_interactions
-        or args.interaction_inpainting,
+        or args.interaction_conditional,
     )
     # Initialize conformer generator if graph inpainting is enabled and set to conformer
     conformer_generator = (
@@ -2539,7 +2519,7 @@ def load_dm(
     if args.categorical_strategy == "mask":
         assert hparams["val-ligand-type-interpolation"] == "unmask"
         type_mask_index = vocab.indices_from_tokens(["<MASK>"])[0]
-        bond_mask_index = util.BOND_MASK_INDEX
+        bond_mask_index = BOND_MASK_INDEX
         categorical_interpolation = "unmask"
     elif args.categorical_strategy == "uniform-sample":
         assert hparams["val-ligand-type-interpolation"] == "unmask"
@@ -2581,7 +2561,7 @@ def load_dm(
             interaction_fixed_time=args.interaction_fixed_time,
             interaction_time_alpha=args.time_alpha,
             interaction_time_beta=args.time_beta,
-            interaction_inpainting=args.interaction_inpainting,
+            interaction_conditional=args.interaction_conditional,
             scaffold_inpainting=args.scaffold_inpainting,
             func_group_inpainting=args.func_group_inpainting,
             substructure_inpainting=args.substructure_inpainting,
@@ -2589,6 +2569,7 @@ def load_dm(
             linker_inpainting=args.linker_inpainting,
             core_inpainting=args.core_inpainting,
             fragment_inpainting=args.fragment_inpainting,
+            fragment_growing=args.fragment_growing,
             max_fragment_cuts=args.max_fragment_cuts,
             graph_inpainting=args.graph_inpainting,
             mixed_uncond_inpaint=args.mixed_uncond_inpaint,
@@ -2597,7 +2578,7 @@ def load_dm(
                 len(PROLIF_INTERACTIONS)
                 if hparams["flow_interactions"]
                 or hparams["predict_interactions"]
-                or hparams["interaction_inpainting"]
+                or hparams["interaction_conditional"]
                 else None
             ),
             flow_interactions=hparams["flow_interactions"],
@@ -2624,16 +2605,17 @@ def load_dm(
             len(PROLIF_INTERACTIONS)
             if hparams["flow_interactions"]
             or hparams["predict_interactions"]
-            or hparams["interaction_inpainting"]
+            or hparams["interaction_conditional"]
             else None
         ),
         flow_interactions=hparams["flow_interactions"],
-        interaction_inpainting=args.interaction_inpainting,
+        interaction_conditional=args.interaction_conditional,
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         linker_inpainting=args.linker_inpainting,
         core_inpainting=args.core_inpainting,
         fragment_inpainting=args.fragment_inpainting,
+        fragment_growing=args.fragment_growing,
         max_fragment_cuts=args.max_fragment_cuts,
         substructure_inpainting=args.substructure_inpainting,
         substructure=args.substructure,
@@ -2647,6 +2629,7 @@ def load_dm(
         rotation_alignment=(
             args.linker_inpainting
             or args.fragment_inpainting
+            or args.fragment_growing
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
@@ -2656,6 +2639,7 @@ def load_dm(
         permutation_alignment=(
             args.linker_inpainting
             or args.fragment_inpainting
+            or args.fragment_growing
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
@@ -2665,24 +2649,116 @@ def load_dm(
         inference=True,
     )
 
-    # Get dataset
-    dataset = PocketComplexLMDBDataset(
-        root=args.data_path,
-        transform=transform,
-        remove_hs=hparams["remove_hs"],
-        remove_aromaticity=hparams["remove_aromaticity"],
-        skip_non_valid=False,
-    )
-    dataset_lengths = torch.tensor(dataset.lengths)
-
-    # Get dataset splits
-    splits_path = os.path.join(args.data_path, "splits.npz")
-    if os.path.exists(splits_path):
-        idx_train, idx_val, idx_test = make_splits(splits=splits_path)
-    else:
-        raise ValueError(
-            f"Splits file {splits_path} not found. Please create it using create_data_statistics.py."
+    if hasattr(args, "data_paths") and args.data_paths is not None:
+        print(
+            "Multiple data paths detected. Using concatenated datasets and weighted sampling."
         )
+        print(f"Dataset weights: {args.dataset_weights}")
+        print(f"Validation and test split taken from {args.data_paths[0]}")
+
+        assert (
+            args.data_path is None
+        ), "If data_paths is provided, data_path must be None."
+        assert (
+            hasattr(args, "dataset_weights") and args.dataset_weights is not None
+        ), "Dataset weights must be provided when using multiple data paths."
+        assert len(args.dataset_weights) == len(
+            args.data_paths
+        ), "Dataset weights must match data paths length."
+        assert (
+            abs(sum(args.dataset_weights) - 1.0) < 1e-6
+        ), "Dataset weight probabilities must sum to 1.0"
+
+        # Load individual datasets
+        datasets = []
+        dataset_sizes = []
+        all_lengths = []
+        dataset_offsets = [0]  # Track where each dataset starts in concatenated version
+
+        # Load splits for each dataset
+        all_train_indices = []
+        val_indices = []
+        test_indices = []
+
+        for i, data_path in enumerate(args.data_paths):
+            dataset = PocketComplexLMDBDataset(
+                root=data_path,
+                transform=transform,
+                remove_hs=hparams["remove_hs"],
+                remove_aromaticity=hparams["remove_aromaticity"],
+                skip_non_valid=False,
+                read_only=read_only,
+            )
+            datasets.append(dataset)
+            dataset_sizes.append(len(dataset))
+            all_lengths.extend(dataset.lengths)
+
+            # Load splits for this dataset
+            splits_path = getattr(args, "splits_paths", None) or os.path.join(
+                data_path, "splits.npz"
+            )
+            if isinstance(splits_path, list):
+                splits_path = splits_path[i]
+            if not os.path.exists(splits_path):
+                raise ValueError(
+                    f"Splits file {splits_path} not found. Please create it using create_data_statistics.py."
+                )
+
+            splits = np.load(splits_path)
+            dataset_train_idx = splits["idx_train"]
+            if i == 0:
+                val_indices = splits["idx_val"]
+                test_indices = splits["idx_test"]
+
+            # Adjust indices to work with concatenated dataset
+            offset = dataset_offsets[-1]
+            adjusted_train_idx = dataset_train_idx + offset
+            all_train_indices.extend(adjusted_train_idx)
+
+            # Update offset for next dataset
+            dataset_offsets.append(offset + len(dataset))
+
+        # Create concatenated dataset
+        dataset = ConcatDataset(datasets)
+        dataset_lengths = torch.tensor(all_lengths)
+
+        # Convert probabilities to per-sample weights
+        sample_weights = []
+        for prob, size in zip(args.dataset_weights, dataset_sizes):
+            weight_per_sample = prob / size  # This ensures the probability is achieved
+            sample_weights.extend([weight_per_sample] * size)
+
+        # Store weights for the datamodule
+        dataset.sample_weights = np.array(sample_weights)
+
+        # Convert indices to numpy arrays
+        idx_train = np.array(all_train_indices)
+        idx_val = np.array(val_indices)
+        idx_test = np.array(test_indices)
+    else:
+        # Get dataset
+        dataset = PocketComplexLMDBDataset(
+            root=args.data_path,
+            transform=transform,
+            remove_hs=hparams["remove_hs"],
+            remove_aromaticity=hparams["remove_aromaticity"],
+            skip_non_valid=False,
+            read_only=read_only,
+        )
+        dataset_lengths = torch.tensor(dataset.lengths)
+
+        # Get dataset splits
+        splits_path = getattr(args, "splits_path", None) or os.path.join(
+            args.data_path, "splits.npz"
+        )
+        if os.path.exists(splits_path):
+            idx_train, idx_val, idx_test = make_splits(splits=splits_path)
+        else:
+            raise ValueError(
+                f"Splits file {splits_path} not found. Please create it using create_data_statistics.py."
+            )
+
+    # Create dataset subsets
     print(f"train {len(idx_train)}, val {len(idx_val)}, test {len(idx_test)}")
     train_dataset = DatasetSubset(
         dataset, idx_train, lengths=dataset_lengths[idx_train].tolist()
@@ -2699,7 +2775,7 @@ def load_dm(
     )
     # Load training molecules
     train_mols, val_mols, test_mols = load_rdkit_mols(
-        args.data_path,
+        args.data_path if args.data_path is not None else args.data_paths,
         train_ids=idx_train,
         val_ids=idx_val,
         test_ids=idx_test,
@@ -2784,7 +2860,7 @@ def build_mol_dm(
 
     # Build transform function for individual molecules (takes care of zero-com, one-hot, opt. rotation/translation/scaling)
     transform = partial(
-        util.mol_transform,
+        mol_transform,
         vocab=vocab,
         vocab_charges=vocab_charges,
         vocab_hybridization=vocab_hybridization,
@@ -2792,7 +2868,7 @@ def build_mol_dm(
         n_bonds=n_bond_types,
         coord_std=coord_std,
         zero_com=True,
-        rotate=True,  # args.arch == "transformer",
+        rotate=True,
     )
 
     if args.dataset == "geom_drugs":
@@ -2846,11 +2922,13 @@ def build_mol_dm(
 
         # Get data splits
         if args.data_path is not None:
-            splits_path = os.path.join(args.data_path, "splits.npz")
+            splits_path = getattr(args, "splits_path", None) or os.path.join(
+                args.data_path, "splits.npz"
+            )
             idx_train, idx_val, idx_test = make_splits(splits=splits_path)
         else:
             print("Creating random splits.")
-            idx_train, idx_val, idx_test = util.make_splits(
+            idx_train, idx_val, idx_test = make_splits(
                 dataset_len=dataset_len,
                 train_size=dataset_len - 600,
                 val_size=500,
@@ -2886,7 +2964,7 @@ def build_mol_dm(
     bond_mask_index = None
     if args.categorical_strategy == "mask":
         type_mask_index = vocab.indices_from_tokens(["<MASK>"])[0]
-        bond_mask_index = util.BOND_MASK_INDEX
+        bond_mask_index = BOND_MASK_INDEX
         categorical_interpolation = "unmask"
         categorical_noise = "mask"
     elif args.categorical_strategy == "uniform-sample":
@@ -2949,6 +3027,7 @@ def build_mol_dm(
         substructure=args.substructure,
         linker_inpainting=args.linker_inpainting,
         fragment_inpainting=args.fragment_inpainting,
+        fragment_growing=args.fragment_growing,
         graph_inpainting=args.graph_inpainting,
         core_inpainting=args.core_inpainting,
         max_fragment_cuts=args.max_fragment_cuts,
@@ -2974,6 +3053,7 @@ def build_mol_dm(
         substructure=args.substructure,
         linker_inpainting=args.linker_inpainting,
         fragment_inpainting=args.fragment_inpainting,
+        fragment_growing=args.fragment_growing,
         graph_inpainting=args.graph_inpainting,
         core_inpainting=args.core_inpainting,
         max_fragment_cuts=args.max_fragment_cuts,
@@ -2985,6 +3065,7 @@ def build_mol_dm(
         permutation_alignment=(
             args.linker_inpainting
             or args.fragment_inpainting
+            or args.fragment_growing
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting

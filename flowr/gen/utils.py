@@ -35,7 +35,14 @@ from flowr.data.interpolate import (
     extract_scaffolds,
     extract_substructure,
 )
-from flowr.data.preprocess_pdbs import process_complex
+from flowr.data.preprocess_pdbs import canonicalize_atom_order, process_complex
+from flowr.eval.evaluate_xtb import (
+    get_molecule_charge,
+    parse_xtb_output,
+    parse_xtbtopo_mol,
+    run_xtb_optimization,
+    sdf_to_xyz,
+)
 from flowr.util.functional import (
     optimize_ligand_in_pocket,
 )
@@ -50,6 +57,126 @@ warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
 )
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+
+def parse_xyz_file(filepath: str) -> np.ndarray:
+    """
+    Parse an XYZ file and return coordinates as numpy array.
+
+    Supported formats:
+
+    1. Standard XYZ format:
+        Line 1: Number of atoms (optional, can be omitted)
+        Line 2: Comment line (optional, can be omitted)
+        Remaining lines: Element X Y Z (one per atom)
+
+    2. Simple coordinate format:
+        X Y Z (one coordinate per line)
+
+    3. Numpy array-like format (density format):
+        [[ 90.9007  -8.1947  15.3053]
+         [ 88.9039  -9.4746  16.0289]
+         ...]
+
+    Args:
+        filepath: Path to the XYZ file
+
+    Returns:
+        np.ndarray: Coordinates with shape (N, 3)
+    """
+    coords = []
+    with open(filepath, "r") as f:
+        content = f.read()
+
+    # Check if it's numpy array-like format (contains '[' and ']')
+    if "[" in content and "]" in content:
+        # Remove all brackets and split into numbers
+        import re
+
+        # Extract all floating point numbers (including negative)
+        numbers = re.findall(r"-?\d+\.?\d*", content)
+        numbers = [float(n) for n in numbers]
+
+        # Group into triplets (x, y, z)
+        if len(numbers) % 3 != 0:
+            raise ValueError(
+                f"Number of values ({len(numbers)}) is not divisible by 3 in: {filepath}"
+            )
+
+        for i in range(0, len(numbers), 3):
+            coords.append([numbers[i], numbers[i + 1], numbers[i + 2]])
+    else:
+        # Parse line by line (standard XYZ or simple coordinate format)
+        lines = content.split("\n")
+
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            parts = line.split()
+
+            # Try to parse as "Element X Y Z" format
+            if len(parts) >= 4:
+                try:
+                    x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
+                    coords.append([x, y, z])
+                    continue
+                except ValueError:
+                    pass
+
+            # Try to parse as "X Y Z" format (just coordinates)
+            if len(parts) >= 3:
+                try:
+                    x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
+                    coords.append([x, y, z])
+                    continue
+                except ValueError:
+                    pass
+
+            # Skip lines that are just a number (atom count) or don't match
+            try:
+                int(parts[0])
+                continue  # Skip atom count line
+            except ValueError:
+                continue  # Skip comment or unrecognized lines
+
+    if len(coords) == 0:
+        raise ValueError(f"No valid coordinates found in XYZ file: {filepath}")
+
+    return np.array(coords)
+
+
+def compute_center_of_mass(coords: np.ndarray) -> np.ndarray:
+    """
+    Compute the center of mass of coordinates.
+
+    For a single coordinate, returns that coordinate.
+    For multiple coordinates, returns the mean (unweighted COM).
+
+    Args:
+        coords: Coordinates with shape (N, 3)
+
+    Returns:
+        np.ndarray: Center of mass with shape (3,)
+    """
+    return coords.mean(axis=0)
+
+
+def load_prior_center(filepath: str) -> np.ndarray:
+    """
+    Load prior center from an XYZ file.
+
+    Args:
+        filepath: Path to the XYZ file
+
+    Returns:
+        np.ndarray: Center of mass coordinate with shape (3,)
+    """
+    coords = parse_xyz_file(filepath)
+    com = compute_center_of_mass(coords)
+    print(f"Loaded {len(coords)} coordinate(s) from {filepath}, COM: {com}")
+    return com
 
 
 class dotdict(dict):
@@ -74,12 +201,20 @@ def get_conditional_mode(args):
                     "core"
                     if args.core_inpainting
                     else (
-                        "fragment"
-                        if args.fragment_inpainting
+                        "fragment_growing"
+                        if getattr(args, "fragment_growing", False)
                         else (
-                            "substructure"
-                            if args.substructure_inpainting
-                            else "interaction" if args.interaction_inpainting else None
+                            "fragment"
+                            if args.fragment_inpainting
+                            else (
+                                "substructure"
+                                if args.substructure_inpainting
+                                else (
+                                    "interaction"
+                                    if args.interaction_conditional
+                                    else None
+                                )
+                            )
                         )
                     )
                 )
@@ -169,6 +304,10 @@ def check_substructure_match(
         # For interaction mode, we can't check from ref_mol alone
         print("Warning: Interaction mode validation not implemented")
         return True
+    elif inpainting_mode == "fragment_growing":
+        # For fragment growing, the entire input ligand IS the fragment to preserve
+        # All atoms should be fixed, so the mask is all True
+        expected_mask = torch.ones(ref_mol.GetNumAtoms(), dtype=torch.bool)
     else:
         raise ValueError(f"Unknown inpainting mode: {inpainting_mode}")
 
@@ -238,7 +377,7 @@ def load_util(
         coord_std=coord_std,
         pocket_noise=args.pocket_noise,
         pocket_noise_std=args.pocket_coord_noise_std,
-        use_interactions=args.interaction_inpainting,
+        use_interactions=args.interaction_conditional,
         rotate_complex=args.arch == "transformer",
     )
     # Initialize conformer generator if graph inpainting is enabled and set to conformer
@@ -298,6 +437,12 @@ def load_util(
             f"Interpolation '{args.categorical_strategy}' is not supported."
         )
 
+    # Load prior center if specified
+    prior_center = None
+    if getattr(args, "prior_center_file", None) is not None:
+        prior_center_np = load_prior_center(args.prior_center_file)
+        prior_center = torch.from_numpy(prior_center_np).float()
+
     eval_interpolant = ComplexInterpolant(
         prior_sampler,
         ligand_coord_interpolation=(
@@ -312,16 +457,19 @@ def load_util(
             len(PROLIF_INTERACTIONS)
             if hparams["flow_interactions"]
             or hparams["predict_interactions"]
-            or hparams["interaction_inpainting"]
+            or hparams["interaction_conditional"]
             else None
         ),
         flow_interactions=hparams["flow_interactions"],
-        interaction_inpainting=args.interaction_inpainting,
+        interaction_conditional=args.interaction_conditional,
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         linker_inpainting=args.linker_inpainting,
         core_inpainting=args.core_inpainting,
         fragment_inpainting=args.fragment_inpainting,
+        fragment_growing=getattr(args, "fragment_growing", False),
+        grow_size=getattr(args, "grow_size", None),
+        prior_center=prior_center,
         max_fragment_cuts=args.max_fragment_cuts,
         substructure_inpainting=args.substructure_inpainting,
         substructure=args.substructure,
@@ -335,6 +483,7 @@ def load_util(
         rotation_alignment=(
             args.linker_inpainting
             or args.fragment_inpainting
+            or args.fragment_growing
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
@@ -344,6 +493,7 @@ def load_util(
         permutation_alignment=(
             args.linker_inpainting
             or args.fragment_inpainting
+            or args.fragment_growing
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
@@ -352,6 +502,19 @@ def load_util(
         and args.permutation_alignment,
         inference=True,
     )
+
+    # Print fragment growing configuration once
+    if getattr(args, "fragment_growing", False) and getattr(args, "grow_size", None):
+        size_info = f"grow_size={args.grow_size}"
+        if args.sample_mol_sizes:
+            size_info += " (with ±10% size variation)"
+        prior_info = (
+            f", prior_center_file={args.prior_center_file}"
+            if prior_center is not None
+            else ""
+        )
+        print(f"Fragment growing mode: {size_info}{prior_info}")
+
     return transform, eval_interpolant
 
 
@@ -430,6 +593,7 @@ def load_util_mol(
         linker_inpainting=args.linker_inpainting,
         core_inpainting=args.core_inpainting,
         fragment_inpainting=args.fragment_inpainting,
+        fragment_growing=getattr(args, "fragment_growing", False),
         max_fragment_cuts=args.max_fragment_cuts,
         substructure_inpainting=args.substructure_inpainting,
         substructure=args.substructure,
@@ -443,6 +607,7 @@ def load_util_mol(
         rotation_alignment=(
             args.linker_inpainting
             or args.fragment_inpainting
+            or args.fragment_growing
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
@@ -452,6 +617,7 @@ def load_util_mol(
         permutation_alignment=(
             args.linker_inpainting
             or args.fragment_inpainting
+            or args.fragment_growing
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
@@ -489,17 +655,20 @@ def load_data_from_lmdb(
 
     # Split the data - if "all", all data will be used, no train/val/test split
     if args.dataset_split in ["train", "val", "test"]:
+        splits_path = (
+            os.path.join(args.data_path, "splits.npz")
+            if getattr(args, "splits_path", None) is None
+            else args.splits_path
+        )
         idx_train, idx_val, idx_test = util.make_splits(
-            splits=os.path.join(args.data_path, "splits.npz"),
+            splits=splits_path,
         )
         idx = (
             idx_train
             if args.dataset_split == "train"
             else idx_val if args.dataset_split == "val" else idx_test
         )
-        dataset = DatasetSubset(
-            dataset, idx, lengths=dataset_lengths[idx_test].tolist()
-        )
+        dataset = DatasetSubset(dataset, idx, lengths=dataset_lengths[idx].tolist())
     if sample:
         dataset = dataset.sample_n_molecules(sample_n_molecules, seed=args.seed)
     print(
@@ -1132,6 +1301,37 @@ def get_guidance_params(args) -> Dict[str, Any]:
     return guidance_params
 
 
+def optimize_molecule_xtb(mol, temp_dir):
+    """Process a single molecule: run xTB optimization, parse output, and return the optimized molecule."""
+
+    # Create paths within the temp directory
+    xyz_filename = os.path.join(temp_dir, "mol.xyz")
+    output_prefix = "mol"
+    xtb_topo_filename = os.path.join(temp_dir, f"{output_prefix}.xtbtopo.mol")
+
+    sdf_to_xyz(mol, xyz_filename)
+
+    # Get the formal charge of the molecule
+    charge = get_molecule_charge(mol)
+
+    try:
+        # Pass the charge to the xTB optimization
+        xtb_output = run_xtb_optimization(xyz_filename, output_prefix, charge, temp_dir)
+        total_energy_gain, total_rmsd = parse_xtb_output(xtb_output)
+
+        if not os.path.exists(xtb_topo_filename):
+            raise FileNotFoundError(
+                f"Expected xtbtopo.mol file not found: '{xtb_topo_filename}'"
+            )
+
+        optimized_mol = parse_xtbtopo_mol(xtb_topo_filename)
+        return optimized_mol, total_energy_gain, total_rmsd
+
+    except Exception as e:
+        print(f"Error processing molecule: {e}")
+        return None, None, None
+
+
 def optimize_molecule_rdkit(mol):
     """
     Optimize a molecule using RDKit MMFF force field.
@@ -1154,6 +1354,9 @@ def optimize_molecule_rdkit(mol):
     mol_copy = Chem.Mol(mol)
 
     try:
+        # Get initial conformer
+        conf = mol_copy.GetConformer()
+
         # Store initial positions for RMSD calculation
         initial_mol = Chem.Mol(mol_copy)
 

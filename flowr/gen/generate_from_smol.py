@@ -22,7 +22,6 @@ from flowr.gen.generate import generate_ligands_per_target
 from flowr.models.fm_pocket import LigandPocketCFM
 from flowr.models.integrator import Integrator
 from flowr.models.pocket import LigandGenerator, PocketEncoder
-from flowr.util.device import get_device, get_map_location
 from flowr.util.pocket import PROLIF_INTERACTIONS, PocketComplexBatch
 from flowr.util.rdkit import ConformerGenerator
 
@@ -60,12 +59,12 @@ def split_list(data, num_chunks):
 
 
 def load_model(args):
-    checkpoint = torch.load(args.ckpt_path, map_location=get_map_location())
+    checkpoint = torch.load(args.ckpt_path)
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
     hparams["integration-steps"] = args.integration_steps
     hparams["sampling_strategy"] = args.ode_sampling_strategy
-    hparams["interaction_inpainting"] = args.interaction_inpainting
+    hparams["interaction_conditional"] = args.interaction_conditional
     hparams["scaffold_inpainting"] = args.scaffold_inpainting
     hparams["func_group_inpainting"] = args.func_group_inpainting
     hparams["linker_inpainting"] = args.linker_inpainting
@@ -317,15 +316,16 @@ def load_util(
             len(PROLIF_INTERACTIONS)
             if hparams["flow_interactions"]
             or hparams["predict_interactions"]
-            or hparams["interaction_inpainting"]
+            or hparams["interaction_conditional"]
             else None
         ),
         flow_interactions=hparams["flow_interactions"],
-        interaction_inpainting=args.interaction_inpainting,
+        interaction_conditional=args.interaction_conditional,
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         linker_inpainting=args.linker_inpainting,
         fragment_inpainting=args.fragment_inpainting,
+        fragment_growing=getattr(args, "fragment_growing", False),
         max_fragment_cuts=args.max_fragment_cuts,
         substructure_inpainting=args.substructure_inpainting,
         substructure=args.substructure,
@@ -386,7 +386,7 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to(get_device())
+    model = model.to("cuda")
     model.eval()
     print("Model complete.")
 
@@ -566,12 +566,13 @@ def get_args():
     parser.add_argument("--pocket_time", type=float, default=None)
     parser.add_argument("--interaction_time", type=float, default=None)
     parser.add_argument("--resampling_steps", type=int, default=None)
-    parser.add_argument("--interaction_inpainting", action="store_true")
+    parser.add_argument("--interaction_conditional", action="store_true")
     parser.add_argument("--scaffold_inpainting", action="store_true")
     parser.add_argument("--func_group_inpainting", action="store_true")
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--core_inpainting", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
+    parser.add_argument("--fragment_growing", action="store_true")
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument(
         "--substructure",

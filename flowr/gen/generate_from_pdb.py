@@ -272,7 +272,7 @@ def evaluate(args):
         f"\n Run time={round(run_time, 2)}s for {len(out_dict['gen_ligs'])} molecules \n"
     )
 
-    # Protonate generated ligands:
+    # Protonate generated ligands and optimize in-pocket
     if args.optimize_gen_ligs:
         start_time = time.time()
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
@@ -325,6 +325,7 @@ def evaluate(args):
         print(
             f"Protonation and ligand optimization time: {round(time.time() - start_time, 2)}s"
         )
+    # Protonate generated ligands and optimize ligand hydrogens in-pocket
     elif args.optimize_gen_ligs_hs:
         start_time = time.time()
         print(
@@ -365,6 +366,7 @@ def evaluate(args):
         print(
             f"Protonation and ligand hydrogen optimization time: {round(time.time() - start_time, 2)}s"
         )
+    # Only protonate generated ligands
     else:
         if not hparams["remove_hs"]:
             all_gen_ligs_hs_optim = (
@@ -375,6 +377,7 @@ def evaluate(args):
             all_gen_ligs_hs_optim = [
                 Chem.AddHs(lig, addCoords=True) for lig in all_gen_ligs
             ]
+        out_dict["gen_ligs_hs"] = all_gen_ligs_hs_optim
 
     # Calculate strain energies
     if args.calculate_strain_energies and not (
@@ -393,16 +396,18 @@ def evaluate(args):
         print(f"Generated ligands strain energy: {gen_strain_energies}")
 
     # PoseBusters validity
-    if args.filter_pb_valid:
-        print("Filtering by PoseBusters validity...")
+    if args.filter_pb_valid or args.calculate_pb_valid:
+        print("Calculating PoseBusters validity...")
         pb_valid = evaluate_pb_validity(
             all_gen_ligs_hs_optim,
             pdb_file=args.pdb_file,
             return_list=True,
         )
-        all_gen_ligs_hs_optim = [
-            lig for lig, valid in zip(all_gen_ligs_hs_optim, pb_valid) if valid
-        ]
+        if args.filter_pb_valid:
+            print("Filtering out ligands that are not PoseBusters-valid...")
+            all_gen_ligs_hs_optim = [
+                lig for lig, valid in zip(all_gen_ligs_hs_optim, pb_valid) if valid
+            ]
         print(
             f"PB-validity (mean): {np.mean(pb_valid)}, PB-validity (std): {np.std(pb_valid)}"
         )
@@ -542,6 +547,7 @@ def get_args():
     parser.add_argument("--ckpt_path", type=str)
     parser.add_argument("--lora_finetuned", action="store_true")
     parser.add_argument("--data_path", type=str)
+    parser.add_argument("--splits_path", type=str, default=None)
     parser.add_argument("--dataset", type=str)
     parser.add_argument("--save_dir", type=str)
     parser.add_argument("--save_file", type=str)
@@ -562,6 +568,7 @@ def get_args():
     parser.add_argument("--filter_diversity", action="store_true")
     parser.add_argument("--diversity_threshold", type=float, default=0.9)
     parser.add_argument("--filter_pb_valid", action="store_true")
+    parser.add_argument("--calculate_pb_valid", action="store_true")
     parser.add_argument("--filter_cond_substructure", action="store_true")
     parser.add_argument("--calculate_strain_energies", action="store_true")
 
@@ -572,11 +579,24 @@ def get_args():
     parser.add_argument("--pocket_time", type=float, default=None)
     parser.add_argument("--interaction_time", type=float, default=None)
     parser.add_argument("--fixed_interactions", action="store_true")
-    parser.add_argument("--interaction_inpainting", action="store_true")
+    parser.add_argument("--interaction_conditional", action="store_true")
     parser.add_argument("--scaffold_inpainting", action="store_true")
     parser.add_argument("--func_group_inpainting", action="store_true")
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
+    parser.add_argument("--fragment_growing", action="store_true")
+    parser.add_argument(
+        "--grow_size", 
+        type=int, 
+        default=None,
+        help="Number of heavy atoms to add when growing a fragment. Use with --fragment_growing."
+    )
+    parser.add_argument(
+        "--prior_center_file",
+        type=str,
+        default=None,
+        help="XYZ file specifying the center for the random prior. The center of mass of all coordinates in the file will be used. Use with --fragment_growing."
+    )
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--core_inpainting", action="store_true")
     parser.add_argument("--substructure_inpainting", action="store_true")
@@ -593,6 +613,7 @@ def get_args():
         type=str,
         choices=["conformer", "random", "harmonic"],
     )
+    parser.add_argument("--final_inpaint", action="store_true")
 
     # ODE/SDE sampling options
     parser.add_argument("--separate_pocket_interpolation", action="store_true")
@@ -621,6 +642,22 @@ def get_args():
 
 
     args = parser.parse_args()
+    
+    # Validate grow_size with fragment_growing
+    if args.fragment_growing and args.grow_size is not None:
+        if args.grow_size < 1:
+            parser.error("--grow_size must be a positive integer")
+        print(f"Fragment growing mode: adding {args.grow_size} atoms to input fragment")
+    
+    # Validate prior_center_file
+    if args.prior_center_file is not None:
+        if not args.fragment_growing:
+            parser.error("--prior_center_file requires --fragment_growing")
+        import os
+        if not os.path.exists(args.prior_center_file):
+            parser.error(f"--prior_center_file '{args.prior_center_file}' does not exist")
+        print(f"Prior center will be loaded from: {args.prior_center_file}")
+    
     return args
 
 

@@ -83,12 +83,12 @@ You can also run this on your MacBook - install the respective environment and y
 
 ## Getting Started
 
-We provide all datasets in PDB and SDF format, as well as a fully trained FLOWR.root model checkpoint.
+We provide all datasets in PDB and SDF format, as well as a trained FLOWR.root model checkpoint.
 For training and generation, we provide basic bash and SLURM scripts in the `scripts/` directory. These scripts are intended to be modified and adjusted according to your computational resources and experimental needs.
 
 ### Data
 
-Download the datasets and the FLOWR.root checkpoint here:
+Download the datasets and the latest (02.06.2026: v2.1) FLOWR.root checkpoint here:
 [Google Drive](https://drive.google.com/drive/u/0/folders/1NWpzTY-BG_9C4zXZndWlKwdu7UJNCYj8).
 
 ### Generating Molecules from PDB/CIF
@@ -98,8 +98,8 @@ We recommend using (Schrödinger-)prepared complexes for best results with the p
 
 Note, if you want to run conditional generation, you need to provide a ligand file as reference.
 Crucially, there are two different modes, "global" and "local".
-Global: If you want to run scaffold hopping or elaboration (func_group_inpainting, scaffold_inpainting), interaction- (interaction_inpainting) or core-conditional (core_inpainting) generation, simply specifiy it via the respective flags.
-Local: If you want to replace a core, or a fragment of your reference ligand, specify the --substructure_inpainting flag and provide the atom indices with the --substructure flag.
+Global: If you want to run scaffold hopping or elaboration (scaffold_inpainting, func_group_inpainting), interaction- (interaction_conditional), core-conditional (core_growing) or general fragment-conditional (fragment_growing) generation, simply specifiy it via the respective flags (more below).
+Local: If you want to replace a core, or a fragment/any part of your reference ligand, specify the --substructure_inpainting flag and provide the atom indices with the --substructure flag that you want to change. This will trigger a local replacement via automated prior-shifting.
 
 Modify `scripts/generate_pdb.sl` according to your requirements, then submit the job via SLURM:
 
@@ -109,14 +109,18 @@ sbatch scripts/generate_pdb.sl
 
 **Conditional Generation Options:**
 
-- `--substructure_inpainting`: Enable substructure-constrained generation
+**⚠️ NOTE:** Inpainting modes slightly changed with latest push (02.06.2026); see below:
+
+- `--substructure_inpainting`: Enable substructure generation (e.g. fragment replacement)
 - `--substructure`: Atom indices that you want to change (!) (e.g., `21 23 30 31 32 33 34 35`)
-- `--scaffold_inpainting`: Scaffold-constrained generation (using RDKit to extract RDKit)
-- `--func_group_inpainting`: Functional group-constrained generation (using RDKit to extract all functional groups)
-- `--core_inpainting`: Core-constrained generation (using RDKit to extract all cores)
-- `--linker_inpainting`: Linker-constrained generation mode (using RDKit to extract all linkers)
-- `--interaction_inpainting`: Interaction-constrained generation mode
-- `--compute_interactions`: Needed for interaction_inpainting (using ProLIF to extract interactions)
+- `--fragment_growing`: Fragment-constrained generation (using provided fragment to grow from)
+- `--grow_size`: Number of atoms to grow additional to given fragment (only for fragment_growing mode)
+- `--prior_center_file`: Provide starting coordinate(s)/density as xyz file (can be std. xyz-file, only x y z, or numpy array-like 2d matrix; only for fragment_growing mode)
+- `--fragment_growing`: Fragment-constrained generation (using provided fragment to grow from)
+- `--scaffold_inpainting`: Scaffold generation (using RDKit to extract functional groups)
+- `--func_group_inpainting`: Functional group generation (using RDKit to extract scaffold)
+- `--interaction_conditional`: Interaction-constrained generation mode (using ProLIF to extract interactions)
+- `--compute_interactions`: Needed for interaction_conditional (using ProLIF to extract interactions)
 
 **Post-processing Options:**
 
@@ -127,6 +131,7 @@ sbatch scripts/generate_pdb.sl
 - `--optimize_gen_ligs_hs`: Optimize ligand hydrogens in-pocket (using RDKit)
 - `--filter_cond_substructure`: Filter to ensure inpainting constraint is satisfied
 - `--filter_pb_valid`: Filter by PoseBusters validity for generated molecules (using PoseBusters)
+- `--calculate_pb_valid`: Calculate PoseBusters validity for generated molecules (using PoseBusters)
 - `--calculate_strain_energies`: Calculate strain energies for generated molecules (using RDKit)
 - `--compute_interaction_recovery`: Calculate interaction recovery (using ProLIF)
 
@@ -154,12 +159,10 @@ Modify `scripts/generate_sdf.sl` according to your requirements:
 
 **Conditional Generation Options:**
 
-- `--substructure_inpainting`: Enable substructure-constrained generation
+- `--substructure_inpainting`: Enable substructure generation
 - `--substructure`: Atom indices that you want to change (!) (e.g., `21 23 30 31 32 33 34 35`)
-- `--scaffold_inpainting`: Scaffold-constrained generation (using RDKit to extract RDKit)
-- `--func_group_inpainting`: Functional group-constrained generation (using RDKit to extract all functional groups)
-- `--core_inpainting`: Core-constrained generation (using RDKit to extract all cores)
-- `--linker_inpainting`: Linker-constrained generation mode (using RDKit to extract all linkers)
+- `--scaffold_inpainting`: Scaffold generation (using RDKit to extract RDKit)
+- `--func_group_inpainting`: Functional group generation (using RDKit to extract all functional groups)
 
 **Post-processing Options:**
 
@@ -271,7 +274,7 @@ This final step computes essential data distribution statistics required for tra
 - Modify `--val_size` and `--test_size` as needed
 - Adjust `--seed` for reproducibility
 
-3. Output: Statistics saved alongside the final LMDB database
+1. Output: Statistics saved alongside the final LMDB database
 
 ---
 

@@ -1,7 +1,17 @@
+import math
+from typing import Optional
+
+import scipy.constants as const
 import torch
 import torch.nn.functional as F
 
 import flowr.util.functional as smolF
+
+# Physical constants for electrostatics
+ELEC_FACTOR = 1 / (4 * math.pi * const.epsilon_0)  # Coulomb's constant
+ELEC_FACTOR *= const.elementary_charge**2  # Convert elementary charges to Coulombs
+ELEC_FACTOR /= const.angstrom  # Convert Angstroms to meters
+ELEC_FACTOR *= const.Avogadro / (const.kilo * const.calorie)  # Convert J to kcal/mol
 
 
 def _get_pair_mask(mask):
@@ -31,6 +41,253 @@ def _get_cross_pair_mask(mask1, mask2):
     pair_mask = mask1.unsqueeze(2) * mask2.unsqueeze(1)  # [B, N, M]
     # no cleaning of diagonal since we assume mask1 and mask2 are different
     return pair_mask
+
+
+def _compute_bond_lengths(coords, bond_indices, mask):
+    """
+    Compute bond lengths from coordinates and bond indices.
+
+    Args:
+        coords: [B, N, 3] coordinates
+        bond_indices: [B, N_bonds, 2] indices of bonded atom pairs
+        mask: [B, N_bonds] mask for valid bonds
+
+    Returns:
+        distances: [B, N_bonds] bond lengths
+    """
+    # Gather coordinates of bonded atoms
+    idx1 = bond_indices[..., 0]  # [B, N_bonds]
+    idx2 = bond_indices[..., 1]  # [B, N_bonds]
+
+    # Get coordinates [B, N_bonds, 3]
+    coords1 = torch.gather(coords, 1, idx1.unsqueeze(-1).expand(-1, -1, 3))
+    coords2 = torch.gather(coords, 1, idx2.unsqueeze(-1).expand(-1, -1, 3))
+
+    # Compute distances
+    distances = torch.norm(coords2 - coords1, dim=-1)  # [B, N_bonds]
+
+    return distances
+
+
+def _compute_angles_from_coords(coords, angle_indices, mask, eps=1e-6):
+    """
+    Compute angles from coordinates and angle indices.
+
+    Args:
+        coords: [B, N, 3] coordinates
+        angle_indices: [B, N_angles, 3] indices of atoms forming angles (i, j, k where j is center)
+        mask: [B, N_angles] mask for valid angles
+
+    Returns:
+        angles: [B, N_angles] angles in radians
+    """
+    # Get atom indices
+    idx_i = angle_indices[..., 0]  # [B, N_angles]
+    idx_j = angle_indices[..., 1]  # [B, N_angles] (center atom)
+    idx_k = angle_indices[..., 2]  # [B, N_angles]
+
+    # Get coordinates [B, N_angles, 3]
+    coords_i = torch.gather(coords, 1, idx_i.unsqueeze(-1).expand(-1, -1, 3))
+    coords_j = torch.gather(coords, 1, idx_j.unsqueeze(-1).expand(-1, -1, 3))
+    coords_k = torch.gather(coords, 1, idx_k.unsqueeze(-1).expand(-1, -1, 3))
+
+    # Compute vectors from center
+    r_ji = coords_i - coords_j  # [B, N_angles, 3]
+    r_jk = coords_k - coords_j  # [B, N_angles, 3]
+
+    # Compute angles
+    dot_prod = torch.sum(r_ji * r_jk, dim=-1)
+    norm_ji = torch.norm(r_ji, dim=-1)
+    norm_jk = torch.norm(r_jk, dim=-1)
+
+    cos_angle = dot_prod / (norm_ji * norm_jk + 1e-8)
+    cos_angle = torch.clamp(cos_angle, -1.0 + eps, 1.0 - eps)
+    angles = torch.acos(cos_angle)
+
+    return angles
+
+
+def _compute_dihedrals_from_coords(coords, dihedral_indices, mask):
+    """
+    Compute dihedral angles from coordinates and dihedral indices.
+
+    Args:
+        coords: [B, N, 3] coordinates
+        dihedral_indices: [B, N_dihedrals, 4] indices of atoms forming dihedrals (i, j, k, l)
+        mask: [B, N_dihedrals] mask for valid dihedrals
+
+    Returns:
+        dihedrals: [B, N_dihedrals] dihedral angles in radians
+    """
+    # Get atom indices
+    idx_i = dihedral_indices[..., 0]
+    idx_j = dihedral_indices[..., 1]
+    idx_k = dihedral_indices[..., 2]
+    idx_l = dihedral_indices[..., 3]
+
+    # Get coordinates [B, N_dihedrals, 3]
+    coords_i = torch.gather(coords, 1, idx_i.unsqueeze(-1).expand(-1, -1, 3))
+    coords_j = torch.gather(coords, 1, idx_j.unsqueeze(-1).expand(-1, -1, 3))
+    coords_k = torch.gather(coords, 1, idx_k.unsqueeze(-1).expand(-1, -1, 3))
+    coords_l = torch.gather(coords, 1, idx_l.unsqueeze(-1).expand(-1, -1, 3))
+
+    # Compute vectors
+    r12 = coords_j - coords_i
+    r23 = coords_k - coords_j
+    r34 = coords_l - coords_k
+
+    # Calculate dihedral angles
+    cross_a = torch.cross(r12, r23, dim=-1)
+    cross_b = torch.cross(r23, r34, dim=-1)
+    cross_c = torch.cross(r23, cross_a, dim=-1)
+
+    norm_a = torch.norm(cross_a, dim=-1)
+    norm_b = torch.norm(cross_b, dim=-1)
+    norm_c = torch.norm(cross_c, dim=-1)
+
+    norm_cross_b = cross_b / (norm_b.unsqueeze(-1) + 1e-8)
+    cos_phi = torch.sum(cross_a * norm_cross_b, dim=-1) / (norm_a + 1e-8)
+    sin_phi = torch.sum(cross_c * norm_cross_b, dim=-1) / (norm_c + 1e-8)
+    phi = -torch.atan2(sin_phi, cos_phi)
+
+    return phi
+
+
+def evaluate_bond_energy(dist, bond_params):
+    """
+    Evaluate harmonic bond energy: E = k0 * (r - r0)^2
+
+    Args:
+        dist: [B, N_bonds] bond distances
+        bond_params: [B, N_bonds, 2] parameters (k0, d0)
+
+    Returns:
+        pot: [B, N_bonds] bond potential energy
+    """
+    k0 = bond_params[..., 0]
+    d0 = bond_params[..., 1]
+    x = dist - d0
+    pot = k0 * (x**2)
+    return pot
+
+
+def evaluate_angle_energy(angles, angle_params):
+    """
+    Evaluate harmonic angle energy: E = k0 * (theta - theta0)^2
+
+    Args:
+        angles: [B, N_angles] angles in radians
+        angle_params: [B, N_angles, 2] parameters (k0, theta0)
+
+    Returns:
+        pot: [B, N_angles] angle potential energy
+    """
+    k0 = angle_params[..., 0]
+    theta0 = angle_params[..., 1]
+    delta_theta = angles - theta0
+    pot = k0 * delta_theta * delta_theta
+    return pot
+
+
+def evaluate_torsion_energy(phi, torsion_params, torsion_type="amber"):
+    """
+    Evaluate torsion (dihedral) energy.
+    AMBER: E = k0 * (1 + cos(n*phi - phi0))
+    CHARMM: E = k0 * (phi - phi0)^2
+
+    Args:
+        phi: [B, N_dihedrals] dihedral angles in radians
+        torsion_params: [B, N_dihedrals, 3] parameters (k0, phi0, periodicity)
+        torsion_type: 'amber' or 'charmm'
+
+    Returns:
+        pot: [B, N_dihedrals] torsion potential energy
+    """
+    k0 = torsion_params[..., 0]
+    phi0 = torsion_params[..., 1]
+    per = torsion_params[..., 2]
+
+    if torsion_type == "amber":
+        angle_diff = per * phi - phi0
+        pot = k0 * (1 + torch.cos(angle_diff))
+    else:  # charmm
+        angle_diff = phi - phi0
+        # Wrap to [-pi, pi]
+        angle_diff = torch.where(
+            angle_diff < -math.pi, angle_diff + 2 * math.pi, angle_diff
+        )
+        angle_diff = torch.where(
+            angle_diff > math.pi, angle_diff - 2 * math.pi, angle_diff
+        )
+        pot = k0 * angle_diff**2
+
+    return pot
+
+
+def evaluate_lj_energy(dist, lj_params, switch_dist=None, cutoff=None):
+    """
+    Evaluate Lennard-Jones 12-6 energy: E = A/r^12 - B/r^6
+
+    Args:
+        dist: [B, N_pairs] pairwise distances
+        lj_params: [B, N_pairs, 2] parameters (A, B) for 12-6 LJ potential
+        switch_dist: switching distance for smoothing
+        cutoff: cutoff distance
+
+    Returns:
+        pot: [B, N_pairs] LJ potential energy
+    """
+    aa = lj_params[..., 0]
+    bb = lj_params[..., 1]
+
+    rinv1 = 1 / (dist + 1e-8)
+    rinv6 = rinv1**6
+    rinv12 = rinv6 * rinv6
+
+    pot = (aa * rinv12) - (bb * rinv6)
+
+    # Apply switching function if specified
+    if switch_dist is not None and cutoff is not None:
+        mask = dist > switch_dist
+        t = (dist[mask] - switch_dist) / (cutoff - switch_dist)
+        switch_val = 1 + t * t * t * (-10 + t * (15 - t * 6))
+        pot[mask] = pot[mask] * switch_val
+
+    return pot
+
+
+def evaluate_electrostatic_energy(
+    dist, charges, scale=1.0, cutoff=None, rfa=False, solvent_dielectric=78.5
+):
+    """
+    Evaluate electrostatic energy: E = ELEC_FACTOR * q_i * q_j / r
+
+    Args:
+        dist: [B, N_pairs] pairwise distances
+        charges: [B, N_pairs, 2] charges of atom pairs
+        scale: scaling factor (for 1-4 interactions)
+        cutoff: cutoff distance
+        rfa: use reaction field approximation
+        solvent_dielectric: solvent dielectric constant for RFA
+
+    Returns:
+        pot: [B, N_pairs] electrostatic potential energy
+    """
+    q_i = charges[..., 0]
+    q_j = charges[..., 1]
+
+    if rfa and cutoff is not None:
+        # Reaction field approximation
+        denom = (2 * solvent_dielectric) + 1
+        krf = (1 / cutoff**3) * (solvent_dielectric - 1) / denom
+        crf = (1 / cutoff) * (3 * solvent_dielectric) / denom
+        common = ELEC_FACTOR * q_i * q_j / scale
+        dist2 = dist**2
+        pot = common * ((1 / (dist + 1e-8)) + krf * dist2 - crf)
+    else:
+        pot = ELEC_FACTOR * q_i * q_j / ((dist + 1e-8) * scale)
+
+    return pot
 
 
 class TimeLossWeighting(torch.nn.Module):
@@ -81,6 +338,16 @@ class LossComputer:
         plddt_confidence_loss_weight: float | None = None,
         affinity_loss_weight: float = None,
         docking_loss_weight: float = None,
+        bond_angle_loss_weight: float | None = None,
+        bond_angle_huber_delta: float = 0.5,
+        bond_length_loss_weight: float | None = 1.0,
+        dihedral_loss_weight: float | None = None,
+        dihedral_huber_delta: float = 0.5,
+        lj_loss_weight: float | None = 1.0,
+        energy_loss_weight: float | None = None,
+        energy_loss_weighting: str = "exponential",  # "constant", "inverse", "inverse_squared", "exponential"
+        energy_loss_decay_rate: float = 0.5,  # decay rate for exponential weighting
+        use_velocity_loss: bool = False,  # If True, use velocity loss instead of data loss for coordinates
         use_t_loss_weights: bool = False,
         predict_interactions: bool = False,
         flow_interactions: bool = False,
@@ -104,6 +371,16 @@ class LossComputer:
         self.plddt_confidence_loss_weight = plddt_confidence_loss_weight
         self.affinity_loss_weight = affinity_loss_weight
         self.docking_loss_weight = docking_loss_weight
+        self.bond_angle_loss_weight = bond_angle_loss_weight
+        self.bond_angle_huber_delta = bond_angle_huber_delta
+        self.bond_length_loss_weight = bond_length_loss_weight
+        self.dihedral_loss_weight = dihedral_loss_weight
+        self.dihedral_huber_delta = dihedral_huber_delta
+        self.lj_loss_weight = lj_loss_weight
+        self.energy_loss_weight = energy_loss_weight
+        self.energy_loss_weighting = energy_loss_weighting
+        self.energy_loss_decay_rate = energy_loss_decay_rate
+        self.use_velocity_loss = use_velocity_loss
         self.predict_interactions = predict_interactions
         self.flow_interactions = flow_interactions
         self.type_strategy = type_strategy
@@ -120,12 +397,65 @@ class LossComputer:
             else None
         )
 
+    def _compute_velocity_from_data(
+        self,
+        x_pred: torch.Tensor,
+        z_t: torch.Tensor,
+        t: torch.Tensor,
+        eps: float = 1e-6,
+    ) -> torch.Tensor:
+        """
+        Convert data prediction to velocity prediction.
+
+        v_θ = (x_θ - z_t) / (1 - t)
+
+        Args:
+            x_pred: Predicted data (x_θ) with shape [B, N, 3]
+            z_t: Interpolated state at time t with shape [B, N, 3]
+            t: Time values with shape [B] or [B, 1] or [B, 1, 1]
+            eps: Small constant for numerical stability near t=1
+
+        Returns:
+            v_pred: Predicted velocity with shape [B, N, 3]
+        """
+        # Ensure t has the right shape for broadcasting [B, 1, 1]
+        if t.dim() == 1:
+            t = t.unsqueeze(-1).unsqueeze(-1)
+        elif t.dim() == 2:
+            t = t.unsqueeze(-1)
+
+        # Compute velocity: v = (x - z_t) / (1 - t)
+        v_pred = (x_pred - z_t) / (1 - t + eps)
+        return v_pred
+
+    def _compute_target_velocity(
+        self,
+        x_1: torch.Tensor,
+        x_0: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute target velocity for linear interpolation.
+
+        For linear interpolation z_t = (1-t) * x_0 + t * x_1, the velocity is:
+        v = dz_t/dt = x_1 - x_0
+
+        Args:
+            x_1: Target data (ground truth) with shape [B, N, 3]
+            x_0: Source/noise data with shape [B, N, 3]
+
+        Returns:
+            v_target: Target velocity with shape [B, N, 3]
+        """
+        return x_1 - x_0
+
     def compute_losses(
         self,
-        data,
-        interpolated,
-        predicted,
-        pocket_data=None,
+        data: dict,
+        interpolated: dict,
+        predicted: dict,
+        prior: Optional[dict] = None,
+        times: Optional[torch.Tensor] = None,
+        pocket_data: Optional[dict] = None,
         inpaint_mode: bool = False,
     ):
         """
@@ -149,21 +479,58 @@ class LossComputer:
 
         # Time-dependent Loss weights
         t_loss_weights_cont, t_loss_weights_disc = None, None
+        times_cont = None
         if self.t_loss_weights is not None:
-            times = predicted.get("times", None)
+            times_atom = predicted.get("times", None)
+            if times_atom is not None and len(times_atom) == 2:
+                times_cont = times_atom[0].squeeze(-1)[:, 0]
+                times_disc = times_atom[1].squeeze(-1)[:, 0]
+                if self.t_loss_weights is not None:
+                    t_loss_weights_cont = self.t_loss_weights(times_cont)
+                    t_loss_weights_disc = self.t_loss_weights(times_disc)
+            elif self.t_loss_weights is not None:
+                raise AssertionError(
+                    "Times must be provided for time-dependent losses for cont. and discr. types!"
+                )
+
+        # Coordinate losses - can be data loss or velocity loss
+        if self.use_velocity_loss:
             assert (
-                times is not None and len(times) == 2
-            ), "Times must be provided for time-dependent losses for cont. and discr. types!"
+                prior is not None
+            ), "Prior data required for velocity loss computation."
+            assert (
+                interpolated is not None
+            ), "Interpolated data required for velocity loss computation."
+            assert times is not None, "Times required for velocity loss computation."
 
-            times_cont = times[0].squeeze(-1)[:, 0]
-            times_disc = times[1].squeeze(-1)[:, 0]
-            t_loss_weights_cont = self.t_loss_weights(times_cont)
-            t_loss_weights_disc = self.t_loss_weights(times_disc)
+            # Get interpolated coordinates and source coordinates for velocity computation
+            z_t_coords = interpolated.get("coords", None)
+            x_0_coords = prior.get("coords", None)  # Source/noise coordinates
 
-        # Coordinate losses
-        coord_loss = self.compute_coordinate_loss(
-            coords, pred_coords, mask, t_loss_weights_cont
-        )
+            if z_t_coords is None:
+                raise ValueError(
+                    "Interpolated coordinates (z_t) required for velocity loss. "
+                    "Make sure 'coords' is in the interpolated dict."
+                )
+            if x_0_coords is None:
+                raise ValueError(
+                    "Source coordinates (x_0) required for velocity loss. "
+                    "Make sure 'coords' is in the prior dict."
+                )
+
+            coord_loss = self.compute_velocity_loss(
+                x_pred=pred_coords,
+                x_target=coords,
+                x_0=x_0_coords,
+                z_t=z_t_coords,
+                t=times[0],
+                mask=mask,
+                t_loss_weights=t_loss_weights_cont,
+            )
+        else:
+            coord_loss = self.compute_coordinate_loss(
+                coords, pred_coords, mask, t_loss_weights_cont
+            )
         # Other losses
         type_loss = self.compute_type_loss(data, predicted, mask, t_loss_weights_disc)
         charge_loss = self.compute_charge_loss(
@@ -215,6 +582,30 @@ class LossComputer:
         affinity_loss = self.compute_affinity_loss(data, predicted, t_loss_weights_cont)
         docking_loss = self.compute_docking_loss(data, predicted, t_loss_weights_cont)
 
+        # Angle losses
+        bond_angle_loss = self.compute_bond_angle_losses(
+            data,
+            predicted,
+            mask,
+            t_loss_weights=t_loss_weights_cont,
+        )
+
+        # Bond length losses
+        bond_length_loss = self.compute_bond_length_losses(
+            data,
+            predicted,
+            mask,
+            t_loss_weights=t_loss_weights_cont,
+        )
+
+        # Energy-based loss
+        energy_loss = self.compute_energy_loss(
+            data,
+            predicted,
+            mask,
+            t_loss_weights=t_loss_weights_cont,
+        )
+
         # Combine all losses
         losses = {
             "coord-loss": coord_loss,
@@ -230,6 +621,12 @@ class LossComputer:
             losses["bond-loss"] = bond_loss
         if hybridization_loss is not None:
             losses["hybridization-loss"] = hybridization_loss
+        if bond_angle_loss is not None:
+            losses["bond-angle-loss"] = bond_angle_loss
+        if bond_length_loss is not None:
+            losses["bond-length-loss"] = bond_length_loss
+        if energy_loss is not None:
+            losses["energy-loss"] = energy_loss
 
         if self.predict_interactions or self.flow_interactions:
             interaction_loss = self._interaction_loss(
@@ -261,6 +658,56 @@ class LossComputer:
 
         coord_loss = coord_loss.mean() * self.coord_loss_weight
         return coord_loss
+
+    def compute_velocity_loss(
+        self,
+        x_pred: torch.Tensor,
+        x_target: torch.Tensor,
+        x_0: torch.Tensor,
+        z_t: torch.Tensor,
+        t: torch.Tensor,
+        mask: torch.Tensor,
+        t_loss_weights=None,
+        eps: float = 1e-6,
+    ):
+        """
+        Compute velocity prediction loss (v-loss).
+
+        v_θ = (x_θ - z_t) / (1 - t)
+        v_target = x_1 - x_0
+        Loss = E[||v_θ - v_target||^2]
+
+        Args:
+            x_pred: Predicted data coordinates (x_θ) [B, N, 3]
+            x_target: Ground truth coordinates (x_1) [B, N, 3]
+            x_0: Source/noise coordinates [B, N, 3]
+            z_t: Interpolated coordinates at time t [B, N, 3]
+            t: Time values [B]
+            mask: Atom mask indicating valid atoms [B, N]
+            t_loss_weights: Optional time-dependent loss weights
+            eps: Small constant for numerical stability
+
+        Returns:
+            torch.Tensor: Computed velocity loss
+        """
+        # Compute predicted velocity from data prediction
+        v_pred = self._compute_velocity_from_data(x_pred, z_t, t, eps)
+
+        # Compute target velocity
+        v_target = self._compute_target_velocity(x_target, x_0)
+
+        # MSE loss on velocities
+        velocity_loss = F.mse_loss(v_pred, v_target, reduction="none")
+
+        # Apply mask and normalize
+        n_atoms = mask.unsqueeze(-1).sum(dim=(1, 2))
+        velocity_loss = (velocity_loss * mask.unsqueeze(-1)).sum(dim=(1, 2)) / n_atoms
+
+        if t_loss_weights is not None:
+            velocity_loss = velocity_loss * t_loss_weights
+
+        velocity_loss = velocity_loss.mean() * self.coord_loss_weight
+        return velocity_loss
 
     def compute_type_loss(self, data, predicted, mask, t_loss_weights=None, eps=1e-3):
         """Compute atom type prediction loss."""
@@ -421,7 +868,6 @@ class LossComputer:
                 )
             else:
                 # For ligand-pocket distance loss, we need both ligand and pocket coords
-
                 lig_pocket_dist_loss = self._compute_ligand_pocket_distance_loss(
                     pred_coords,
                     true_coords,
@@ -483,52 +929,562 @@ class LossComputer:
         pocket_coords,
         lig_mask,
         pocket_mask,
-        cutoff: float = 12.0,
+        cutoff: float = 10.0,
+        sigma: float = 5.0,
         t_loss_weights=None,
     ):
         """
-        Compute ligand-pocket distance loss (pocket is rigid/fixed)
-        Only compares predicted ligand vs true ligand distances to the same fixed pocket
+        Compute ligand-pocket distance loss (pocket is rigid/fixed).
+        Only compares predicted ligand vs true ligand distances to the same fixed pocket.
+
+        Uses distance-weighted loss to emphasize close contacts which are most
+        important for binding pose accuracy.
         """
-        batch_size = lig_mask.shape[0]
-        total_loss = 0.0
+        # Vectorized implementation
+        batch_size, max_lig_atoms, _ = pred_lig_coords.shape
+        _, max_pocket_atoms, _ = pocket_coords.shape
 
-        for b in range(batch_size):
-            # Extract valid ligand coordinates for this batch
-            lig_indices = lig_mask[b].bool()
-            pred_lig = pred_lig_coords[b][lig_indices]  # [n_lig, 3]
-            true_lig = true_lig_coords[b][lig_indices]  # [n_lig, 3]
+        # Compute cross-distances: [B, N_lig, N_pocket]
+        true_lig_pocket_dists = torch.cdist(true_lig_coords, pocket_coords, p=2)
+        pred_lig_pocket_dists = torch.cdist(pred_lig_coords, pocket_coords, p=2)
 
-            # Extract pocket coordinates
-            pocket = pocket_coords[b][pocket_mask[b].bool()]  # [n_pocket, 3]
+        # Create cross mask for valid ligand-pocket pairs
+        cross_mask = lig_mask.unsqueeze(2) * pocket_mask.unsqueeze(
+            1
+        )  # [B, N_lig, N_pocket]
 
-            # Compute distances from true and predicted ligand to fixed pocket
-            true_lig_pocket_dists = torch.cdist(
-                true_lig, pocket, p=2
-            )  # [n_lig, n_pocket]
-            pred_lig_pocket_dists = torch.cdist(
-                pred_lig, pocket, p=2
-            )  # [n_lig, n_pocket]
+        # Focus on nearby interactions (within cutoff)
+        nearby_mask = (true_lig_pocket_dists < cutoff) * cross_mask
 
-            # Focus on nearby interactions only
-            nearby_mask = true_lig_pocket_dists < cutoff
+        # Distance difference
+        dist_diff = torch.abs(pred_lig_pocket_dists - true_lig_pocket_dists)
 
-            if nearby_mask.sum() == 0:
-                continue
+        # Distance-weighted coefficient: weight closer contacts more heavily
+        # k(r) = exp(-r / sigma) where sigma controls decay rate
+        distance_weights = torch.exp(-true_lig_pocket_dists / sigma)
 
-            # Distance loss for nearby pairs only
-            dist_diff = (
-                torch.abs(pred_lig_pocket_dists - true_lig_pocket_dists)
-                * nearby_mask.float()
+        # Huber loss for robustness to outliers
+        huber_delta = 2.0
+        huber_loss = torch.where(
+            dist_diff < huber_delta,
+            0.5 * dist_diff**2,
+            huber_delta * (dist_diff - 0.5 * huber_delta),
+        )
+
+        # Apply weights and masks
+        weighted_loss = huber_loss * distance_weights * nearby_mask
+
+        # Normalize per sample
+        n_nearby = nearby_mask.sum(dim=(1, 2)) + 1e-8
+        per_sample_loss = weighted_loss.sum(dim=(1, 2)) / n_nearby
+
+        # Apply time-dependent weights if provided
+        if t_loss_weights is not None:
+            per_sample_loss = per_sample_loss * t_loss_weights
+
+        return per_sample_loss.mean()
+
+    def compute_bond_angle_losses(
+        self,
+        data,
+        predicted,
+        mask,
+        t_loss_weights=None,
+        eps: float = 1e-8,
+    ):
+        if self.bond_angle_loss_weight is None or self.bond_angle_loss_weight == 0.0:
+            return None
+        bonds = data.get("bonds", None)
+        if bonds is None:
+            return None
+
+        true_coords = data["coords"]
+        pred_coords = predicted["coords"]
+        weight = true_coords.new_tensor(float(self.bond_angle_loss_weight))
+
+        bond_types = torch.argmax(bonds, dim=-1)
+        adjacency = (bond_types > 0).float()
+        batch_size, num_atoms, _ = adjacency.shape
+        device = true_coords.device
+
+        eye = torch.eye(num_atoms, device=device, dtype=adjacency.dtype).unsqueeze(0)
+        adjacency = adjacency * (1 - eye)
+
+        # triplet_mask[b, j, i, k] = 1 if i-j-k forms a valid angle
+        # j is center, i and k are bonded to j
+        triplet_mask = adjacency.unsqueeze(3) * adjacency.unsqueeze(2)  # [B, N, N, N]
+
+        # Exclude cases where i == k
+        diff_mask = (
+            (1 - torch.eye(num_atoms, device=device, dtype=adjacency.dtype))
+            .unsqueeze(0)
+            .unsqueeze(1)
+        )  # [1, 1, N, N]
+        triplet_mask = triplet_mask * diff_mask
+
+        # Only keep upper triangle to avoid duplicate angles (i-j-k vs k-j-i)
+        upper_mask = (
+            torch.triu(
+                torch.ones(
+                    (num_atoms, num_atoms), device=device, dtype=adjacency.dtype
+                ),
+                diagonal=1,
+            )
+            .unsqueeze(0)
+            .unsqueeze(1)
+        )  # [1, 1, N, N]
+        triplet_mask = triplet_mask * upper_mask
+
+        # Apply atom mask: all three atoms (i, j, k) must be valid
+        atom_mask = mask.float()  # [B, N]
+        triplet_mask = (
+            triplet_mask
+            * atom_mask.unsqueeze(2).unsqueeze(3)  # j must be valid [B, N, 1, 1]
+            * atom_mask.unsqueeze(1).unsqueeze(3)  # i must be valid [B, 1, N, 1]
+            * atom_mask.unsqueeze(1).unsqueeze(2)  # k must be valid [B, 1, 1, N]
+        )
+
+        if triplet_mask.sum() == 0:
+            return weight.new_zeros(())
+
+        angles_true, valid_true = self._compute_triplet_geometry(true_coords, eps=eps)
+        angles_pred, valid_pred = self._compute_triplet_geometry(pred_coords, eps=eps)
+
+        # Combine all validity checks
+        valid_mask = (triplet_mask > 0) & valid_true & valid_pred
+
+        if valid_mask.sum() == 0:
+            return weight.new_zeros(())
+
+        # Only compute angle diff for valid entries
+        angle_diff = torch.abs(angles_pred - angles_true)
+        # Replace any remaining NaNs with 0 (shouldn't happen but safe)
+        angle_diff = torch.where(valid_mask, angle_diff, torch.zeros_like(angle_diff))
+
+        delta = self.bond_angle_huber_delta
+        huber_loss = torch.where(
+            angle_diff <= delta,
+            0.5 * angle_diff**2,
+            delta * (angle_diff - 0.5 * delta),
+        )
+        huber_loss = huber_loss * valid_mask.float()
+
+        valid_counts = valid_mask.float().sum(dim=(1, 2, 3))
+        loss_sum = huber_loss.sum(dim=(1, 2, 3))
+        per_sample_loss = torch.where(
+            valid_counts > 0,
+            loss_sum / (valid_counts + eps),
+            loss_sum.new_zeros(loss_sum.shape),
+        )
+
+        if t_loss_weights is not None:
+            per_sample_loss = per_sample_loss * t_loss_weights
+
+        loss = per_sample_loss.mean()
+        return loss * weight
+
+    def _compute_triplet_geometry(self, coords, eps: float = 1e-8):
+        """
+        Compute bond angles for all triplets (i, j, k) where j is the center atom.
+        Returns angles in radians and a validity mask.
+
+        Returns:
+            angles: [B, N(j), N(i), N(k)] angles in radians
+            valid_mask: [B, N(j), N(i), N(k)] boolean mask for valid angles
+        """
+        # coords: [B, N, 3]
+        batch_size, num_atoms, _ = coords.shape
+
+        # Compute all pairwise vectors: vec[b, j, i] = coords[b, i] - coords[b, j]
+        # This gives us vectors FROM atom j TO atom i
+        coords_i = coords.unsqueeze(2)  # [B, N, 1, 3]
+        coords_j = coords.unsqueeze(1)  # [B, 1, N, 3]
+        vecs = (
+            coords_i - coords_j
+        )  # [B, N, N, 3] where vecs[b, j, i] = coords[b,i] - coords[b,j]
+
+        # For angle i-j-k: need vec[j,i] and vec[j,k]
+        vec_ji = vecs.unsqueeze(3)  # [B, N(j), N(i), 1, 3]
+        vec_jk = vecs.unsqueeze(2)  # [B, N(j), 1, N(k), 3]
+
+        # Compute dot product
+        dot = (vec_ji * vec_jk).sum(dim=-1)  # [B, N(j), N(i), N(k)]
+
+        # Compute norms
+        norm_ji = torch.linalg.norm(vec_ji, dim=-1)  # [B, N(j), N(i), 1]
+        norm_jk = torch.linalg.norm(vec_jk, dim=-1)  # [B, N(j), 1, N(k)]
+
+        # Check validity: both vectors must have non-zero length
+        valid_mask = (norm_ji > eps) & (norm_jk > eps)
+
+        # Compute cosine of angle
+        denominator = norm_ji * norm_jk
+        # Avoid division by zero by using where
+        cos_angle = torch.where(
+            valid_mask, dot / torch.clamp(denominator, min=eps), torch.zeros_like(dot)
+        )
+
+        # Clamp to valid range for acos with extra margin for numerical safety
+        cos_angle = torch.clamp(cos_angle, -1.0 + 1e-6, 1.0 - 1e-6)
+
+        # Compute angles - set invalid ones to 0 (they'll be masked out anyway)
+        angles = torch.where(
+            valid_mask, torch.acos(cos_angle), torch.zeros_like(cos_angle)
+        )
+
+        return angles, valid_mask
+
+    def compute_bond_length_losses(
+        self,
+        data,
+        predicted,
+        mask,
+        t_loss_weights=None,
+        eps: float = 1e-8,
+    ):
+        """
+        Compute bond length losses - encourages predicted bonds to have similar lengths to reference.
+
+        Args:
+            data: Ground truth data containing bond adjacency information
+            predicted: Predicted coordinates
+            mask: Atom mask
+            t_loss_weights: Optional time-dependent loss weights
+            eps: Small constant for numerical stability
+
+        Returns:
+            torch.Tensor or None: Bond length loss
+        """
+        if self.bond_length_loss_weight is None or self.bond_length_loss_weight == 0.0:
+            return None
+
+        bonds = data.get("bonds", None)
+        if bonds is None:
+            return None
+
+        true_coords = data["coords"]
+        pred_coords = predicted["coords"]
+
+        # Get bond adjacency matrix: [B, N, N, num_bond_types]
+        bond_types = torch.argmax(bonds, dim=-1)  # [B, N, N]
+        adjacency = (bond_types > 0).float()  # [B, N, N] binary mask
+        batch_size, num_atoms, _ = adjacency.shape
+        device = true_coords.device
+
+        # Remove self-connections
+        eye = torch.eye(num_atoms, device=device, dtype=adjacency.dtype).unsqueeze(0)
+        adjacency = adjacency * (1 - eye)
+
+        # Only keep upper triangle to avoid counting each bond twice
+        upper_mask = torch.triu(
+            torch.ones((num_atoms, num_atoms), device=device, dtype=adjacency.dtype),
+            diagonal=1,
+        ).unsqueeze(
+            0
+        )  # [1, N, N]
+        adjacency = adjacency * upper_mask
+
+        # Apply atom mask: both atoms in bond must be valid
+        atom_mask = mask.float()  # [B, N]
+        bond_mask = atom_mask.unsqueeze(2) * atom_mask.unsqueeze(1)  # [B, N, N]
+        adjacency = adjacency * bond_mask
+
+        if adjacency.sum() == 0:
+            return torch.tensor(0.0, device=device)
+
+        # Compute pairwise distances
+        true_dists = torch.cdist(true_coords, true_coords, p=2)  # [B, N, N]
+        pred_dists = torch.cdist(pred_coords, pred_coords, p=2)  # [B, N, N]
+
+        # Simple MSE loss on bond lengths
+        bond_length_diff = (pred_dists - true_dists) ** 2
+        bond_loss = bond_length_diff * adjacency
+
+        valid_bonds = adjacency.sum(dim=(1, 2))
+        loss_sum = bond_loss.sum(dim=(1, 2))
+        per_sample_loss = torch.where(
+            valid_bonds > 0,
+            loss_sum / (valid_bonds + eps),
+            loss_sum.new_zeros(loss_sum.shape),
+        )
+
+        if t_loss_weights is not None:
+            per_sample_loss = per_sample_loss * t_loss_weights
+
+        loss = per_sample_loss.mean()
+        return loss * self.bond_length_loss_weight
+
+    def compute_dihedral_losses(
+        self,
+        data,
+        predicted,
+        mask,
+        t_loss_weights=None,
+        eps: float = 1e-8,
+    ):
+        """
+        Compute dihedral angle losses - encourages similar dihedral angles between predicted and reference.
+        Identifies proper dihedrals from bond connectivity and computes angular differences.
+
+        Args:
+            data: Ground truth data containing bond adjacency information
+            predicted: Predicted coordinates
+            mask: Atom mask
+            t_loss_weights: Optional time-dependent loss weights
+            eps: Small constant for numerical stability
+
+        Returns:
+            torch.Tensor or None: Dihedral loss
+        """
+        if self.dihedral_loss_weight is None or self.dihedral_loss_weight == 0.0:
+            return None
+
+        bonds = data.get("bonds", None)
+        if bonds is None:
+            return None
+
+        true_coords = data["coords"]
+        pred_coords = predicted["coords"]
+
+        # Get bond adjacency matrix
+        bond_types = torch.argmax(bonds, dim=-1)  # [B, N, N]
+        adjacency = (bond_types > 0).float()  # [B, N, N]
+        batch_size, num_atoms, _ = adjacency.shape
+        device = true_coords.device
+
+        # Remove self-connections
+        eye = torch.eye(num_atoms, device=device, dtype=adjacency.dtype).unsqueeze(0)
+        adjacency = adjacency * (1 - eye)
+
+        # Find proper dihedrals: i-j-k-l where there are bonds i-j, j-k, k-l
+        # This is a 4D tensor construction - simplified approach
+        # adjacency[b, i, j] = 1 if i-j bonded
+        # We want all i-j-k-l where i-j, j-k, k-l are bonded
+
+        # For computational efficiency, we'll identify dihedrals by finding
+        # paths of length 3 in the bond graph
+        adj_2 = torch.bmm(adjacency, adjacency)  # [B, N, N] paths of length 2
+        adj_3 = torch.bmm(adj_2, adjacency)  # [B, N, N] paths of length 3
+
+        # Exclude trivial paths (back and forth)
+        adj_3 = adj_3 * (1 - eye)
+        # Exclude 1-2 and 1-3 neighbors
+        adj_3 = adj_3 * (1 - adjacency) * (1 - adj_2)
+
+        # Create mask for valid 1-4 pairs (ends of proper dihedrals)
+        pair_14_mask = (adj_3 > 0).float()
+
+        # Apply atom mask
+        atom_mask = mask.float()  # [B, N]
+        pair_14_mask = pair_14_mask * atom_mask.unsqueeze(2) * atom_mask.unsqueeze(1)
+
+        if pair_14_mask.sum() == 0:
+            return torch.tensor(0.0, device=device)
+
+        # Compute all pairwise distances for 1-4 pairs
+        # This is a simplified approach: we penalize distance differences for 1-4 pairs
+        # which indirectly encourages similar dihedral angles
+        true_dists = torch.cdist(true_coords, true_coords, p=2)  # [B, N, N]
+        pred_dists = torch.cdist(pred_coords, pred_coords, p=2)  # [B, N, N]
+
+        # MSE on 1-4 distances (proxy for dihedral angles)
+        dist_diff = (pred_dists - true_dists) ** 2
+        dihedral_loss = dist_diff * pair_14_mask
+
+        valid_pairs = pair_14_mask.sum(dim=(1, 2))
+        loss_sum = dihedral_loss.sum(dim=(1, 2))
+        per_sample_loss = torch.where(
+            valid_pairs > 0,
+            loss_sum / (valid_pairs + eps),
+            loss_sum.new_zeros(loss_sum.shape),
+        )
+
+        if t_loss_weights is not None:
+            per_sample_loss = per_sample_loss * t_loss_weights
+
+        loss = per_sample_loss.mean()
+        return loss * self.dihedral_loss_weight
+
+    def compute_lj_losses(
+        self,
+        data,
+        predicted,
+        mask,
+        t_loss_weights=None,
+        cutoff: float = 5.0,
+        eps: float = 1e-8,
+    ):
+        """
+        Compute LJ-like non-bonded losses - encourages non-bonded atoms to maintain similar distances.
+        Focuses on preventing clashes (atoms getting too close) and maintaining favorable interactions.
+
+        Args:
+            data: Ground truth data
+            predicted: Predicted coordinates
+            mask: Atom mask
+            t_loss_weights: Optional time-dependent loss weights
+            cutoff: Cutoff distance for non-bonded interactions
+            eps: Small constant for numerical stability
+
+        Returns:
+            torch.Tensor or None: LJ loss
+        """
+        if self.lj_loss_weight is None or self.lj_loss_weight == 0.0:
+            return None
+
+        true_coords = data["coords"]
+        pred_coords = predicted["coords"]
+
+        # Get pairwise distances
+        pair_mask = _get_pair_mask(mask)
+        true_dists = _get_distance_matrix(true_coords, mask)
+        pred_dists = _get_distance_matrix(pred_coords, mask)
+
+        # Exclude bonded atoms (1-2 and 1-3 interactions)
+        bonds = data.get("bonds", None)
+        if bonds is not None:
+            bond_types = torch.argmax(bonds, dim=-1)
+            bonded_mask = (bond_types > 0).float()
+            # Also exclude 1-3 interactions (atoms bonded to same atom)
+            bonded_13 = torch.bmm(bonded_mask, bonded_mask)
+            exclusion_mask = 1.0 - torch.clamp(bonded_mask + bonded_13, 0, 1)
+            pair_mask = pair_mask * exclusion_mask
+
+        # Apply cutoff mask - focus on nearby non-bonded interactions
+        cutoff_mask = (true_dists < cutoff) * pair_mask
+
+        if cutoff_mask.sum() == 0:
+            return torch.tensor(0.0, device=mask.device)
+
+        # Simple distance preservation for non-bonded pairs
+        # This encourages maintaining similar packing and preventing clashes
+        dist_diff = (pred_dists - true_dists) ** 2
+        lj_loss = dist_diff * cutoff_mask
+
+        valid_counts = cutoff_mask.sum(dim=(1, 2))
+        loss_sum = lj_loss.sum(dim=(1, 2))
+        per_sample_loss = torch.where(
+            valid_counts > 0,
+            loss_sum / (valid_counts + eps),
+            loss_sum.new_zeros(loss_sum.shape),
+        )
+
+        if t_loss_weights is not None:
+            per_sample_loss = per_sample_loss * t_loss_weights
+
+        loss = per_sample_loss.mean() * self.lj_loss_weight
+        return loss
+
+    def compute_energy_loss(
+        self,
+        data,
+        predicted,
+        mask,
+        t_loss_weights=None,
+        eps: float = 1e-8,
+    ):
+        """
+        Compute energy-based loss function inspired by https://arxiv.org/pdf/2511.02087.
+
+        E(ŷ, y) = Σ_{i,j} 1/2 * k_{ij}(y) * (||y_i - y_j|| - ||ŷ_i - ŷ_j||)^2
+
+        where y is the ground truth coordinates and ŷ is the predicted coordinates.
+        The coefficients k_{ij}(y) can be:
+        - constant: k_{ij} = 1
+        - inverse: k_{ij} = 1 / ||y_i - y_j||
+        - inverse_squared: k_{ij} = 1 / ||y_i - y_j||^2
+        - exponential: k_{ij} = exp(-decay_rate * ||y_i - y_j||)
+
+        Args:
+            data: Ground truth data containing 'coords'
+            predicted: Predicted data containing 'coords'
+            mask: Atom mask indicating valid atoms [B, N]
+            t_loss_weights: Optional time-dependent loss weights
+            eps: Small constant for numerical stability
+
+        Returns:
+            torch.Tensor or None: Energy loss if weight is set, None otherwise
+        """
+        if self.energy_loss_weight is None or self.energy_loss_weight == 0.0:
+            return None
+
+        true_coords = data["coords"]  # [B, N, 3]
+        pred_coords = predicted["coords"]  # [B, N, 3]
+
+        # Compute pairwise distance matrices
+        true_dists = _get_distance_matrix(true_coords, mask)  # [B, N, N]
+        pred_dists = _get_distance_matrix(pred_coords, mask)  # [B, N, N]
+
+        # Get pair mask (excludes self-interactions and invalid atoms)
+        pair_mask = _get_pair_mask(mask)  # [B, N, N]
+
+        # Compute distance-dependent coefficients k_{ij}(y)
+        k_ij = self._compute_energy_coefficients(true_dists, pair_mask, eps)
+
+        # Compute the energy loss: k_{ij} * (||y_i - y_j|| - ||ŷ_i - ŷ_j||)^2
+        dist_diff_squared = (true_dists - pred_dists) ** 2  # [B, N, N]
+        energy_loss = 0.5 * k_ij * dist_diff_squared  # [B, N, N]
+
+        # Apply pair mask
+        energy_loss = energy_loss * pair_mask
+
+        # Normalize by number of valid pairs per sample
+        n_pairs = pair_mask.sum(dim=(1, 2))  # [B]
+        per_sample_loss = energy_loss.sum(dim=(1, 2)) / (n_pairs + eps)  # [B]
+
+        # Apply time-dependent weights if provided
+        if t_loss_weights is not None:
+            per_sample_loss = per_sample_loss * t_loss_weights
+
+        # Return weighted mean loss
+        return per_sample_loss.mean() * self.energy_loss_weight
+
+    def _compute_energy_coefficients(
+        self,
+        true_dists: torch.Tensor,
+        pair_mask: torch.Tensor,
+        eps: float = 1e-8,
+    ) -> torch.Tensor:
+        """
+        Compute the distance-dependent coefficients k_{ij}(y) for the energy loss.
+
+        Args:
+            true_dists: Ground truth pairwise distances [B, N, N]
+            pair_mask: Valid pair mask [B, N, N]
+            eps: Small constant for numerical stability
+
+        Returns:
+            torch.Tensor: Coefficients k_{ij} with shape [B, N, N]
+        """
+        if self.energy_loss_weighting == "constant":
+            # k_{ij} = 1
+            k_ij = torch.ones_like(true_dists)
+
+        elif self.energy_loss_weighting == "inverse":
+            # k_{ij} = 1 / ||y_i - y_j||
+            # Weight closer atoms more heavily
+            k_ij = 1.0 / (true_dists + eps)
+
+        elif self.energy_loss_weighting == "inverse_squared":
+            # k_{ij} = 1 / ||y_i - y_j||^2
+            # Weight closer atoms even more heavily
+            k_ij = 1.0 / (true_dists**2 + eps)
+
+        elif self.energy_loss_weighting == "exponential":
+            # k_{ij} = exp(-decay_rate * ||y_i - y_j||)
+            # Smooth exponential decay with distance
+            k_ij = torch.exp(-self.energy_loss_decay_rate * true_dists)
+
+        else:
+            raise ValueError(
+                f"Unknown energy_loss_weighting: {self.energy_loss_weighting}. "
+                f"Choose from: 'constant', 'inverse', 'inverse_squared', 'exponential'"
             )
 
-            n_nearby = nearby_mask.sum().float() + 1e-8
-            batch_loss = dist_diff.sum() / n_nearby
-            if t_loss_weights is not None:
-                batch_loss = batch_loss * t_loss_weights[b]
-            total_loss += batch_loss
+        # Zero out invalid pairs
+        k_ij = k_ij * pair_mask
 
-        return total_loss / batch_size
+        return k_ij
 
     def compute_smooth_lddt_losses(
         self,
@@ -1005,6 +1961,12 @@ class LossComputer:
             pocket_mask=pocket_mask,
             t_loss_weights=t_loss_weights,
         )
+        angle_loss = self.compute_angle_losses(
+            data,
+            predicted,
+            lig_mask,
+            t_loss_weights=t_loss_weights,
+        )
 
         # Affinity and docking score losses
         affinity_loss = self.compute_affinity_loss(
@@ -1024,6 +1986,9 @@ class LossComputer:
             **distance_losses,
             **smooth_distance_losses,
         }
+        # Add angle loss if it exists
+        if angle_loss is not None:
+            losses["angle-loss"] = angle_loss
 
         # Add affinity and docking losses if they exist
         if affinity_loss is not None:

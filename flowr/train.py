@@ -46,6 +46,14 @@ DEFAULT_DISTANCE_LOSS_WEIGHT_LIG = None
 DEFAULT_DISTANCE_LOSS_WEIGHT_LIG_POCKET = None
 DEFAULT_SMOOTH_DISTANCE_LOSS_WEIGHT_LIG = None
 DEFAULT_SMOOTH_DISTANCE_LOSS_WEIGHT_LIG_POCKET = None
+DEFAULT_BOND_ANGLE_LOSS_WEIGHT = None
+DEFAULT_BOND_ANGLE_HUBER_DELTA = 0.2
+DEFAULT_BOND_LENGTH_LOSS_WEIGHT = None
+DEFAULT_DIHEDRAL_LOSS_WEIGHT = None
+DEFAULT_DIHEDRAL_HUBER_DELTA = 0.2
+DEFAULT_ENERGY_LOSS_WEIGHT = None
+DEFAULT_ENERGY_LOSS_WEIGHTING = "exponential"
+DEFAULT_ENERGY_LOSS_DECAY_RATE = 1.0
 PLDDT_CONFIDENCE_LOSS_WEIGHT = None
 DEFAULT_CONFIDENCE_LOSS_WEIGHT = 0.0
 DEFAULT_CONFIDENCE_GEN_STEPS = 20
@@ -187,7 +195,9 @@ if __name__ == "__main__":
     parser.add_argument("--load_ckpt", type=str, default=None)
     parser.add_argument("--load_pretrained_ckpt", type=str, default=None)
     parser.add_argument("--lora_finetuning", action="store_true")
-    parser.add_argument("--save_dir", type=str, default=".")
+    parser.add_argument(
+        "--save_dir", type=str, default="/hpfs/userws/cremej01/projects/flowr_logs"
+    )
     parser.add_argument("--val_check_epochs", type=int, default=None)
     parser.add_argument("--val_check_interval", type=float, default=0.5)
     parser.add_argument("--wandb", action="store_true")
@@ -230,6 +240,7 @@ if __name__ == "__main__":
     ################################ DATALOADING ################################
     parser.add_argument("--data_path", type=str, default=None)
     parser.add_argument("--data_paths", type=str, nargs="+", default=None)
+    parser.add_argument("--statistics_path", type=str, default=None)
     parser.add_argument("--dataset_weights", type=float, nargs="+", default=None)
 
     parser.add_argument("--dataset", type=str)
@@ -295,6 +306,46 @@ if __name__ == "__main__":
         default=DEFAULT_DOCKING_LOSS_WEIGHT,
     )
     parser.add_argument(
+        "--bond_angle_loss_weight",
+        type=float,
+        default=DEFAULT_BOND_ANGLE_LOSS_WEIGHT,
+    )
+    parser.add_argument(
+        "--bond_angle_huber_delta",
+        type=float,
+        default=DEFAULT_BOND_ANGLE_HUBER_DELTA,
+    )
+    parser.add_argument(
+        "--bond_length_loss_weight",
+        type=float,
+        default=DEFAULT_BOND_LENGTH_LOSS_WEIGHT,
+    )
+    parser.add_argument(
+        "--dihedral_loss_weight",
+        type=float,
+        default=DEFAULT_DIHEDRAL_LOSS_WEIGHT,
+    )
+    parser.add_argument(
+        "--dihedral_huber_delta",
+        type=float,
+        default=DEFAULT_DIHEDRAL_HUBER_DELTA,
+    )
+    parser.add_argument(
+        "--energy_loss_weight",
+        type=float,
+        default=DEFAULT_ENERGY_LOSS_WEIGHT,
+    )
+    parser.add_argument(
+        "--energy_loss_weighting",
+        type=str,
+        default=DEFAULT_ENERGY_LOSS_WEIGHTING,
+    )
+    parser.add_argument(
+        "--energy_loss_decay_rate",
+        type=float,
+        default=DEFAULT_ENERGY_LOSS_DECAY_RATE,
+    )
+    parser.add_argument(
         "--plddt_confidence_loss_weight",
         type=float,
         default=PLDDT_CONFIDENCE_LOSS_WEIGHT,
@@ -323,6 +374,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_t_loss_weights", action="store_true")
     parser.add_argument("--lr_schedule", type=str, default=DEFAULT_LR_SCHEDULE)
     parser.add_argument("--lr_gamma", type=float, default=DEFAULT_LR_GAMMA)
+    parser.add_argument("--cosine_decay_fraction", type=float, default=1.0)
     parser.add_argument("--warm_up_steps", type=int, default=DEFAULT_WARM_UP_STEPS)
     parser.add_argument("--use_ema", action="store_true")
     parser.add_argument("--ema_decay", type=float, default=0.998)
@@ -341,7 +393,7 @@ if __name__ == "__main__":
     parser.add_argument("--predict_interactions", action="store_true")
     parser.add_argument("--predict_affinity", action="store_true")
     parser.add_argument("--predict_docking_score", action="store_true")
-    parser.add_argument("--interaction_inpainting", action="store_true")
+    parser.add_argument("--interaction_conditional", action="store_true")
     parser.add_argument("--scaffold_inpainting", action="store_true")
     parser.add_argument(
         "--graph_inpainting",
@@ -352,6 +404,7 @@ if __name__ == "__main__":
     parser.add_argument("--mixed_uncond_inpaint", action="store_true")
     parser.add_argument("--func_group_inpainting", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
+    parser.add_argument("--fragment_growing", action="store_true")
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument("--substructure", type=str, default=None)

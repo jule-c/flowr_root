@@ -2,7 +2,7 @@ import os
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import lightning.pytorch as pl
 import torch
@@ -20,7 +20,6 @@ from flowr.models.losses import LossComputer
 from flowr.models.mol_builder import MolBuilder
 from flowr.models.score_modifier import MaxGaussianModifier, MinGaussianModifier
 from flowr.models.semla import MolecularGenerator
-from flowr.util.device import get_device
 from flowr.util.tokeniser import Vocabulary
 
 _T = torch.Tensor
@@ -84,29 +83,48 @@ def apply_smc_guidance(
             val.to(selected_ids.device)
 
     prior = {
-        key: value[selected_ids] if len(value) > 0 else value
+        key: (
+            value[selected_ids]
+            if value is not None and len(value) > 0 and isinstance(value, torch.Tensor)
+            else value
+        )
         for key, value in prior.items()
     }
+    prior["fragment_mode"] = [prior["fragment_mode"][i] for i in selected_ids.tolist()]
     current = {
-        key: value[selected_ids] if len(value) > 0 else value
+        key: (
+            value[selected_ids]
+            if value is not None and len(value) > 0 and isinstance(value, torch.Tensor)
+            else value
+        )
         for key, value in current.items()
     }
     cond_batch = (
         {
-            key: value[selected_ids] if len(value) > 0 else value
+            key: (
+                value[selected_ids]
+                if value is not None
+                and len(value) > 0
+                and isinstance(value, torch.Tensor)
+                else value
+            )
             for key, value in cond_batch.items()
         }
         if cond_batch is not None
         else None
     )
     predicted = {
-        key: value[selected_ids] if len(value) > 0 else value
+        key: (
+            value[selected_ids]
+            if value is not None and len(value) > 0 and isinstance(value, torch.Tensor)
+            else value
+        )
         for key, value in predicted.items()
     }
     pocket_data = {
         key: (
             value[selected_ids]
-            if len(value) > 0 and isinstance(value, torch.Tensor)
+            if value is not None and len(value) > 0 and isinstance(value, torch.Tensor)
             else value
         )
         for key, value in pocket_data.items()
@@ -183,7 +201,7 @@ def apply_selective_smc_guidance(
     prior = {
         key: (
             value[selected_ids]
-            if len(value) > 0 and isinstance(value, torch.Tensor)
+            if value is not None and len(value) > 0 and isinstance(value, torch.Tensor)
             else value
         )
         for key, value in prior.items()
@@ -192,7 +210,7 @@ def apply_selective_smc_guidance(
     current = {
         key: (
             value[selected_ids]
-            if len(value) > 0 and isinstance(value, torch.Tensor)
+            if value is not None and len(value) > 0 and isinstance(value, torch.Tensor)
             else value
         )
         for key, value in current.items()
@@ -201,7 +219,9 @@ def apply_selective_smc_guidance(
         {
             key: (
                 value[selected_ids]
-                if len(value) > 0 and isinstance(value, torch.Tensor)
+                if value is not None
+                and len(value) > 0
+                and isinstance(value, torch.Tensor)
                 else value
             )
             for key, value in cond_batch.items()
@@ -212,7 +232,7 @@ def apply_selective_smc_guidance(
     predicted_target = {
         key: (
             value[selected_ids]
-            if len(value) > 0 and isinstance(value, torch.Tensor)
+            if value is not None and len(value) > 0 and isinstance(value, torch.Tensor)
             else value
         )
         for key, value in predicted_target.items()
@@ -220,7 +240,7 @@ def apply_selective_smc_guidance(
     pocket_data_target = {
         key: (
             value[selected_ids]
-            if len(value) > 0 and isinstance(value, torch.Tensor)
+            if value is not None and len(value) > 0 and isinstance(value, torch.Tensor)
             else value
         )
         for key, value in pocket_data_target.items()
@@ -299,6 +319,14 @@ class LigandPocketCFM(pl.LightningModule):
         smooth_distance_loss_weight_lig_pocket: OptFloat = None,
         affinity_loss_weight: float = None,
         docking_loss_weight: float = None,
+        bond_angle_loss_weight: float | None = None,
+        bond_angle_huber_delta: float = 0.2,
+        dihedral_loss_weight: float | None = None,
+        dihedral_huber_delta: float = 0.2,
+        energy_loss_weight: float | None = None,
+        energy_loss_weighting: str = "exponential",
+        energy_loss_decay_rate: float = 1.0,
+        bond_length_loss_weight: float | None = None,
         pocket_noise: str = "random",
         use_ema: bool = True,
         self_condition: bool = False,
@@ -306,6 +334,7 @@ class LigandPocketCFM(pl.LightningModule):
         remove_aromaticity: bool = False,
         lr_schedule: str = "constant",
         lr_gamma: float = 0.998,
+        cosine_decay_fraction: float = 1.0,
         sampling_strategy: str = "linear",
         warm_up_steps: Optional[int] = None,
         total_steps: Optional[int] = None,
@@ -314,10 +343,11 @@ class LigandPocketCFM(pl.LightningModule):
         bond_mask_index: Optional[int] = None,
         flow_interactions: bool = False,
         predict_interactions: bool = False,
-        interaction_inpainting: bool = False,
+        interaction_conditional: bool = False,
         func_group_inpainting: bool = False,
         scaffold_inpainting: bool = False,
         fragment_inpainting: bool = False,
+        fragment_growing: bool = False,
         core_inpainting: bool = False,
         linker_inpainting: bool = False,
         substructure_inpainting: bool = False,
@@ -396,9 +426,18 @@ class LigandPocketCFM(pl.LightningModule):
         )
         self.affinity_loss_weight = affinity_loss_weight
         self.docking_loss_weight = docking_loss_weight
+        self.bond_angle_loss_weight = bond_angle_loss_weight
+        self.bond_angle_huber_delta = bond_angle_huber_delta
+        self.bond_length_loss_weight = bond_length_loss_weight
+        self.dihedral_loss_weight = dihedral_loss_weight
+        self.dihedral_huber_delta = dihedral_huber_delta
+        self.energy_loss_weight = energy_loss_weight
+        self.energy_loss_weighting = energy_loss_weighting
+        self.energy_loss_decay_rate = energy_loss_decay_rate
         self.self_condition = self_condition
         self.lr_schedule = lr_schedule
         self.lr_gamma = lr_gamma
+        self.cosine_decay_fraction = cosine_decay_fraction
         self.sampling_strategy = sampling_strategy
         self.warm_up_steps = warm_up_steps
         self.total_steps = total_steps
@@ -407,11 +446,12 @@ class LigandPocketCFM(pl.LightningModule):
         self.pocket_noise = pocket_noise
         self.flow_interactions = flow_interactions
         self.predict_interactions = predict_interactions
-        self.interaction_inpainting = interaction_inpainting
+        self.interaction_conditional = interaction_conditional
         self.func_group_inpainting = func_group_inpainting
         self.scaffold_inpainting = scaffold_inpainting
         self.graph_inpainting = graph_inpainting
         self.fragment_inpainting = fragment_inpainting
+        self.fragment_growing = fragment_growing
         self.core_inpainting = core_inpainting
         self.linker_inpainting = linker_inpainting
         self.substructure_inpainting = substructure_inpainting
@@ -427,12 +467,13 @@ class LigandPocketCFM(pl.LightningModule):
         self.confidence_every_n = confidence_every_n
 
         if (
-            self.interaction_inpainting
+            self.interaction_conditional
             or self.func_group_inpainting
             or self.scaffold_inpainting
             or self.linker_inpainting
             or self.substructure_inpainting
             or self.fragment_inpainting
+            or self.fragment_growing
             or self.core_inpainting
         ):
             self.inpainting_mode = True
@@ -463,23 +504,33 @@ class LigandPocketCFM(pl.LightningModule):
             "use_t_loss_weights": use_t_loss_weights,
             "affinity_loss_weight": affinity_loss_weight,
             "docking_loss_weight": docking_loss_weight,
+            "bond_angle_loss_weight": bond_angle_loss_weight,
+            "bond_angle_huber_delta": bond_angle_huber_delta,
+            "dihedral_loss_weight": dihedral_loss_weight,
+            "dihedral_huber_delta": dihedral_huber_delta,
+            "bond_length_loss_weight": bond_length_loss_weight,
+            "energy_loss_weight": energy_loss_weight,
+            "energy_loss_weighting": energy_loss_weighting,
+            "energy_loss_decay_rate": energy_loss_decay_rate,
             "type_strategy": type_strategy,
             "bond_strategy": bond_strategy,
             "self_condition": self_condition,
             "pocket_noise": pocket_noise,
             "flow_interactions": flow_interactions,
             "predict_interactions": predict_interactions,
-            "interaction_inpainting": interaction_inpainting,
+            "interaction_conditional": interaction_conditional,
             "func_group_inpainting": func_group_inpainting,
             "scaffold_inpainting": scaffold_inpainting,
             "linker_inpainting": linker_inpainting,
             "substructure_inpainting": substructure_inpainting,
             "fragment_inpainting": fragment_inpainting,
+            "fragment_growing": fragment_growing,
             "core_inpainting": core_inpainting,
             "corrector_iters": corrector_iters,
             "remove_hs": remove_hs,
             "remove_aromaticity": remove_aromaticity,
             "lr_schedule": lr_schedule,
+            "cosine_decay_fraction": cosine_decay_fraction,
             "sampling_strategy": sampling_strategy,
             "use_ema": use_ema,
             "warm_up_steps": warm_up_steps,
@@ -506,6 +557,14 @@ class LigandPocketCFM(pl.LightningModule):
             plddt_confidence_loss_weight=plddt_confidence_loss_weight,
             affinity_loss_weight=affinity_loss_weight,
             docking_loss_weight=docking_loss_weight,
+            bond_angle_loss_weight=bond_angle_loss_weight,
+            bond_angle_huber_delta=bond_angle_huber_delta,
+            bond_length_loss_weight=bond_length_loss_weight,
+            energy_loss_weight=energy_loss_weight,
+            energy_loss_weighting=energy_loss_weighting,
+            energy_loss_decay_rate=energy_loss_decay_rate,
+            dihedral_loss_weight=dihedral_loss_weight,
+            dihedral_huber_delta=dihedral_huber_delta,
             type_strategy=type_strategy,
             bond_strategy=bond_strategy,
             use_t_loss_weights=use_t_loss_weights,
@@ -572,7 +631,7 @@ class LigandPocketCFM(pl.LightningModule):
             )
 
         self.posebusters_validity = MetricCollection(
-            {"pb_validity": Metrics.PoseBustersValidity()}
+            {"pb-validity": Metrics.PoseBustersValidity()}
         )
 
         # if self.train_mols is not None:
@@ -794,17 +853,17 @@ class LigandPocketCFM(pl.LightningModule):
         times = self._get_times(t, lig_mask=mask, inpaint_mask=inpaint_mask)
 
         # Encode inpainting mode
-        inpaint_mode = (
-            torch.stack(
-                [
-                    torch.tensor(inpaint_mode_encoder[mode]).to(get_device())
-                    for mode in batch["fragment_mode"]
-                ],
-                dim=0,
-            )
-            if self.inpainting_mode
-            else None
-        )
+        # inpaint_mode = (
+        #     torch.stack(
+        #         [
+        #             torch.tensor(inpaint_mode_encoder[mode]).to("cuda")
+        #             for mode in batch["fragment_mode"]
+        #         ],
+        #         dim=0,
+        #     )
+        #     if self.inpainting_mode
+        #     else None
+        # )
 
         if cond_batch is not None:
             out = self.gen(
@@ -832,7 +891,7 @@ class LigandPocketCFM(pl.LightningModule):
                     else None
                 ),
                 inpaint_mask=inpaint_mask,
-                inpaint_mode=inpaint_mode,
+                inpaint_mode=None,
             )
         else:
             out = self.gen(
@@ -857,7 +916,7 @@ class LigandPocketCFM(pl.LightningModule):
                     else None
                 ),
                 inpaint_mask=inpaint_mask,
-                inpaint_mode=inpaint_mode,
+                inpaint_mode=None,
             )
         out["times"] = times
         out["fragment_mode"] = batch.get("fragment_mode", None)
@@ -957,7 +1016,14 @@ class LigandPocketCFM(pl.LightningModule):
         #     save_dir="/hpfs/userws/cremej01/projects/tmp",
         # )
 
-        losses = self._loss(lig_data, lig_interp, predicted, pocket_data=pocket_data)
+        losses = self._loss(
+            lig_data,
+            lig_interp,
+            predicted,
+            prior=prior,
+            times=times,
+            pocket_data=pocket_data,
+        )
         loss = sum(list(losses.values()))
 
         for name, loss_val in losses.items():
@@ -1119,23 +1185,27 @@ class LigandPocketCFM(pl.LightningModule):
             corr_iters=self.corrector_iters,
             save_traj=False,
             iter=batch_idx,
+            final_corr_pred=True,
+            final_inpaint=False,
         )
         gen_ligs = self._generate_mols(output)
 
-        # retrieve ground truth/native ligands and pdbs
+        # Retrieve ground truth/native ligands and pdbs
         ref_ligs_with_hs = self.retrieve_ligs_with_hs(data)
         ref_pdbs_with_hs = self.retrieve_pdbs_with_hs(
             data, save_dir=Path(self.hparams.save_dir) / "ref_pdbs"
         )
 
-        # group ligands by pdb in a list of lists as we are potentially sampling N ligands per target;
-        # de-duplicate native ligands and pdbs as they are loaded N times
+        # Group ligands by PDB in a list of lists as we are potentially sampling N ligands per target;
+        ## De-duplicate native ligands and PDBs as they are loaded N times
         ligs_by_pdb = defaultdict(create_list_defaultdict)
         ligs_by_pdb_with_hs = defaultdict(create_list_defaultdict)
         for gen_lig, ref_lig_with_hs, pdb_with_hs in zip(
             gen_ligs, ref_ligs_with_hs, ref_pdbs_with_hs
         ):
             ligs_by_pdb_with_hs[pdb_with_hs]["ref"] = ref_lig_with_hs
+            ligs_by_pdb[pdb_with_hs]["gen"].append(gen_lig)
+
         gen_ligs_by_pdb = [v["gen"] for _, v in ligs_by_pdb.items()]
         ref_ligs_with_hs = [v["ref"] for v in ligs_by_pdb_with_hs.values()]
         ref_pdbs_with_hs = [pdb for pdb in ligs_by_pdb_with_hs]
@@ -1147,13 +1217,15 @@ class LigandPocketCFM(pl.LightningModule):
         }
         return outputs
 
-    def _loss(self, data, interpolated, predicted, pocket_data, times=None):
+    def _loss(self, data, interpolated, predicted, prior, pocket_data, times=None):
         """Compute all losses using the dedicated loss computer."""
         return self.loss_computer.compute_losses(
             data,
             interpolated,
             predicted,
-            pocket_data,
+            prior=prior,
+            times=times,
+            pocket_data=pocket_data,
             inpaint_mode=self.inpainting_mode,
         )
 
@@ -1165,19 +1237,30 @@ class LigandPocketCFM(pl.LightningModule):
         iter: int = 0,
         step: int = 0,
     ):
+        curr_shift = curr.copy()
+        curr_shift = {
+            k: v.cpu().detach() if torch.is_tensor(v) else v
+            for k, v in curr_shift.items()
+        }
+        curr_shift["coords"] = curr_shift["coords"] * self.coord_scale
+        curr_shift["coords"] = self.builder.undo_zero_com_batch(
+            curr_shift["coords"],
+            curr_shift["mask"],
+            com_list=[system.com for system in pocket_data["complex"]],
+        )
         self.builder.write_xyz_file_from_batch(
-            data=predicted,
+            data=curr_shift,
             coord_scale=self.coord_scale,
             path=os.path.join(self.hparams.save_dir, f"traj_pred_mols_{iter}"),
             t=step,
         )
-        predicted["res_names"] = torch.zeros(
-            predicted["atomics"].size(0),
-            predicted["atomics"].size(1),
+        curr["res_names"] = torch.zeros(
+            curr["atomics"].size(0),
+            curr["atomics"].size(1),
             device=self.device,
         ).long()  # dummy res names
         pred_complex = self.builder.add_ligand_to_pocket(
-            lig_data=predicted,
+            lig_data=curr,
             pocket_data=pocket_data,
         )
         self.builder.write_xyz_file_from_batch(
@@ -1195,10 +1278,15 @@ class LigandPocketCFM(pl.LightningModule):
 
     def _save_trajectory(
         self,
-        predicted,
+        predicted: Optional[dict] = None,
+        pred_mols: Optional[List[Chem.Mol]] = None,
         iter: int = 0,
     ):
-        pred_mols = self._generate_mols(predicted)
+        if pred_mols is None:
+            assert (
+                predicted is not None
+            ), "Either predicted or pred_mols must be provided."
+            pred_mols = self._generate_mols(predicted)
         self.builder.write_trajectory_as_xyz(
             pred_mols=pred_mols,
             file_path=os.path.join(self.hparams.save_dir, f"traj_pred_mols_{iter}"),
@@ -1399,7 +1487,7 @@ class LigandPocketCFM(pl.LightningModule):
     ):
 
         self.integrator.use_sde_simulation = (
-            self.integrator.use_sde_simulation or apply_guidance
+            self.integrator.use_sde_simulation  # or apply_guidance
         )
         if self.integrator.use_sde_simulation:
             self.integrator.coord_noise_level = coord_noise_level
@@ -1673,7 +1761,7 @@ class LigandPocketCFM(pl.LightningModule):
             # Add to trajectory
             if save_traj:
                 self._build_trajectory(
-                    curr,
+                    predicted,
                     predicted,
                     pocket_data,
                     iter=iter,
@@ -2340,7 +2428,11 @@ class LigandPocketCFM(pl.LightningModule):
 
         if self.lr_schedule == "constant":
             warm_up_steps = 0 if self.warm_up_steps is None else self.warm_up_steps
-            scheduler = LinearLR(opt, start_factor=0.05, total_iters=warm_up_steps)
+            scheduler = LinearLR(
+                opt,
+                start_factor=0.1 if warm_up_steps > 0 else 1.0,
+                total_iters=warm_up_steps,
+            )
 
         # TODO could use warm_up_steps to shift peak of one cycle
         elif self.lr_schedule == "one-cycle":
@@ -2348,22 +2440,33 @@ class LigandPocketCFM(pl.LightningModule):
                 opt, max_lr=self.lr, total_steps=self.total_steps, pct_start=0.3
             )
         elif self.lr_schedule == "exponential":
+            warm_up_steps = self.warm_up_steps if self.warm_up_steps else 0
             scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=self.lr_gamma)
 
         elif self.lr_schedule == "cosine":
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                opt, T_max=self.total_steps, eta_min=self.lr * 0.05
+            # Calculate actual cosine annealing steps (excluding warmup)
+            # cosine_decay_fraction < 1.0 enables faster decay by shortening the period
+            warm_up_steps = self.warm_up_steps if self.warm_up_steps else 0
+            cosine_steps = self.total_steps - warm_up_steps
+            effective_cosine_steps = int(cosine_steps * self.cosine_decay_fraction)
+
+            # Create cosine annealing scheduler
+            cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=effective_cosine_steps, eta_min=self.lr * 0.1
             )
-            # Combine with warmup
-            if self.warm_up_steps and self.warm_up_steps > 0:
+
+            # Combine with warmup if specified
+            if warm_up_steps > 0:
                 warmup_scheduler = LinearLR(
-                    opt, start_factor=0.05, total_iters=self.warm_up_steps
+                    opt, start_factor=0.1, total_iters=warm_up_steps
                 )
                 scheduler = torch.optim.lr_scheduler.SequentialLR(
                     opt,
-                    schedulers=[warmup_scheduler, scheduler],
-                    milestones=[self.warm_up_steps],
+                    schedulers=[warmup_scheduler, cosine_scheduler],
+                    milestones=[warm_up_steps],
                 )
+            else:
+                scheduler = cosine_scheduler
         else:
             raise ValueError(f"LR schedule {self.lr_schedule} is not supported.")
 

@@ -44,6 +44,8 @@ def extract_fragments(
     maxCuts: int = 3,
     fragment_mode: str = "fragment",
     prefer_rings: bool = False,
+    min_fragment_size: int = 1,
+    max_fragment_size: int = None,
 ):
     """Extract molecular fragments using MMPA fragmentation.
 
@@ -56,14 +58,111 @@ def extract_fragments(
             - "multi-3": Select three disconnected fragments
             - other: Original behavior (can select disconnected fragments)
         prefer_rings: Whether to prefer ring-containing fragments
+        min_fragment_size: Minimum number of atoms in a fragment (default: 1)
+        max_fragment_size: Maximum number of atoms in a fragment (default: None, no limit)
 
     Returns:
         List of boolean masks indicating selected fragments for each molecule.
         For multi-fragment modes, returns list of lists of masks.
     """
 
+    def clean_fragment(frag):
+        """Clean a fragment by replacing dummy atoms and splitting disconnected parts."""
+        for a in frag.GetAtoms():
+            if a.GetAtomicNum() == 0:
+                a.SetAtomicNum(1)
+        frag = Chem.RemoveHs(frag)
+        frags = Chem.GetMolFrags(frag, asMols=True)
+        return frags
+
+    def is_connected_component(mol: Chem.Mol, atom_indices: tuple) -> bool:
+        """Check if atom indices form a single connected component in the molecule."""
+        if len(atom_indices) <= 1:
+            return True
+
+        atom_set = set(atom_indices)
+        visited = set()
+        stack = [atom_indices[0]]
+
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+
+            atom = mol.GetAtomWithIdx(current)
+            for neighbor in atom.GetNeighbors():
+                neighbor_idx = neighbor.GetIdx()
+                if neighbor_idx in atom_set and neighbor_idx not in visited:
+                    stack.append(neighbor_idx)
+
+        return len(visited) == len(atom_indices)
+
+    def contains_ring(mol: Chem.Mol, atom_indices: tuple) -> bool:
+        """Check if fragment contains at least one ring atom."""
+        ring_info = mol.GetRingInfo()
+        ring_atoms = set()
+        for ring in ring_info.AtomRings():
+            ring_atoms.update(ring)
+        return any(idx in ring_atoms for idx in atom_indices)
+
+    def fragments_are_disconnected(
+        mol: Chem.Mol, frag1_indices: tuple, frag2_indices: tuple
+    ) -> bool:
+        """Check if two fragments are disconnected (no shared atoms or direct bonds)."""
+        set1 = set(frag1_indices)
+        set2 = set(frag2_indices)
+
+        # Check for overlapping atoms
+        if set1 & set2:
+            return False
+
+        # Check for direct bonds between fragments
+        for idx1 in frag1_indices:
+            atom = mol.GetAtomWithIdx(idx1)
+            for neighbor in atom.GetNeighbors():
+                if neighbor.GetIdx() in set2:
+                    return False
+
+        return True
+
+    def extract_and_match_fragments(mol: Chem.Mol, maxCuts: int):
+        """Extract fragments using MMPA and match them back to the original molecule.
+
+        Returns:
+            List of fragment Mol objects and list of corresponding atom index tuples.
+        """
+        frags = FragmentMol(mol=mol, maxCuts=maxCuts)
+
+        # FragmentMol returns (cores, side_chains), need to flatten properly
+        all_frags = []
+        for frag_tuple in frags:
+            if frag_tuple:
+                for frag in frag_tuple:
+                    if frag:
+                        cleaned = clean_fragment(frag)
+                        all_frags.extend([f for f in cleaned if f.GetNumAtoms() > 1])
+
+        return all_frags
+
+    def filter_fragments_by_size(
+        fragment_indices: list[tuple],
+        min_size: int,
+        max_size: int = None,
+    ) -> list[tuple]:
+        """Filter fragment indices by size constraints."""
+        return [
+            f
+            for f in fragment_indices
+            if len(f) >= min_size and (max_size is None or len(f) <= max_size)
+        ]
+
     def single_fragment_per_mol(
-        mol: Chem.Mol, maxCuts: int, max_fragment_size=15, prefer_rings=False
+        mol: Chem.Mol,
+        maxCuts: int,
+        min_fragment_size: int = 1,
+        max_fragment_size: int = None,
+        prefer_rings: bool = False,
     ):
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
         try:
@@ -74,76 +173,29 @@ def extract_fragments(
             )
             return mask
 
-        def clean_fragment(frag):
-            for a in frag.GetAtoms():
-                if a.GetAtomicNum() == 0:
-                    a.SetAtomicNum(1)
-            frag = Chem.RemoveHs(frag)
-            frags = Chem.GetMolFrags(frag, asMols=True)
-            return frags
-
-        def is_connected_component(atom_indices: tuple) -> bool:
-            """Check if atom indices form a single connected component in the molecule"""
-            if len(atom_indices) <= 1:
-                return True
-
-            atom_set = set(atom_indices)
-            # Build a graph of the fragment
-            visited = set()
-            stack = [atom_indices[0]]
-
-            while stack:
-                current = stack.pop()
-                if current in visited:
-                    continue
-                visited.add(current)
-
-                atom = mol.GetAtomWithIdx(current)
-                for neighbor in atom.GetNeighbors():
-                    neighbor_idx = neighbor.GetIdx()
-                    if neighbor_idx in atom_set and neighbor_idx not in visited:
-                        stack.append(neighbor_idx)
-
-            # If all atoms were visited, it's connected
-            return len(visited) == len(atom_indices)
-
-        def contains_ring(atom_indices: tuple) -> bool:
-            """Check if fragment contains at least one ring atom"""
-            ring_info = mol.GetRingInfo()
-            ring_atoms = set()
-            for ring in ring_info.AtomRings():
-                ring_atoms.update(ring)
-            return any(idx in ring_atoms for idx in atom_indices)
-
-        # Generate fragments using MMPA fragmentation
-        frags = FragmentMol(mol=mol, maxCuts=maxCuts)
-
-        # FragmentMol returns (cores, side_chains), need to flatten properly
-        all_frags = []
-        for frag_tuple in frags:  # cores or side_chains
-            if frag_tuple:  # if not None/empty
-                for frag in frag_tuple:  # individual fragments
-                    if frag:
-                        cleaned = clean_fragment(frag)
-                        all_frags.extend([f for f in cleaned if f.GetNumAtoms() > 1])
-
+        all_frags = extract_and_match_fragments(mol, maxCuts)
         if not all_frags:
             return mask
 
-        # Match fragments back to original molecule and filter for local fragments
+        # Match fragments back to original molecule and filter
         local_fragment_indices = []
-
         for frag in all_frags:
             matches = mol.GetSubstructMatches(frag)
             if matches:
                 for match in matches:
-                    # Filter criteria: must be connected, reasonably sized, and local
-                    if is_connected_component(match):
+                    if is_connected_component(mol, match):
                         local_fragment_indices.append(match)
+
+        # Apply size filtering
+        local_fragment_indices = filter_fragments_by_size(
+            local_fragment_indices, min_fragment_size, max_fragment_size
+        )
 
         # Further filter by preferring ring-containing fragments if requested
         if prefer_rings and local_fragment_indices:
-            ring_fragments = [f for f in local_fragment_indices if contains_ring(f)]
+            ring_fragments = [
+                f for f in local_fragment_indices if contains_ring(mol, f)
+            ]
             if ring_fragments:
                 local_fragment_indices = ring_fragments
 
@@ -152,22 +204,29 @@ def extract_fragments(
             selected_fragment = random.choice(local_fragment_indices)
             mask[torch.tensor(selected_fragment)] = 1
         else:
+            # Fallback: try to find any valid fragment meeting minimum size only
             all_matches = []
             for frag in all_frags:
                 matches = mol.GetSubstructMatches(frag)
                 if matches:
                     for match in matches:
-                        all_matches.append(match)
+                        if is_connected_component(mol, match):
+                            all_matches.append(match)
 
-            if all_matches:
-                # Pick the smallest fragment
-                smallest = min(all_matches, key=len)
+            valid_matches = [m for m in all_matches if len(m) >= min_fragment_size]
+            if valid_matches:
+                smallest = min(valid_matches, key=len)
                 mask[torch.tensor(smallest)] = 1
 
         return mask
 
     def multi_fragment_per_mol(
-        mol: Chem.Mol, maxCuts: int, n_fragments: int = 2, prefer_rings: bool = False
+        mol: Chem.Mol,
+        maxCuts: int,
+        n_fragments: int = 2,
+        min_fragment_size: int = 1,
+        max_fragment_size: int = None,
+        prefer_rings: bool = False,
     ):
         """Select multiple disconnected fragments for replacement.
 
@@ -182,77 +241,7 @@ def extract_fragments(
             )
             return []
 
-        def clean_fragment(frag):
-            for a in frag.GetAtoms():
-                if a.GetAtomicNum() == 0:
-                    a.SetAtomicNum(1)
-            frag = Chem.RemoveHs(frag)
-            frags = Chem.GetMolFrags(frag, asMols=True)
-            return frags
-
-        def is_connected_component(atom_indices: tuple) -> bool:
-            """Check if atom indices form a single connected component in the molecule"""
-            if len(atom_indices) <= 1:
-                return True
-
-            atom_set = set(atom_indices)
-            visited = set()
-            stack = [atom_indices[0]]
-
-            while stack:
-                current = stack.pop()
-                if current in visited:
-                    continue
-                visited.add(current)
-
-                atom = mol.GetAtomWithIdx(current)
-                for neighbor in atom.GetNeighbors():
-                    neighbor_idx = neighbor.GetIdx()
-                    if neighbor_idx in atom_set and neighbor_idx not in visited:
-                        stack.append(neighbor_idx)
-
-            return len(visited) == len(atom_indices)
-
-        def contains_ring(atom_indices: tuple) -> bool:
-            """Check if fragment contains at least one ring atom"""
-            ring_info = mol.GetRingInfo()
-            ring_atoms = set()
-            for ring in ring_info.AtomRings():
-                ring_atoms.update(ring)
-            return any(idx in ring_atoms for idx in atom_indices)
-
-        def fragments_are_disconnected(
-            frag1_indices: tuple, frag2_indices: tuple
-        ) -> bool:
-            """Check if two fragments are disconnected (no shared atoms or direct bonds)"""
-            set1 = set(frag1_indices)
-            set2 = set(frag2_indices)
-
-            # Check for overlapping atoms
-            if set1 & set2:
-                return False
-
-            # Check for direct bonds between fragments
-            for idx1 in frag1_indices:
-                atom = mol.GetAtomWithIdx(idx1)
-                for neighbor in atom.GetNeighbors():
-                    if neighbor.GetIdx() in set2:
-                        return False
-
-            return True
-
-        # Generate fragments using MMPA fragmentation
-        frags = FragmentMol(mol=mol, maxCuts=maxCuts)
-
-        # Collect all valid connected fragments
-        all_frags = []
-        for frag_tuple in frags:
-            if frag_tuple:
-                for frag in frag_tuple:
-                    if frag:
-                        cleaned = clean_fragment(frag)
-                        all_frags.extend([f for f in cleaned if f.GetNumAtoms() > 1])
-
+        all_frags = extract_and_match_fragments(mol, maxCuts)
         if not all_frags:
             return []
 
@@ -262,12 +251,19 @@ def extract_fragments(
             matches = mol.GetSubstructMatches(frag)
             if matches:
                 for match in matches:
-                    if is_connected_component(match):
+                    if is_connected_component(mol, match):
                         local_fragment_indices.append(match)
+
+        # Apply size filtering
+        local_fragment_indices = filter_fragments_by_size(
+            local_fragment_indices, min_fragment_size, max_fragment_size
+        )
 
         # Filter by ring preference if requested
         if prefer_rings and local_fragment_indices:
-            ring_fragments = [f for f in local_fragment_indices if contains_ring(f)]
+            ring_fragments = [
+                f for f in local_fragment_indices if contains_ring(mol, f)
+            ]
             if ring_fragments:
                 local_fragment_indices = ring_fragments
 
@@ -287,14 +283,14 @@ def extract_fragments(
         # Select remaining fragments ensuring they're disconnected from all previously selected
         for _ in range(n_fragments - 1):
             # Filter for fragments disconnected from all selected ones
-            disconnected_candidates = []
-            for candidate in available_fragments:
-                is_disconnected_from_all = all(
-                    fragments_are_disconnected(candidate, selected)
+            disconnected_candidates = [
+                candidate
+                for candidate in available_fragments
+                if all(
+                    fragments_are_disconnected(mol, candidate, selected)
                     for selected in selected_fragments
                 )
-                if is_disconnected_from_all:
-                    disconnected_candidates.append(candidate)
+            ]
 
             if not disconnected_candidates:
                 # Not enough disconnected fragments, return empty
@@ -314,7 +310,13 @@ def extract_fragments(
 
         return masks
 
-    def fragment_per_mol(mol: Chem.Mol, maxCuts: int):
+    def fragment_per_mol(
+        mol: Chem.Mol,
+        maxCuts: int,
+        min_fragment_size: int = 1,
+        max_fragment_size: int = None,
+    ):
+        """Original fragment extraction - selects any fragment (may not be connected)."""
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
         try:
             Chem.SanitizeMol(mol)
@@ -324,43 +326,24 @@ def extract_fragments(
             )
             return mask
 
-        def clean_fragment(frag):
-            for a in frag.GetAtoms():
-                if a.GetAtomicNum() == 0:
-                    a.SetAtomicNum(1)
-            frag = Chem.RemoveHs(frag)
-            frags = Chem.GetMolFrags(frag, asMols=True)
-            return frags
-
-        # Generate fragments
-        frags = FragmentMol(mol=mol, maxCuts=maxCuts)
-        # FragmentMol returns (cores, side_chains), need to flatten properly
-        all_frags = []
-        for frag_tuple in frags:  # cores or side_chains
-            if frag_tuple:  # if not None/empty
-                for frag in frag_tuple:  # individual fragments
-                    if frag:
-                        cleaned = clean_fragment(frag)
-                        all_frags.extend([f for f in cleaned if f.GetNumAtoms() > 1])
-
+        all_frags = extract_and_match_fragments(mol, maxCuts)
         if not all_frags:
             return mask
 
+        # Get first match for each fragment
         substructure_ids = []
         for frag in all_frags:
             matches = mol.GetSubstructMatches(frag)
             if matches:
                 substructure_ids.append(matches[0])
 
-        # Randomly select a fragment
-        if substructure_ids:
-            # Keep sampling until we find a fragment with at least one atom
-            valid_frags = [f for f in substructure_ids if len(f) > 0]
-            if valid_frags:
-                frag = random.choice(valid_frags)
-            else:
-                # Fallback: if no valid fragments, return empty mask
-                return mask
+        # Apply size filtering
+        valid_frags = filter_fragments_by_size(
+            substructure_ids, min_fragment_size, max_fragment_size
+        )
+
+        if valid_frags:
+            frag = random.choice(valid_frags)
             mask[torch.tensor(frag)] = 1
 
         return mask
@@ -368,26 +351,50 @@ def extract_fragments(
     # Route to appropriate function based on fragment_mode
     if fragment_mode == "single":
         return [
-            single_fragment_per_mol(mol, maxCuts=maxCuts, prefer_rings=prefer_rings)
+            single_fragment_per_mol(
+                mol,
+                maxCuts=maxCuts,
+                min_fragment_size=min_fragment_size,
+                max_fragment_size=max_fragment_size,
+                prefer_rings=prefer_rings,
+            )
             for mol in to_mols
         ]
     elif fragment_mode == "multi-2":
         return [
             multi_fragment_per_mol(
-                mol, maxCuts=maxCuts, n_fragments=2, prefer_rings=prefer_rings
+                mol,
+                maxCuts=maxCuts,
+                n_fragments=2,
+                min_fragment_size=min_fragment_size,
+                max_fragment_size=max_fragment_size,
+                prefer_rings=prefer_rings,
             )
             for mol in to_mols
         ]
     elif fragment_mode == "multi-3":
         return [
             multi_fragment_per_mol(
-                mol, maxCuts=maxCuts, n_fragments=3, prefer_rings=prefer_rings
+                mol,
+                maxCuts=maxCuts,
+                n_fragments=3,
+                min_fragment_size=min_fragment_size,
+                max_fragment_size=max_fragment_size,
+                prefer_rings=prefer_rings,
             )
             for mol in to_mols
         ]
     else:
-        # Original behavior
-        return [fragment_per_mol(mol, maxCuts=maxCuts) for mol in to_mols]
+        # Fragment mode (original behavior)
+        return [
+            fragment_per_mol(
+                mol,
+                maxCuts=maxCuts,
+                min_fragment_size=min_fragment_size,
+                max_fragment_size=max_fragment_size,
+            )
+            for mol in to_mols
+        ]
 
 
 def extract_substructure(
@@ -454,8 +461,8 @@ def extract_substructure(
     return mask
 
 
-def extract_func_groups(to_mols: list[Chem.Mol], includeHs=False):
-    def func_groups_per_mol(mol, includeHs=True):
+def extract_func_groups(to_mols: list[Chem.Mol], invert_mask=False, includeHs=False):
+    def func_groups_per_mol(mol, invert_mask=False, includeHs=True):
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
         _mol = Chem.Mol(mol)
         try:
@@ -484,13 +491,18 @@ def extract_func_groups(to_mols: list[Chem.Mol], includeHs=False):
                 mask[torch.tensor(findices)] = 1
             except Exception as e:
                 print(e)
+        if invert_mask:
+            mask = ~mask
         return mask
 
-    return [func_groups_per_mol(mol, includeHs) for mol in to_mols]
+    return [
+        func_groups_per_mol(mol, invert_mask=invert_mask, includeHs=includeHs)
+        for mol in to_mols
+    ]
 
 
-def extract_cores(to_mols: list[Chem.Mol]):
-    def cores_per_mol(mol):
+def extract_cores(to_mols: list[Chem.Mol], invert_mask=False):
+    def cores_per_mol(mol, invert_mask=False):
         _mol = Chem.Mol(mol)
         try:
             Chem.SanitizeMol(_mol)
@@ -525,13 +537,15 @@ def extract_cores(to_mols: list[Chem.Mol]):
             mask[torch.tensor(core_atoms)] = 1
         except Exception as e:
             print(e)
+        if invert_mask:
+            mask = ~mask
         return mask
 
-    return [cores_per_mol(mol) for mol in to_mols]
+    return [cores_per_mol(mol, invert_mask=invert_mask) for mol in to_mols]
 
 
-def extract_linkers(to_mols: list[Chem.Mol]):
-    def linker_per_mol(mol):
+def extract_linkers(to_mols: list[Chem.Mol], invert_mask=False):
+    def linker_per_mol(mol, invert_mask=False):
         _mol = Chem.Mol(mol)
         try:
             Chem.SanitizeMol(_mol)
@@ -567,13 +581,15 @@ def extract_linkers(to_mols: list[Chem.Mol]):
             mask[torch.tensor(linker_atoms)] = 1
         except Exception as e:
             print(e)
+        if invert_mask:
+            mask = ~mask
         return mask
 
-    return [linker_per_mol(mol) for mol in to_mols]
+    return [linker_per_mol(mol, invert_mask=invert_mask) for mol in to_mols]
 
 
-def extract_scaffolds(to_mols: list[Chem.Mol]):
-    def scaffold_per_mol(mol):
+def extract_scaffolds(to_mols: list[Chem.Mol], invert_mask=False):
+    def scaffold_per_mol(mol, invert_mask=False):
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
         _mol = Chem.Mol(mol)
         try:
@@ -593,9 +609,11 @@ def extract_scaffolds(to_mols: list[Chem.Mol]):
                 mask[torch.tensor(scaffold_atoms)] = 1
             except Exception as e:
                 print(e)
+        if invert_mask:
+            mask = ~mask
         return mask
 
-    return [scaffold_per_mol(mol) for mol in to_mols]
+    return [scaffold_per_mol(mol, invert_mask=invert_mask) for mol in to_mols]
 
 
 def sample_mol_sizes(
@@ -1518,6 +1536,9 @@ class GeometricInterpolant(Interpolant):
         core_inpainting: bool = False,
         max_fragment_cuts: int = 3,
         fragment_inpainting: bool = False,
+        fragment_growing: bool = False,
+        grow_size: Optional[int] = None,
+        prior_center: Optional[torch.Tensor] = None,
         substructure_inpainting: bool = False,
         substructure: Optional[str] = None,
         graph_inpainting: str | None = None,
@@ -1531,7 +1552,7 @@ class GeometricInterpolant(Interpolant):
         batch_ot: bool = False,
         rotation_alignment: bool = False,
         permutation_alignment: bool = False,
-        fragment_size_variation: float = 0.15,
+        fragment_size_variation: float = 0.1,
     ):
 
         if fixed_time is not None and (fixed_time < 0 or fixed_time > 1):
@@ -1569,6 +1590,12 @@ class GeometricInterpolant(Interpolant):
         self.linker_inpainting = linker_inpainting
         self.core_inpainting = core_inpainting
         self.fragment_inpainting = fragment_inpainting
+        self.fragment_growing = fragment_growing
+        self.grow_size = grow_size
+        # Prior center for fragment growing (original coordinates, before any transformation)
+        self.prior_center = prior_center
+        # Transformed prior center (will be set during interpolation after applying COM shift)
+        self._transformed_prior_center = None
         self.fragment_modes = None  # ["single", "multi-2", "multi-3"]
         self.max_fragment_cuts = max_fragment_cuts
         self.substructure_inpainting = substructure_inpainting
@@ -1597,6 +1624,7 @@ class GeometricInterpolant(Interpolant):
             or core_inpainting
             or substructure_inpainting
             or fragment_inpainting
+            or fragment_growing
         )
         if self.inpainting_mode and self.graph_inpainting:
             print(
@@ -1644,6 +1672,8 @@ class GeometricInterpolant(Interpolant):
             "func_group_inpainting",
             "linker_inpainting",
             "core_inpainting",
+            "fragment_growing",
+            "graph_inpainting",
         }
 
     @property
@@ -1894,17 +1924,25 @@ class GeometricInterpolant(Interpolant):
             to_mols, rdkit_mols, interaction_mask
         )
 
-        # Sample prior molecules (standard size)
-        from_mols = [
-            self.prior_sampler.sample_molecule(num_atoms, symmetrize=self.symmetrize)
-            for _ in to_mols
-        ]
-
         # Align prior to reference (permutation + rotation)
-        from_mols = [
-            self._match_mols(from_mol, to_mol, mol_size=mol_size)
-            for from_mol, to_mol, mol_size in zip(from_mols, to_mols, mol_sizes)
-        ]
+        if self.permutation_alignment or self.rotation_alignment:
+            # Sample prior molecules (standard size)
+            from_mols = [
+                self.prior_sampler.sample_molecule(
+                    num_atoms, symmetrize=self.symmetrize
+                )
+                for _ in to_mols
+            ]
+            from_mols = [
+                self._match_mols(from_mol, to_mol, mol_size=mol_size)
+                for from_mol, to_mol, mol_size in zip(from_mols, to_mols, mol_sizes)
+            ]
+        else:
+            # Sample prior molecules (standard size)
+            from_mols = [
+                self.prior_sampler.sample_molecule(mol_size, symmetrize=self.symmetrize)
+                for mol_size in mol_sizes
+            ]
 
         # Apply inpainting logic based on mode
         from_mols = [
@@ -2103,7 +2141,20 @@ class GeometricInterpolant(Interpolant):
                 )
                 return from_mol
 
-        if N_variable == 0:
+        # Special handling for fragment_growing with grow_size
+        # In this case, the input IS the fragment and N_variable == 0,
+        # but we want to add grow_size atoms to it
+        if (
+            N_variable == 0
+            and mode == "fragment_growing"
+            and self.grow_size is not None
+        ):
+            # Apply size variation if sample_mol_sizes is enabled
+            if self.sample_mol_sizes:
+                N_variable_sampled = self._apply_size_variation(self.grow_size)
+            else:
+                N_variable_sampled = self.grow_size
+        elif N_variable == 0:
             # Everything is fixed, nothing to generate
             print(
                 f"For mode '{mode}': All {len(mask)} atoms are marked as fixed, nothing to generate. Falling back to de novo."
@@ -2118,25 +2169,35 @@ class GeometricInterpolant(Interpolant):
                 fragment_mode=mode,
             )
             return from_mol
+        else:
+            # Normal case: extract fixed fragment and determine variable size
+            # For interaction inpainting, keep original size (no size variation, not yet supported)
+            if mode == "interaction" or not self.sample_mol_sizes:
+                N_variable_sampled = N_variable
+            else:
+                # Calculate variable fragment size
+                assert (
+                    self.fragment_size_variation is not None
+                    and self.fragment_size_variation > 0
+                ), "Fragment size variation must be positive when sampling variable fragment sizes."
+                N_variable_sampled = self._apply_size_variation(N_variable)
 
         # Extract fixed fragment
         fixed_fragment = self._extract_submolecule(to_mol, fixed_indices)
-
-        # For interaction inpainting, keep original size (no size variation, not yet supported)
-        if mode == "interaction" or not self.sample_mol_sizes:
-            N_variable_sampled = N_variable
-        else:
-            # Calculate variable fragment size
-            assert (
-                self.fragment_size_variation is not None
-                and self.fragment_size_variation > 0
-            ), "Fragment size variation must be positive when sampling variable fragment sizes."
-            N_variable_sampled = self._apply_size_variation(N_variable)
 
         # Sample variable fragment
         variable_fragment = self.prior_sampler.sample_molecule(
             N_variable_sampled, symmetrize=self.symmetrize
         )
+
+        # Shift variable fragment to prior center if specified (for fragment growing)
+        if self._transformed_prior_center is not None and mode == "fragment_growing":
+            # Variable fragment is centered at origin, shift to prior center
+            shifted_coords = (
+                variable_fragment.coords
+                + self._transformed_prior_center.to(variable_fragment.coords.device)
+            )
+            variable_fragment = variable_fragment._copy_with(coords=shifted_coords)
 
         # Fuse fragments
         from_mol = self.prior_sampler.fuse_fragments(
@@ -2165,9 +2226,10 @@ class GeometricInterpolant(Interpolant):
         """
         batch_size = len(to_mols)
 
-        # Collect active modes
+        # Collect active modes by category
         active_global_modes = []
         active_local_modes = []
+        active_graph_modes = []
 
         if self.scaffold_inpainting:
             active_global_modes.append("scaffold")
@@ -2179,73 +2241,98 @@ class GeometricInterpolant(Interpolant):
             active_global_modes.append("core")
         if interaction_mask is not None:
             active_global_modes.append("interaction")
+        if self.fragment_growing:
+            active_global_modes.append("fragment_growing")
         if self.fragment_inpainting:
-            active_local_modes.append("fragment")
+            active_local_modes.append("fragment_inpainting")
         if self.substructure_inpainting and self.inference:
             active_local_modes.append("substructure")
+        if self.graph_inpainting:
+            active_graph_modes.append("graph")
 
-        # Handle graph inpainting
-        if self.graph_inpainting and not (active_global_modes or active_local_modes):
-            # Only graph inpainting active
-            if self.inference or not self.mixed_uncond_inpaint:
-                return [
-                    ("graph", torch.ones(mol.seq_length, dtype=torch.bool), False)
-                    for mol in to_mols
-                ]
-            else:
-                # Training with mixed_uncond: 50% graph, 50% de novo
-                return [
-                    (
-                        "graph" if torch.rand(1).item() < 0.5 else "de_novo",
-                        (
-                            torch.ones(mol.seq_length, dtype=torch.bool)
-                            if torch.rand(1).item() < 0.5
-                            else torch.zeros(mol.seq_length, dtype=torch.bool)
-                        ),
-                        False,
-                    )
-                    for mol in to_mols
-                ]
+        # Build list of categories for equal probability selection
+        categories = []
+        if self.mixed_uncond_inpaint:
+            categories.append(("de_novo", ["de_novo"]))
+        if active_local_modes:
+            categories.append(("local", active_local_modes))
+        if active_global_modes:
+            categories.append(("global", active_global_modes))
+        if active_graph_modes:
+            categories.append(("graph", active_graph_modes))
 
-        all_active = active_local_modes + active_global_modes
-
-        if not all_active:
-            raise ValueError("No inpainting modes active")
+        # If no categories, return de_novo for all
+        if not categories:
+            return [
+                ("de_novo", torch.zeros(mol.seq_length, dtype=torch.bool), False)
+                for mol in to_mols
+            ]
 
         # Determine mode for each molecule
         results = []
-        rand_vals = torch.rand(batch_size)
         for i in range(batch_size):
-            # Select mode
-            if self.inference and len(all_active) == 1:
-                mode = all_active[0]
-            elif self.inference:
-                mode = random.choice(all_active)
+            if self.inference:
+                # At inference, uniformly select from all active modes
+                all_active = (
+                    active_local_modes + active_global_modes + active_graph_modes
+                )
+                mode = random.choice(all_active) if all_active else "de_novo"
             else:
-                # Training: 25% de novo, 50% local, 25% global
-                if rand_vals[i] < 0.25:
-                    mode = "de_novo"
-                elif (
-                    rand_vals[i] < 0.75 and active_local_modes
-                ) or not active_global_modes:
-                    mode = random.choice(active_local_modes)
+                # Training: weighted probability for each category
+                # With graph_inpainting: 15% de_novo, 15% graph, 40% local, 30% global
+                # Without graph_inpainting: 25% de_novo, 40% local, 35% global
+                if active_graph_modes:
+                    weight_map = {
+                        "de_novo": 0.15,
+                        "graph": 0.15,
+                        "local": 0.40,
+                        "global": 0.30,
+                    }
                 else:
-                    mode = random.choice(active_global_modes)
+                    weight_map = {"de_novo": 0.50, "local": 0.25, "global": 0.25}
 
-            # Extract mask
+                category_weights = [
+                    weight_map.get(cat_name, 0.0) for cat_name, _ in categories
+                ]
+
+                category_name, modes_list = random.choices(
+                    categories, weights=category_weights, k=1
+                )[0]
+                mode = random.choice(modes_list)
+
+            # Determine if mode is local
             is_local = mode in active_local_modes
 
+            # Extract mask based on mode
             if mode == "de_novo":
                 mask = torch.zeros(to_mols[i].seq_length, dtype=torch.bool)
+            elif mode == "graph":
+                # For graph inpainting, all atoms need coordinates generated
+                # but graph structure (types, bonds) is fixed
+                mask = torch.ones(to_mols[i].seq_length, dtype=torch.bool)
             elif mode == "scaffold":
-                mask = extract_scaffolds([rdkit_mols[i]])[0]
+                mask = extract_scaffolds([rdkit_mols[i]], invert_mask=True)[0]
             elif mode == "func_group":
-                mask = extract_func_groups([rdkit_mols[i]], includeHs=True)[0]
+                mask = extract_func_groups(
+                    [rdkit_mols[i]], invert_mask=True, includeHs=True
+                )[0]
             elif mode == "linker":
-                mask = extract_linkers([rdkit_mols[i]])[0]
+                mask = extract_linkers([rdkit_mols[i]], invert_mask=True)[0]
             elif mode == "core":
-                mask = extract_cores([rdkit_mols[i]])[0]
-            elif mode == "fragment":
+                mask = extract_cores([rdkit_mols[i]], invert_mask=True)[0]
+            elif mode == "fragment_growing":
+                # If grow_size is set, the input ligand IS the fragment to grow
+                # All atoms are fixed (mask = all True)
+                if self.grow_size is not None:
+                    mask = torch.ones(to_mols[i].seq_length, dtype=torch.bool)
+                else:
+                    # Original behavior: extract a fragment from full molecule
+                    mask = extract_fragments(
+                        [rdkit_mols[i]],
+                        maxCuts=self.max_fragment_cuts,
+                        fragment_mode="single",
+                    )[0]
+            elif mode == "fragment_inpainting":
                 if self.fragment_modes is not None:
                     fragment_mode = random.choice(self.fragment_modes)
                     masks = extract_fragments(
@@ -2253,12 +2340,9 @@ class GeometricInterpolant(Interpolant):
                         maxCuts=self.max_fragment_cuts,
                         fragment_mode=fragment_mode,
                     )[0]
-                    # masks is now a list of masks for multi-fragment mode
                     if isinstance(masks, list) and len(masks) > 1:
-                        # Store as list for later processing
                         mask = masks
                     else:
-                        # Fallback to single fragment if multi-fragment extraction failed
                         mask = extract_fragments(
                             [rdkit_mols[i]],
                             maxCuts=self.max_fragment_cuts,
@@ -2286,7 +2370,9 @@ class GeometricInterpolant(Interpolant):
                 if not isinstance(mask, list):
                     mask = ~mask
 
-            results.append((mode, mask.bool(), is_local))
+            results.append(
+                (mode, mask.bool() if not isinstance(mask, list) else mask, is_local)
+            )
 
         return results
 
@@ -2569,13 +2655,16 @@ class ComplexInterpolant(GeometricInterpolant):
         flow_interactions: bool = False,
         dataset: str = "plinder",
         sample_mol_sizes: Optional[bool] = False,
-        interaction_inpainting: bool = False,
+        interaction_conditional: bool = False,
         scaffold_inpainting: bool = False,
         func_group_inpainting: bool = False,
         linker_inpainting: bool = False,
         core_inpainting: bool = False,
         max_fragment_cuts: int = 3,
         fragment_inpainting: bool = False,
+        fragment_growing: bool = False,
+        grow_size: Optional[int] = None,
+        prior_center: Optional[torch.Tensor] = None,
         substructure_inpainting: bool = False,
         substructure: Optional[str] = None,
         graph_inpainting: str = None,
@@ -2607,6 +2696,9 @@ class ComplexInterpolant(GeometricInterpolant):
             linker_inpainting=linker_inpainting,
             core_inpainting=core_inpainting,
             fragment_inpainting=fragment_inpainting,
+            fragment_growing=fragment_growing,
+            grow_size=grow_size,
+            prior_center=prior_center,
             max_fragment_cuts=max_fragment_cuts,
             substructure_inpainting=substructure_inpainting,
             substructure=substructure,
@@ -2637,7 +2729,7 @@ class ComplexInterpolant(GeometricInterpolant):
         self.interaction_fixed_time = interaction_fixed_time
         self.flow_interactions = flow_interactions
         self.n_interaction_types = n_interaction_types
-        self.interaction_inpainting = interaction_inpainting
+        self.interaction_conditional = interaction_conditional
         self.sample_mol_sizes = sample_mol_sizes
 
         self.inference = inference
@@ -2663,7 +2755,7 @@ class ComplexInterpolant(GeometricInterpolant):
         )
         hparams["n-interaction-types"] = self.n_interaction_types
         hparams["flow-interactions"] = self.flow_interactions
-        hparams["interaction-inpainting"] = self.interaction_inpainting
+        hparams["interaction-conditional"] = self.interaction_conditional
 
         if self.separate_pocket_interpolation:
             hparams["pocket-time-alpha"] = self.pocket_time_alpha
@@ -2684,13 +2776,29 @@ class ComplexInterpolant(GeometricInterpolant):
     def interpolate(self, to_mols: list[PocketComplex]) -> _ComplexInterpT:
         batch_size = len(to_mols)
 
+        # Transform prior center if provided
+        # The prior center is in the original coordinate frame (same as input PDB)
+        # It needs to be shifted by the same COM that was applied to the complex
+        if self.prior_center is not None and len(to_mols) > 0:
+            system_com = to_mols[0].com
+            if system_com is not None:
+                # Shift prior center by the same amount as the complex
+                # Original shift was: coords - holo_com, so we apply the same
+                if isinstance(system_com, torch.Tensor):
+                    system_com = system_com.squeeze()
+                self._transformed_prior_center = self.prior_center - system_com
+            else:
+                self._transformed_prior_center = self.prior_center
+        else:
+            self._transformed_prior_center = None
+
         # Interpolate ligands
         interaction_mask = None
-        if self.interaction_inpainting:
+        if self.interaction_conditional:
             assert (
                 not self.sample_mol_sizes
-            ), "Inpainting currently not supported with sampled mol sizes"
-            if self.interaction_inpainting:
+            ), "Interaction conditional generation currently not supported with sampled mol sizes"
+            if self.interaction_conditional:
                 interaction_mask = [
                     (
                         mol.interactions[:, :, 1:].sum(dim=(0, 2)) > 0

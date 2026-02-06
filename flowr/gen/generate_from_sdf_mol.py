@@ -15,7 +15,6 @@ from flowr.gen.generate import generate_molecules
 from flowr.scriptutil import (
     load_mol_model,
 )
-from flowr.util.device import get_device
 from flowr.util.metrics import evaluate_pb_validity_mol, evaluate_strain
 from flowr.util.molrepr import GeometricMolBatch
 from flowr.util.rdkit import write_sdf_file
@@ -64,7 +63,7 @@ def evaluate(args):
     ) = load_mol_model(
         args,
     )
-    model = model.to(get_device())
+    model = model.to("cuda")
     model.eval()
     print("Model complete.")
 
@@ -385,7 +384,7 @@ def get_args():
 
     # Data paths
     parser.add_argument("--sdf_path", type=str, required=True, default=None, help="Path to the sdf file containing molecules")
-    parser.add_argument("--ligand_idx", type=int, default=None, help="Index of the ligand in the sdf file to be used for generation. None or -1 to use all ligands.")
+    parser.add_argument("--ligand_idx", type=int, default=None, help="Index of the ligand in the sdf file to be used for generation")
     parser.add_argument("--save_dir", type=str)
     parser.add_argument("--save_file", type=str)
 
@@ -419,6 +418,7 @@ def get_args():
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--core_inpainting", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
+    parser.add_argument("--fragment_growing", action="store_true")
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument(
         "--substructure", 

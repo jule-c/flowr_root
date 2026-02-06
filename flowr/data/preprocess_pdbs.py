@@ -5,7 +5,10 @@ import tempfile
 from glob import glob
 from itertools import zip_longest
 from pathlib import Path
+from typing import Optional
 
+import biotite.database.rcsb as rcsb
+import biotite.sequence as seq  # sequence information
 import biotite.structure as struc
 import biotite.structure.io.pdb as pdb
 import biotite.structure.io.pdbx as pdbx
@@ -13,6 +16,7 @@ import hydride
 import numpy as np
 import torch
 from Bio.PDB.Polypeptide import is_aa
+from biotite.interface import rdkit  # interface with the RDKit
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from tqdm import tqdm
@@ -27,6 +31,7 @@ from flowr.util.pocket import (
     PocketComplexBatch,
     ProteinPocket,
 )
+from flowr.util.rdkit import write_sdf_file
 from posecheck.utils.biopython import (
     ids_scriptly_increasing,
     load_biopython_structure,
@@ -194,6 +199,164 @@ def canonicalize_atom_order(mol_conformer):
     mol_reordered = Chem.RenumberAtoms(mol_conformer, list(match))
 
     return mol_reordered
+
+
+def split_ligand_from_pdb(
+    in_file: Optional[str] = None,
+    pdb_id: Optional[str] = None,
+    out_file: str = "protein_only.cif",
+    exclude_res: Optional[set] = ("LIG",),
+    exclude_other: bool = False,
+    save_ligand: bool = False,
+    ligand_out_file: str = "ligand_only.sdf",
+) -> None:
+    """
+    Split ligand from protein structure in PDB file and save protein-only structure.
+
+    Args:
+        in_file: Path to input PDB file with protein-ligand complex
+        pdb_id: PDB ID to download structure from RCSB (if in_file not provided)
+        out_file: Path to output file for protein-only structure (PDB or CIF)
+        exclude_res: Set of residue names to exclude (default: {"LIG"})
+    Returns:
+        None
+    """
+    # Load protein into biotite atom array, split and save as new file
+    assert in_file or pdb_id, "Either in_file or pdb_id must be provided"
+
+    ## Get standard amino acid names first
+    prot_seq = seq.ProteinSequence()
+    aa_alphabet = prot_seq.get_alphabet()
+    aa_names = [prot_seq.convert_letter_1to3(x) for x in aa_alphabet]
+
+    # Common solvent/ion residue names to keep
+    keep_residues = {
+        "HOH",
+        "WAT",
+        "H2O",  # water
+    }
+    exclude_by_default = ["DMS"]
+    if not exclude_other:
+        keep_residues.update(
+            {
+                "NA",
+                "CL",
+                "K",
+                "MG",
+                "CA",
+                "ZN",
+                "FE",
+                "MN",
+                "CU",
+                "NI",
+                "CO",  # ions
+                "SO4",
+                "PO4",
+                "ACE",
+                "NME",  # common caps/cofactors
+                "SEP",
+                "TPO",
+                "PTR",  # phosphorylated residues
+            }
+        )
+
+    # Download PDB file if pdb_id is provided
+    if pdb_id and not in_file:
+        print(f"Downloading PDB structure for ID: {pdb_id}")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = rcsb.fetch(pdb_id, "cif", target_path=tmpdir)
+            pdbx_file = pdbx.CIFFile.read(file_path)
+            atom_array = pdbx.get_structure(pdbx_file, model=1, include_bonds=True)
+    else:
+        ## Load protein
+        in_path = Path(in_file)
+        if in_path.suffix.lower() == ".cif":
+            cif_file_obj = pdbx.CIFFile.read(str(in_file))
+            atom_array = pdbx.get_structure(
+                cif_file_obj,
+                model=1,
+                include_bonds=True,
+            )
+        else:
+            pdb_file_obj = pdb.PDBFile.read(str(in_file))
+            extra = ["charge"]
+            atom_array = pdb.get_structure(
+                pdb_file_obj,
+                model=1,
+                extra_fields=extra,
+                include_bonds=True,
+            )
+
+    res_names = np.unique(atom_array.res_name)
+
+    # Get all non-standard amino acids (water ligand, ...)
+    nonstd_res = [x for x in res_names if x not in aa_names]
+    print(f"Non-standard residues found in the protein: {nonstd_res}")
+
+    # Mask to keep protein and others, no ligand
+    if exclude_res is None:
+        # Auto-detect ligand residues if not specified
+        exclude_res = set()
+        for res in nonstd_res:
+            if res not in keep_residues:
+                exclude_res.add(res)
+        print(f"Auto-detected ligand residues to exclude: {exclude_res}")
+
+    mask_prot = np.ones(atom_array.res_name.shape, dtype=bool)
+    for res in exclude_res:
+        mask_prot &= atom_array.res_name != res
+    prot_atom_array = atom_array[mask_prot]
+
+    if not exclude_res:
+        print(
+            "Warning: No ligand residues identified to exclude. Output will be identical to input."
+        )
+
+    # Check if we have any atoms left
+    if len(prot_atom_array) == 0:
+        raise ValueError(
+            f"No atoms remaining after excluding residues {exclude_res}. "
+            "Check that the input file contains protein atoms."
+        )
+
+    print(f"Kept {len(prot_atom_array)} atoms after excluding ligand residues")
+
+    # Check water molecules specifically
+    water_mask = np.isin(prot_atom_array.res_name, ["HOH", "WAT", "H2O"])
+    if water_mask.sum() > 0:
+        print(f"Found {water_mask.sum()} water molecules in protein structure.")
+        print("Water chain IDs:", np.unique(prot_atom_array.chain_id[water_mask]))
+        print("Water res IDs:", np.unique(prot_atom_array.res_id[water_mask]))
+
+        # The water likely has empty chain IDs - assign them a chain, otherwise this causes issues downstream
+        empty_chain_mask = water_mask & (prot_atom_array.chain_id == "")
+        if empty_chain_mask.sum() > 0:
+            prot_atom_array.chain_id[empty_chain_mask] = "W"
+
+    # Save as CIF file
+    if out_file.endswith(".cif"):
+        cif_file = pdbx.CIFFile()
+        pdbx.set_structure(cif_file, prot_atom_array)
+        cif_file.write(out_file)
+    else:
+        # Save as PDB file
+        pdb_file = pdb.PDBFile()
+        pdb.set_structure(pdb_file, prot_atom_array)
+        pdb_file.write(out_file)
+
+    if save_ligand:
+        # Save ligand-only structure
+        mask_ligand = np.zeros(atom_array.res_name.shape, dtype=bool)
+        for res in exclude_res:
+            if res not in exclude_by_default:
+                print(f"Saving ligand residue: {res}")
+                mask_ligand |= atom_array.res_name == res
+        ligand_atom_array = atom_array[mask_ligand]
+        lig_mol = rdkit.to_mol(ligand_atom_array)
+        write_sdf_file(ligand_out_file, [lig_mol], name=Path(ligand_out_file).stem)
+        print(
+            f"Saved ligand-only structure with {len(ligand_atom_array)} atoms to {ligand_out_file}"
+        )
 
 
 def process_pdb(

@@ -18,7 +18,6 @@ from flowr.gen.utils import (
 from flowr.scriptutil import (
     load_mol_model,
 )
-from flowr.util.device import get_device
 from flowr.util.molrepr import GeometricMolBatch
 
 warnings.filterwarnings(
@@ -65,7 +64,7 @@ def evaluate(args):
     ) = load_mol_model(
         args,
     )
-    model = model.to(get_device())
+    model = model.to("cuda")
     model.eval()
     print("Model complete.")
 
@@ -213,6 +212,7 @@ def get_args():
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--core_inpainting", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
+    parser.add_argument("--fragment_growing", action="store_true")
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument(
         "--substructure",

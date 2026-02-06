@@ -109,7 +109,8 @@ def main(args):
     print("Model complete.")
 
     print("Loading dataset statistics...")
-    statistics = util.build_data_statistic(hparams)
+    args.remove_hs = hparams["remove_hs"]
+    statistics = util.build_data_statistic(args)
     dataset_info = DataInfos(statistics, vocab, hparams)
     atom_types_distribution = dataset_info.atom_types.float()
     bond_types_distribution = dataset_info.edge_types.float()
@@ -130,7 +131,7 @@ def main(args):
     print("Datamodule complete.")
 
     # model = torch.compile(model)
-    trainer = util.build_trainer(args, model=model)
+    trainer = util.build_trainer(args, model=model, save_top_k=20)
     trainer.fit(
         model,
         datamodule=dm,
@@ -179,6 +180,9 @@ if __name__ == "__main__":
     ################################ DATALOADING ################################
     parser.add_argument("--data_path", type=str, default=None)
     parser.add_argument("--data_paths", type=str, nargs="+", default=None)
+    parser.add_argument("--splits_path", type=str, default=None)
+    parser.add_argument("--splits_paths", type=str, nargs="+", default=None)
+    parser.add_argument("--statistics_path", type=str, default=None)
     parser.add_argument("--dataset_weights", type=float, nargs="+", default=None)
     parser.add_argument("--sample_n_molecules_val", type=int, default=None)
 
@@ -269,9 +273,16 @@ if __name__ == "__main__":
         type=float,
         default=DEFAULT_INTERACTION_LOSS_WEIGHT,
     )
+    parser.add_argument("--bond_length_loss_weight", type=float, default=None)
+    parser.add_argument("--bond_angle_loss_weight", type=float, default=None)
+    parser.add_argument("--bond_angle_huber_delta", type=float, default=None)
+    parser.add_argument("--energy_loss_weight", type=float, default=None)
+    parser.add_argument("--energy_loss_weighting", type=str, default="constant")
+    parser.add_argument("--energy_loss_decay_rate", type=float, default=1.0)
     parser.add_argument("--use_t_loss_weights", action="store_true")
     parser.add_argument("--lr_schedule", type=str, default=DEFAULT_LR_SCHEDULE)
     parser.add_argument("--lr_gamma", type=float, default=DEFAULT_LR_GAMMA)
+    parser.add_argument("--cosine_decay_fraction", type=float, default=1.0)
     parser.add_argument("--warm_up_steps", type=int, default=DEFAULT_WARM_UP_STEPS)
     parser.add_argument("--use_ema", action="store_true")
     parser.add_argument("--ema_decay", type=float, default=0.998)
@@ -289,7 +300,7 @@ if __name__ == "__main__":
     parser.add_argument("--predict_interactions", action="store_true")
     parser.add_argument("--predict_affinity", action="store_true")
     parser.add_argument("--predict_docking_score", action="store_true")
-    parser.add_argument("--interaction_inpainting", action="store_true")
+    parser.add_argument("--interaction_conditional", action="store_true")
     parser.add_argument("--scaffold_inpainting", action="store_true")
     parser.add_argument(
         "--graph_inpainting",
@@ -300,6 +311,7 @@ if __name__ == "__main__":
     parser.add_argument("--mixed_uncond_inpaint", action="store_true")
     parser.add_argument("--func_group_inpainting", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
+    parser.add_argument("--fragment_growing", action="store_true")
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument("--substructure", type=str, default=None)

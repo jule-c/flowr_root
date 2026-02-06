@@ -72,12 +72,15 @@ python -m flowr.finetune \
     --batch_cost "$batch_cost" \
     --acc_batches "$acc_batches" \
     --val_batch_cost "$val_batch_cost" \
-    --coord_loss_weight 2.0 \
+    --coord_loss_weight 3.0 \
     --type_loss_weight 1.0 \
     --bond_loss_weight 3.0 \
     --charge_loss_weight 2.0 \
+    --bond_angle_loss_weight 10.0 \
+    --bond_angle_huber_delta 0.5 \
+    --bond_length_loss_weight 5.0 \
     --hybridization_loss_weight 1.0 \
-    --distance_loss_weight_lig_pocket 2.0 \
+    --distance_loss_weight_lig_pocket 10.0 \
     --coord_noise_std_dev 0.3 \
     --coord_noise_schedule "constant_decay" \
     --coord_noise_scale 0.0 \
@@ -97,10 +100,11 @@ python -m flowr.finetune \
     --permutation_alignment \
     --mixed_uncond_inpaint \
     --fragment_inpainting \
+    --fragment_growing \
     --scaffold_inpainting \
     --func_group_inpainting \
-    --linker_inpainting \
-    --core_inpainting \
+    --predict_affinity \
+    --affinity_loss_weight 3.0 \
     # --interaction_inpainting \
     # --docking_loss_weight 1.0 \
     # --plddt_confidence_loss_weight 1.0 \

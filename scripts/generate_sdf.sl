@@ -58,11 +58,9 @@ sample_mol_sizes="_sampled-mol-sizes"
 # CONDITIONAL GENERATION
 #conditional_generation=""
 #conditional_generation="_interaction-cond"
-#conditional_generation="_func-group-cond"
-#conditional_generation="_scaffold-cond"
-#conditional_generation="_linker-cond"
-#conditional_generation="_core-cond"
-conditional_generation="_substructure-cond"
+#conditional_generation="_func-group-inpaint"
+#conditional_generation="_scaffold-inpaint"
+conditional_generation="_substructure-inpaint"
 
 # SAVE DIR
 save_dir="$data_path/generate_hydantoin_optim_rdkit/processed$conditional_generation$sample_mol_sizes$noise_inject$sampling_steps$sample_strategy"
@@ -96,11 +94,15 @@ python -m flowr.gen.generate_from_sdf_mol \
     # --calculate_strain_energies \
     # --optimize_gen_mols_rdkit \
     # --optimize_gen_mols_xtb \
-    # --filter_pb_valid \
+    # --use_sde_simulation \
+    # --sample_mol_sizes \
     # --scaffold_inpainting \
     # --func_group_inpainting \
-    # --core_inpainting \
-    # --use_sde_simulation \
-    # --linker_inpainting \
-    # --sample_mol_sizes \
+    # --fragment_inpainting \
+    # --fragment_growing \
+    # --scaffold_inpainting \
+    # --func_group_inpainting \
+    # --substructure_inpainting \
+    # --substructure 0 2 8 9 10 11 12 13 23 24 25 26 27 28 29 \
+    # --filter_cond_substructure \
 
