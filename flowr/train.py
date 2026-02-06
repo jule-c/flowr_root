@@ -409,7 +409,7 @@ if __name__ == "__main__":
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument("--substructure", type=str, default=None)
     parser.add_argument("--linker_inpainting", action="store_true")
-    parser.add_argument("--core_inpainting", action="store_true")
+    parser.add_argument("--core_growing", action="store_true")
     parser.add_argument("--use_cosine_scheduler", action="store_true")
     parser.add_argument(
         "--categorical_strategy", type=str, default=DEFAULT_CATEGORICAL_STRATEGY

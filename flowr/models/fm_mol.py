@@ -68,7 +68,7 @@ class LigandCFM(pl.LightningModule):
         func_group_inpainting: bool = False,
         scaffold_inpainting: bool = False,
         fragment_inpainting: bool = False,
-        core_inpainting: bool = False,
+        core_growing: bool = False,
         linker_inpainting: bool = False,
         substructure_inpainting: bool = False,
         graph_inpainting: bool = False,
@@ -129,7 +129,7 @@ class LigandCFM(pl.LightningModule):
         self.scaffold_inpainting = scaffold_inpainting
         self.graph_inpainting = graph_inpainting
         self.fragment_inpainting = fragment_inpainting
-        self.core_inpainting = core_inpainting
+        self.core_growing = core_growing
         self.linker_inpainting = linker_inpainting
         self.substructure_inpainting = substructure_inpainting
         self.corrector_iters = corrector_iters
@@ -144,7 +144,7 @@ class LigandCFM(pl.LightningModule):
             or self.linker_inpainting
             or self.substructure_inpainting
             or self.fragment_inpainting
-            or self.core_inpainting
+            or self.core_growing
         ):
             self.inpainting_mode = True
             if self.graph_inpainting:
@@ -181,7 +181,7 @@ class LigandCFM(pl.LightningModule):
             "linker_inpainting": linker_inpainting,
             "substructure_inpainting": substructure_inpainting,
             "fragment_inpainting": fragment_inpainting,
-            "core_inpainting": core_inpainting,
+            "core_growing": core_growing,
             "corrector_iters": corrector_iters,
             "remove_hs": remove_hs,
             "remove_aromaticity": remove_aromaticity,

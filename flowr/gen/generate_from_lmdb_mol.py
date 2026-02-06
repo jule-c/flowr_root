@@ -210,7 +210,7 @@ def get_args():
     parser.add_argument("--scaffold_inpainting", action="store_true")
     parser.add_argument("--func_group_inpainting", action="store_true")
     parser.add_argument("--linker_inpainting", action="store_true")
-    parser.add_argument("--core_inpainting", action="store_true")
+    parser.add_argument("--core_growing", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
     parser.add_argument("--fragment_growing", action="store_true")
     parser.add_argument("--substructure_inpainting", action="store_true")

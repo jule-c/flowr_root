@@ -598,7 +598,7 @@ def get_args():
         help="XYZ file specifying the center for the random prior. The center of mass of all coordinates in the file will be used. Use with --fragment_growing."
     )
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
-    parser.add_argument("--core_inpainting", action="store_true")
+    parser.add_argument("--core_growing", action="store_true")
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument(
         "--substructure", 

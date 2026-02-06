@@ -1,7 +1,7 @@
 import random
 from abc import ABC, abstractmethod
 from itertools import zip_longest
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -501,8 +501,63 @@ def extract_func_groups(to_mols: list[Chem.Mol], invert_mask=False, includeHs=Fa
     ]
 
 
-def extract_cores(to_mols: list[Chem.Mol], invert_mask=False):
-    def cores_per_mol(mol, invert_mask=False):
+def get_ring_systems(mol) -> List[set]:
+    """
+    Get separate ring systems from a molecule.
+    Ring systems are groups of rings that share at least one atom.
+    """
+    ring_info = mol.GetRingInfo()
+    atom_rings = ring_info.AtomRings()
+
+    if not atom_rings:
+        return []
+
+    # Start with each ring as its own system
+    ring_systems = [set(ring) for ring in atom_rings]
+
+    # Merge ring systems that share atoms
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(ring_systems)):
+            for j in range(i + 1, len(ring_systems)):
+                if ring_systems[i] & ring_systems[j]:  # If they share atoms
+                    ring_systems[i] = ring_systems[i] | ring_systems[j]
+                    ring_systems.pop(j)
+                    merged = True
+                    break
+            if merged:
+                break
+
+    return ring_systems
+
+
+def get_num_ring_systems(mol) -> int:
+    """Get the number of separate ring systems in a molecule."""
+    _mol = Chem.Mol(mol)
+    try:
+        Chem.SanitizeMol(_mol)
+    except Exception:
+        return 0
+    return len(get_ring_systems(_mol))
+
+
+def extract_cores(
+    to_mols: list[Chem.Mol], invert_mask: bool = False, ring_system_index: int = 0
+):
+    def cores_per_mol(mol, invert_mask: bool = False, ring_system_index: int = 0):
+        """
+        Extract core atoms from an RDKit molecule.
+
+        Args:
+            mol: RDKit molecule
+            ring_system_index: If None, extract all ring systems (original behavior).
+                            If an integer, extract only that specific ring system (0-indexed).
+                            Use get_num_ring_systems() to check how many systems exist.
+
+        Returns:
+            Boolean tensor mask where True indicates core atoms.
+        """
         _mol = Chem.Mol(mol)
         try:
             Chem.SanitizeMol(_mol)
@@ -511,37 +566,60 @@ def extract_cores(to_mols: list[Chem.Mol], invert_mask=False):
                 "Cores could not be extracted as molecule could not be sanitized. Skipping."
             )
             return torch.zeros(mol.GetNumAtoms(), dtype=bool)
+
         # Retain original atom indices
         for a in _mol.GetAtoms():
             a.SetIntProp("org_idx", a.GetIdx())
 
         scaffold = GetScaffoldForMol(_mol)
-        scaffold_atoms = [a.GetIntProp("org_idx") for a in scaffold.GetAtoms()]
 
         if scaffold is None:
             print("Scaffold could not be extracted. Returning zero mask.")
             return torch.zeros(mol.GetNumAtoms(), dtype=bool)
-        # Collect indices for all atoms in rings
-        ring_atoms = set()
-        for ring in _mol.GetRingInfo().AtomRings():
-            ring_atoms.update(ring)
-        # Define core atoms as atoms in the scaffold that are in any ring
-        core_atoms = [a for a in scaffold_atoms if a in ring_atoms]
-        if not core_atoms:
-            # No core atoms found, return a zero mask (i.e. mask with all zeros)
-            # print("No core atoms found. Returning zero mask.")
+
+        scaffold_atoms = [a.GetIntProp("org_idx") for a in scaffold.GetAtoms()]
+
+        # Get ring systems
+        ring_systems = get_ring_systems(_mol)
+
+        if not ring_systems:
             return torch.zeros(_mol.GetNumAtoms(), dtype=bool)
-        # Otherwise, start with a mask that is 0 for every atom, then unmask core atoms (set them to 1)
+
+        # Select which ring atoms to use
+        if ring_system_index is not None:
+            if ring_system_index < 0 or ring_system_index >= len(ring_systems):
+                print(
+                    f"ring_system_index {ring_system_index} out of range. "
+                    f"Molecule has {len(ring_systems)} ring system(s). Returning zero mask."
+                )
+                return torch.zeros(_mol.GetNumAtoms(), dtype=bool)
+            ring_atoms = ring_systems[ring_system_index]
+        else:
+            # Original behavior: use all ring atoms
+            ring_atoms = set()
+            for ring_system in ring_systems:
+                ring_atoms.update(ring_system)
+
+        # Define core atoms as atoms in the scaffold that are in selected ring(s)
+        core_atoms = [a for a in scaffold_atoms if a in ring_atoms]
+
+        if not core_atoms:
+            return torch.zeros(_mol.GetNumAtoms(), dtype=bool)
+
         mask = torch.zeros(_mol.GetNumAtoms(), dtype=bool)
         try:
             mask[torch.tensor(core_atoms)] = 1
         except Exception as e:
             print(e)
+
         if invert_mask:
             mask = ~mask
         return mask
 
-    return [cores_per_mol(mol, invert_mask=invert_mask) for mol in to_mols]
+    return [
+        cores_per_mol(mol, invert_mask=invert_mask, ring_system_index=ring_system_index)
+        for mol in to_mols
+    ]
 
 
 def extract_linkers(to_mols: list[Chem.Mol], invert_mask=False):
@@ -1533,7 +1611,7 @@ class GeometricInterpolant(Interpolant):
         scaffold_inpainting: bool = False,
         func_group_inpainting: bool = False,
         linker_inpainting: bool = False,
-        core_inpainting: bool = False,
+        core_growing: bool = False,
         max_fragment_cuts: int = 3,
         fragment_inpainting: bool = False,
         fragment_growing: bool = False,
@@ -1588,7 +1666,7 @@ class GeometricInterpolant(Interpolant):
         self.scaffold_inpainting = scaffold_inpainting
         self.func_group_inpainting = func_group_inpainting
         self.linker_inpainting = linker_inpainting
-        self.core_inpainting = core_inpainting
+        self.core_growing = core_growing
         self.fragment_inpainting = fragment_inpainting
         self.fragment_growing = fragment_growing
         self.grow_size = grow_size
@@ -1621,7 +1699,7 @@ class GeometricInterpolant(Interpolant):
             scaffold_inpainting
             or func_group_inpainting
             or linker_inpainting
-            or core_inpainting
+            or core_growing
             or substructure_inpainting
             or fragment_inpainting
             or fragment_growing
@@ -1671,7 +1749,7 @@ class GeometricInterpolant(Interpolant):
             "scaffold_inpainting",
             "func_group_inpainting",
             "linker_inpainting",
-            "core_inpainting",
+            "core_growing",
             "fragment_growing",
             "graph_inpainting",
         }
@@ -2237,7 +2315,7 @@ class GeometricInterpolant(Interpolant):
             active_global_modes.append("func_group")
         if self.linker_inpainting:
             active_global_modes.append("linker")
-        if self.core_inpainting:
+        if self.core_growing:
             active_global_modes.append("core")
         if interaction_mask is not None:
             active_global_modes.append("interaction")
@@ -2319,7 +2397,7 @@ class GeometricInterpolant(Interpolant):
             elif mode == "linker":
                 mask = extract_linkers([rdkit_mols[i]], invert_mask=True)[0]
             elif mode == "core":
-                mask = extract_cores([rdkit_mols[i]], invert_mask=True)[0]
+                mask = extract_cores([rdkit_mols[i]], invert_mask=False)[0]
             elif mode == "fragment_growing":
                 # If grow_size is set, the input ligand IS the fragment to grow
                 # All atoms are fixed (mask = all True)
@@ -2659,7 +2737,7 @@ class ComplexInterpolant(GeometricInterpolant):
         scaffold_inpainting: bool = False,
         func_group_inpainting: bool = False,
         linker_inpainting: bool = False,
-        core_inpainting: bool = False,
+        core_growing: bool = False,
         max_fragment_cuts: int = 3,
         fragment_inpainting: bool = False,
         fragment_growing: bool = False,
@@ -2694,7 +2772,7 @@ class ComplexInterpolant(GeometricInterpolant):
             scaffold_inpainting=scaffold_inpainting,
             func_group_inpainting=func_group_inpainting,
             linker_inpainting=linker_inpainting,
-            core_inpainting=core_inpainting,
+            core_growing=core_growing,
             fragment_inpainting=fragment_inpainting,
             fragment_growing=fragment_growing,
             grow_size=grow_size,

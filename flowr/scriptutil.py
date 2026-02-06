@@ -781,7 +781,7 @@ def build_model(
         use_inpaint_mode_embed=args.scaffold_inpainting
         or args.func_group_inpainting
         or args.interaction_conditional
-        or args.core_inpainting
+        or args.core_growing
         or args.linker_inpainting
         or args.fragment_inpainting
         or args.fragment_growing
@@ -921,7 +921,7 @@ def build_model(
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         linker_inpainting=args.linker_inpainting,
-        core_inpainting=args.core_inpainting,
+        core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
         fragment_growing=args.fragment_growing,
         substructure_inpainting=args.substructure_inpainting,
@@ -951,7 +951,7 @@ def load_model(
         hparams.get("scaffold_inpainting", False)
         or hparams.get("func_group_inpainting", False)
         or hparams.get("interaction_conditional", False)
-        or hparams.get("core_inpainting", False)
+        or hparams.get("core_growing", False)
         or hparams.get("linker_inpainting", False)
         or hparams.get("fragment_inpainting", False)
         or hparams.get("fragment_growing", False)
@@ -961,7 +961,7 @@ def load_model(
     hparams["scaffold_inpainting"] = args.scaffold_inpainting
     hparams["func_group_inpainting"] = args.func_group_inpainting
     hparams["linker_inpainting"] = args.linker_inpainting
-    hparams["core_inpainting"] = args.core_inpainting
+    hparams["core_growing"] = args.core_growing
     hparams["fragment_inpainting"] = args.fragment_inpainting
     hparams["fragment_growing"] = args.fragment_growing
     hparams["substructure_inpainting"] = args.substructure_inpainting
@@ -1459,7 +1459,7 @@ def load_mol_model(
     hparams["use_inpaint_mode_embed"] = (
         hparams.get("scaffold_inpainting", False)
         or hparams.get("func_group_inpainting", False)
-        or hparams.get("core_inpainting", False)
+        or hparams.get("core_growing", False)
         or hparams.get("linker_inpainting", False)
         or hparams.get("fragment_inpainting", False)
         or hparams.get("substructure_inpainting", False)
@@ -1467,7 +1467,7 @@ def load_mol_model(
     hparams["scaffold_inpainting"] = args.scaffold_inpainting
     hparams["func_group_inpainting"] = args.func_group_inpainting
     hparams["linker_inpainting"] = args.linker_inpainting
-    hparams["core_inpainting"] = args.core_inpainting
+    hparams["core_growing"] = args.core_growing
     hparams["fragment_inpainting"] = args.fragment_inpainting
     hparams["fragment_growing"] = args.fragment_growing
     hparams["substructure_inpainting"] = args.substructure_inpainting
@@ -1731,7 +1731,7 @@ def build_mol_model(
         graph_inpainting=args.graph_inpainting,
         use_inpaint_mode_embed=args.scaffold_inpainting
         or args.func_group_inpainting
-        or args.core_inpainting
+        or args.core_growing
         or args.linker_inpainting
         or args.fragment_inpainting
         or args.fragment_growing
@@ -1843,7 +1843,7 @@ def build_mol_model(
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         linker_inpainting=args.linker_inpainting,
-        core_inpainting=args.core_inpainting,
+        core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
         fragment_growing=args.fragment_growing,
         substructure_inpainting=args.substructure_inpainting,
@@ -2336,7 +2336,7 @@ def build_dm(
         substructure_inpainting=args.substructure_inpainting,
         substructure=args.substructure,
         linker_inpainting=args.linker_inpainting,
-        core_inpainting=args.core_inpainting,
+        core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
         fragment_growing=args.fragment_growing,
         max_fragment_cuts=args.max_fragment_cuts,
@@ -2389,7 +2389,7 @@ def build_dm(
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         linker_inpainting=args.linker_inpainting,
-        core_inpainting=args.core_inpainting,
+        core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
         fragment_growing=args.fragment_growing,
         max_fragment_cuts=args.max_fragment_cuts,
@@ -2405,7 +2405,7 @@ def build_dm(
             or args.substructure_inpainting
             or args.scaffold_inpainting
             or args.interaction_conditional
-            or args.core_inpainting
+            or args.core_growing
         )
         and args.rotation_alignment,
         permutation_alignment=(
@@ -2416,7 +2416,7 @@ def build_dm(
             or args.substructure_inpainting
             or args.scaffold_inpainting
             or args.interaction_conditional
-            or args.core_inpainting
+            or args.core_growing
         )
         and args.permutation_alignment,
         sample_mol_sizes=getattr(args, "sample_mol_sizes", False),
@@ -2567,7 +2567,7 @@ def load_dm(
             substructure_inpainting=args.substructure_inpainting,
             substructure=args.substructure,
             linker_inpainting=args.linker_inpainting,
-            core_inpainting=args.core_inpainting,
+            core_growing=args.core_growing,
             fragment_inpainting=args.fragment_inpainting,
             fragment_growing=args.fragment_growing,
             max_fragment_cuts=args.max_fragment_cuts,
@@ -2613,7 +2613,7 @@ def load_dm(
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         linker_inpainting=args.linker_inpainting,
-        core_inpainting=args.core_inpainting,
+        core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
         fragment_growing=args.fragment_growing,
         max_fragment_cuts=args.max_fragment_cuts,
@@ -2633,7 +2633,7 @@ def load_dm(
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
-            or args.core_inpainting
+            or args.core_growing
         )
         and args.rotation_alignment,
         permutation_alignment=(
@@ -2643,7 +2643,7 @@ def load_dm(
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
-            or args.core_inpainting
+            or args.core_growing
         )
         and args.permutation_alignment,
         inference=True,
@@ -3029,7 +3029,7 @@ def build_mol_dm(
         fragment_inpainting=args.fragment_inpainting,
         fragment_growing=args.fragment_growing,
         graph_inpainting=args.graph_inpainting,
-        core_inpainting=args.core_inpainting,
+        core_growing=args.core_growing,
         max_fragment_cuts=args.max_fragment_cuts,
         mixed_uncond_inpaint=args.mixed_uncond_inpaint,
         mixed_uniform_beta_time=args.mixed_uniform_beta_time,
@@ -3055,7 +3055,7 @@ def build_mol_dm(
         fragment_inpainting=args.fragment_inpainting,
         fragment_growing=args.fragment_growing,
         graph_inpainting=args.graph_inpainting,
-        core_inpainting=args.core_inpainting,
+        core_growing=args.core_growing,
         max_fragment_cuts=args.max_fragment_cuts,
         vocab=vocab,
         vocab_charges=vocab_charges,

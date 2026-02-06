@@ -116,7 +116,7 @@ sbatch scripts/generate_pdb.sl
 - `--fragment_growing`: Fragment-constrained generation (using provided fragment to grow from)
 - `--grow_size`: Number of atoms to grow additional to given fragment (only for fragment_growing mode)
 - `--prior_center_file`: Provide starting coordinate(s)/density as xyz file (can be std. xyz-file, only x y z, or numpy array-like 2d matrix; only for fragment_growing mode)
-- `--fragment_growing`: Fragment-constrained generation (using provided fragment to grow from)
+- `--core_growing`: Core-constrained generation (using RDKit to extract a core; if multiple cores, select by index--defaults to 0)
 - `--scaffold_inpainting`: Scaffold generation (using RDKit to extract functional groups)
 - `--func_group_inpainting`: Functional group generation (using RDKit to extract scaffold)
 - `--interaction_conditional`: Interaction-constrained generation mode (using ProLIF to extract interactions)

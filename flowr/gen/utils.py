@@ -199,7 +199,7 @@ def get_conditional_mode(args):
                 if args.linker_inpainting
                 else (
                     "core"
-                    if args.core_inpainting
+                    if args.core_growing
                     else (
                         "fragment_growing"
                         if getattr(args, "fragment_growing", False)
@@ -465,7 +465,7 @@ def load_util(
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         linker_inpainting=args.linker_inpainting,
-        core_inpainting=args.core_inpainting,
+        core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
         fragment_growing=getattr(args, "fragment_growing", False),
         grow_size=getattr(args, "grow_size", None),
@@ -487,7 +487,7 @@ def load_util(
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
-            or args.core_inpainting
+            or args.core_growing
         )
         and args.rotation_alignment,
         permutation_alignment=(
@@ -497,7 +497,7 @@ def load_util(
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
-            or args.core_inpainting
+            or args.core_growing
         )
         and args.permutation_alignment,
         inference=True,
@@ -591,7 +591,7 @@ def load_util_mol(
         scaffold_inpainting=args.scaffold_inpainting,
         func_group_inpainting=args.func_group_inpainting,
         linker_inpainting=args.linker_inpainting,
-        core_inpainting=args.core_inpainting,
+        core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
         fragment_growing=getattr(args, "fragment_growing", False),
         max_fragment_cuts=args.max_fragment_cuts,
@@ -611,7 +611,7 @@ def load_util_mol(
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
-            or args.core_inpainting
+            or args.core_growing
         )
         and args.rotation_alignment,
         permutation_alignment=(
@@ -621,7 +621,7 @@ def load_util_mol(
             or args.func_group_inpainting
             or args.substructure_inpainting
             or args.scaffold_inpainting
-            or args.core_inpainting
+            or args.core_growing
         )
         and args.permutation_alignment,
         inference=True,
