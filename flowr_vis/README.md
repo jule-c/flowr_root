@@ -27,7 +27,7 @@ Browser ──► server.py (CPU) ──► worker.py (GPU)
                 └─ chem_utils.py (shared chemistry)
 ```
 
-## Quick Start (Local)
+## Quick Start
 
 ### 1. Set up the conda environment
 
