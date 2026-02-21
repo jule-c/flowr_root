@@ -1,0 +1,22 @@
+# FLOWR Visualization — Frontend Server (CPU-only)
+# ==================================================
+# This is the lightweight server that handles the UI,
+# file uploads, molecule parsing, and proxying generation
+# requests to the GPU worker.
+#
+# NO PyTorch or FLOWR dependencies required.
+# ==================================================
+
+# Core web server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+requests>=2.31.0
+
+# Chemistry (CPU-only)
+rdkit>=2024.3.1
+numpy>=1.24.0
+
+# Dimensionality reduction for chemical space visualization
+scikit-learn>=1.3.0
+umap-learn>=0.5.0

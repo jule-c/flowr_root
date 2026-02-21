@@ -17,6 +17,7 @@ from flowr.gen.generate import generate_ligands_per_target
 from flowr.scriptutil import (
     load_model,
 )
+from flowr.util.device import get_device, clear_cache
 from flowr.util.pocket import PocketComplexBatch
 
 warnings.filterwarnings(
@@ -64,7 +65,7 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to("cuda")
+    model = model.to(get_device())
     model.eval()
     print("Model complete.")
 
@@ -238,7 +239,7 @@ def evaluate(args):
         print(f"Validity of generated ligands: {np.mean(validities):.3f}\n")
 
         # Empty the cache
-        torch.cuda.empty_cache()
+        clear_cache()
 
     # Save out_dict as pickle file
     if args.filter_valid_unique:
@@ -300,8 +301,8 @@ def get_args():
     parser.add_argument("--interaction_time", type=float, default=None)
     parser.add_argument("--resampling_steps", type=int, default=None)
     parser.add_argument("--interaction_conditional", action="store_true")
-    parser.add_argument("--scaffold_inpainting", action="store_true")
-    parser.add_argument("--func_group_inpainting", action="store_true")
+    parser.add_argument("--scaffold_hopping", action="store_true")
+    parser.add_argument("--scaffold_elaboration", action="store_true")
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--core_growing", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
@@ -321,6 +322,7 @@ def get_args():
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--rotation_alignment", action="store_true")
     parser.add_argument("--permutation_alignment", action="store_true")
+    parser.add_argument("--anisotropic_prior", action="store_true")
     parser.add_argument("--separate_pocket_interpolation", action="store_true")
     parser.add_argument("--separate_interaction_interpolation", action="store_true")
     parser.add_argument(

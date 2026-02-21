@@ -205,6 +205,7 @@ def get_args():
     parser.add_argument("--corrector_iters", type=int, default=0)
     parser.add_argument("--rotation_alignment", action="store_true")
     parser.add_argument("--permutation_alignment", action="store_true")
+    parser.add_argument("--anisotropic_prior", action="store_true")
 
     parser.add_argument("--batch_cost", type=int, default=1)
     parser.add_argument("--ligand_time", type=float, default=None)
@@ -212,8 +213,8 @@ def get_args():
     parser.add_argument("--interaction_time", type=float, default=None)
     parser.add_argument("--fixed_interactions", action="store_true")
     parser.add_argument("--interaction_inpainting", action="store_true")
-    parser.add_argument("--scaffold_inpainting", action="store_true")
-    parser.add_argument("--func_group_inpainting", action="store_true")
+    parser.add_argument("--scaffold_hopping", action="store_true")
+    parser.add_argument("--scaffold_elaboration", action="store_true")
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
     parser.add_argument("--max_fragment_cuts", type=int, default=3)

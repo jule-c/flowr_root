@@ -65,8 +65,8 @@ class LigandCFM(pl.LightningModule):
         train_mols: Optional[list[str]] = None,
         type_mask_index: Optional[int] = None,
         bond_mask_index: Optional[int] = None,
-        func_group_inpainting: bool = False,
-        scaffold_inpainting: bool = False,
+        scaffold_elaboration: bool = False,
+        scaffold_hopping: bool = False,
         fragment_inpainting: bool = False,
         core_growing: bool = False,
         linker_inpainting: bool = False,
@@ -125,8 +125,8 @@ class LigandCFM(pl.LightningModule):
         self.total_steps = total_steps
         self.type_mask_index = type_mask_index
         self.bond_mask_index = bond_mask_index
-        self.func_group_inpainting = func_group_inpainting
-        self.scaffold_inpainting = scaffold_inpainting
+        self.scaffold_elaboration = scaffold_elaboration
+        self.scaffold_hopping = scaffold_hopping
         self.graph_inpainting = graph_inpainting
         self.fragment_inpainting = fragment_inpainting
         self.core_growing = core_growing
@@ -139,8 +139,8 @@ class LigandCFM(pl.LightningModule):
 
         # Conditional mode
         if (
-            self.func_group_inpainting
-            or self.scaffold_inpainting
+            self.scaffold_elaboration
+            or self.scaffold_hopping
             or self.linker_inpainting
             or self.substructure_inpainting
             or self.fragment_inpainting
@@ -176,8 +176,8 @@ class LigandCFM(pl.LightningModule):
             "type_strategy": type_strategy,
             "bond_strategy": bond_strategy,
             "self_condition": self_condition,
-            "func_group_inpainting": func_group_inpainting,
-            "scaffold_inpainting": scaffold_inpainting,
+            "scaffold_elaboration": scaffold_elaboration,
+            "scaffold_hopping": scaffold_hopping,
             "linker_inpainting": linker_inpainting,
             "substructure_inpainting": substructure_inpainting,
             "fragment_inpainting": fragment_inpainting,

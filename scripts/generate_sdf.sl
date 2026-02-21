@@ -96,12 +96,12 @@ python -m flowr.gen.generate_from_sdf_mol \
     # --optimize_gen_mols_xtb \
     # --use_sde_simulation \
     # --sample_mol_sizes \
-    # --scaffold_inpainting \
-    # --func_group_inpainting \
+    # --scaffold_hopping \
+    # --scaffold_elaboration \
     # --fragment_inpainting \
     # --fragment_growing \
-    # --scaffold_inpainting \
-    # --func_group_inpainting \
+    # --scaffold_hopping \
+    # --scaffold_elaboration \
     # --substructure_inpainting \
     # --substructure 0 2 8 9 10 11 12 13 23 24 25 26 27 28 29 \
     # --filter_cond_substructure \

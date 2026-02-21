@@ -344,8 +344,8 @@ class LigandPocketCFM(pl.LightningModule):
         flow_interactions: bool = False,
         predict_interactions: bool = False,
         interaction_conditional: bool = False,
-        func_group_inpainting: bool = False,
-        scaffold_inpainting: bool = False,
+        scaffold_elaboration: bool = False,
+        scaffold_hopping: bool = False,
         fragment_inpainting: bool = False,
         fragment_growing: bool = False,
         core_growing: bool = False,
@@ -447,8 +447,8 @@ class LigandPocketCFM(pl.LightningModule):
         self.flow_interactions = flow_interactions
         self.predict_interactions = predict_interactions
         self.interaction_conditional = interaction_conditional
-        self.func_group_inpainting = func_group_inpainting
-        self.scaffold_inpainting = scaffold_inpainting
+        self.scaffold_elaboration = scaffold_elaboration
+        self.scaffold_hopping = scaffold_hopping
         self.graph_inpainting = graph_inpainting
         self.fragment_inpainting = fragment_inpainting
         self.fragment_growing = fragment_growing
@@ -468,8 +468,8 @@ class LigandPocketCFM(pl.LightningModule):
 
         if (
             self.interaction_conditional
-            or self.func_group_inpainting
-            or self.scaffold_inpainting
+            or self.scaffold_elaboration
+            or self.scaffold_hopping
             or self.linker_inpainting
             or self.substructure_inpainting
             or self.fragment_inpainting
@@ -519,8 +519,8 @@ class LigandPocketCFM(pl.LightningModule):
             "flow_interactions": flow_interactions,
             "predict_interactions": predict_interactions,
             "interaction_conditional": interaction_conditional,
-            "func_group_inpainting": func_group_inpainting,
-            "scaffold_inpainting": scaffold_inpainting,
+            "scaffold_elaboration": scaffold_elaboration,
+            "scaffold_hopping": scaffold_hopping,
             "linker_inpainting": linker_inpainting,
             "substructure_inpainting": substructure_inpainting,
             "fragment_inpainting": fragment_inpainting,
@@ -856,7 +856,7 @@ class LigandPocketCFM(pl.LightningModule):
         # inpaint_mode = (
         #     torch.stack(
         #         [
-        #             torch.tensor(inpaint_mode_encoder[mode]).to("cuda")
+        #             torch.tensor(inpaint_mode_encoder[mode]).to(self.device)
         #             for mode in batch["fragment_mode"]
         #         ],
         #         dim=0,

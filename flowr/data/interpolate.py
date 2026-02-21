@@ -39,6 +39,152 @@ _ComplexInterpT = tuple[
 ]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Anisotropic Gaussian prior utilities
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ANISOTROPIC_APPLICABLE_MODES = frozenset(
+    {
+        "scaffold_hopping",
+        "scaffold_elaboration",
+        "linker_inpainting",
+        "core_growing",
+        "fragment_growing",
+    }
+)
+
+
+def compute_principal_axes(
+    coords: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute principal axes and variances of a point cloud via PCA.
+
+    Args:
+        coords: (N, 3) atom coordinates.
+
+    Returns:
+        eigenvalues: (3,) variances along principal axes (descending order).
+        eigenvectors: (3, 3) rotation matrix whose columns are the principal axes.
+    """
+    centered = coords - coords.mean(dim=0, keepdim=True)
+    cov = (centered.T @ centered) / max(coords.shape[0] - 1, 1)
+    eigenvalues, eigenvectors = torch.linalg.eigh(cov)
+    # Reverse to descending order
+    eigenvalues = eigenvalues.flip(0)
+    eigenvectors = eigenvectors.flip(1)
+    return eigenvalues, eigenvectors
+
+
+def compute_directional_covariance(
+    source_com: torch.Tensor,
+    target_com: torch.Tensor,
+    elongation: float = 2.0,
+    min_eigenvalue: float = 0.3,
+    max_eigenvalue: float = 3.0,
+) -> torch.Tensor:
+    """Build an anisotropic covariance elongated along a source→target direction.
+
+    The resulting covariance has its primary axis aligned with the growth
+    direction and standard variance perpendicular to it.
+
+    Args:
+        source_com: (3,) source centre of mass (e.g. fragment CoM).
+        target_com: (3,) target centre of mass (e.g. desired growth point).
+        elongation: Variance scale along the primary direction.
+        min_eigenvalue: Floor for eigenvalues.
+        max_eigenvalue: Ceiling for eigenvalues.
+
+    Returns:
+        covariance: (3, 3) covariance matrix.
+    """
+    direction = target_com - source_com
+    norm = torch.norm(direction)
+    if norm < 1e-6:
+        return torch.eye(3, device=source_com.device, dtype=source_com.dtype)
+    direction = direction / norm
+
+    # Build orthonormal basis via Gram–Schmidt
+    if abs(direction[0].item()) < 0.9:
+        ref = torch.tensor(
+            [1.0, 0.0, 0.0], device=direction.device, dtype=direction.dtype
+        )
+    else:
+        ref = torch.tensor(
+            [0.0, 1.0, 0.0], device=direction.device, dtype=direction.dtype
+        )
+    v2 = ref - (ref @ direction) * direction
+    v2 = v2 / (torch.norm(v2) + 1e-8)
+    v3 = torch.cross(direction, v2)
+
+    # Columns: [v2, v3, direction] — z-axis maps to the growth direction
+    rotation = torch.stack([v2, v3, direction], dim=1)
+
+    eigenvalues = torch.tensor(
+        [1.0, 1.0, elongation], device=source_com.device, dtype=source_com.dtype
+    )
+    eigenvalues = eigenvalues.clamp(min=min_eigenvalue, max=max_eigenvalue)
+
+    # Normalise so tr(Σ) = 3 (same expected ‖x₀‖² as isotropic N(0, I))
+    eigenvalues = eigenvalues * (3.0 / eigenvalues.sum())
+
+    covariance = rotation @ torch.diag(eigenvalues) @ rotation.T
+    return covariance
+
+
+def compute_shape_covariance(
+    coords: torch.Tensor,
+    scale: float = 1.0,
+    min_eigenvalue: float = 0.3,
+    max_eigenvalue: float = 3.0,
+) -> torch.Tensor:
+    """Build an anisotropic covariance that matches the shape of a point cloud.
+
+    Args:
+        coords: (N, 3) reference coordinates.
+        scale: Overall scale multiplier.
+        min_eigenvalue: Floor for eigenvalues.
+        max_eigenvalue: Ceiling for eigenvalues.
+
+    Returns:
+        covariance: (3, 3) covariance matrix.
+    """
+    if coords.shape[0] < 3:
+        return torch.eye(3, device=coords.device, dtype=coords.dtype) * scale
+
+    eigenvalues, eigenvectors = compute_principal_axes(coords)
+
+    # Normalise so tr(Σ) = 3, clamp, then re-normalise to preserve the invariant
+    eigenvalues = eigenvalues / (eigenvalues.sum() / 3.0 + 1e-8)
+    eigenvalues = eigenvalues.clamp(min=min_eigenvalue, max=max_eigenvalue)
+    eigenvalues = eigenvalues * (3.0 * scale / eigenvalues.sum())  # tr(Σ) = 3·scale
+
+    covariance = eigenvectors @ torch.diag(eigenvalues) @ eigenvectors.T
+    return covariance
+
+
+def sample_anisotropic_coords(
+    n_atoms: int,
+    covariance: torch.Tensor,
+) -> torch.Tensor:
+    """Sample coordinates from N(0, covariance).
+
+    Args:
+        n_atoms: Number of atoms to sample.
+        covariance: (3, 3) covariance matrix.
+
+    Returns:
+        coords: (n_atoms, 3) sampled coordinates.
+    """
+    # Symmetrise and add jitter for numerical stability
+    covariance = (covariance + covariance.T) / 2
+    covariance = covariance + 1e-6 * torch.eye(
+        3, device=covariance.device, dtype=covariance.dtype
+    )
+    L = torch.linalg.cholesky(covariance)
+    z = torch.randn(n_atoms, 3, device=covariance.device, dtype=covariance.dtype)
+    return z @ L.T
+
+
 def extract_fragments(
     to_mols: list[Chem.Mol],
     maxCuts: int = 3,
@@ -461,8 +607,10 @@ def extract_substructure(
     return mask
 
 
-def extract_func_groups(to_mols: list[Chem.Mol], invert_mask=False, includeHs=False):
-    def func_groups_per_mol(mol, invert_mask=False, includeHs=True):
+def extract_functional_groups(
+    to_mols: list[Chem.Mol], invert_mask=False, includeHs=False
+):
+    def functional_groups_per_mol(mol, invert_mask=False, includeHs=True):
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
         _mol = Chem.Mol(mol)
         try:
@@ -496,7 +644,92 @@ def extract_func_groups(to_mols: list[Chem.Mol], invert_mask=False, includeHs=Fa
         return mask
 
     return [
-        func_groups_per_mol(mol, invert_mask=invert_mask, includeHs=includeHs)
+        functional_groups_per_mol(mol, invert_mask=invert_mask, includeHs=includeHs)
+        for mol in to_mols
+    ]
+
+
+def extract_scaffold_elaboration(
+    to_mols: list[Chem.Mol], invert_mask=False, includeHs=False
+):
+    """Extract atoms for scaffold elaboration (R-group replacement).
+
+    Combines two signals to identify atoms that should be replaced:
+    1. Atoms NOT part of the Murcko scaffold (R-groups/decorations)
+    2. Functional group atoms identified by the IFG algorithm
+
+    Any atom that is part of a ring is excluded from the mask, since ring atoms
+    are part of the core structure and should not be replaced in elaboration.
+
+    Args:
+        to_mols: List of RDKit Mol objects
+        invert_mask: If True, invert the final mask
+        includeHs: If True, include neighboring H atoms
+
+    Returns:
+        List of boolean masks where True = elaboration atoms (to be replaced)
+    """
+
+    def elaboration_per_mol(mol, invert_mask=False, includeHs=True):
+        mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
+        _mol = Chem.Mol(mol)
+        try:
+            Chem.SanitizeMol(_mol)
+        except Exception:
+            print(
+                "Scaffold elaboration atoms could not be extracted as molecule "
+                "could not be sanitized. Skipping."
+            )
+            return mask
+
+        # 1. Get scaffold atoms (atoms that ARE the scaffold)
+        for a in _mol.GetAtoms():
+            a.SetIntProp("org_idx", a.GetIdx())
+        scaffold = GetScaffoldForMol(_mol)
+        scaffold_atom_set = set()
+        if scaffold is not None:
+            scaffold_atom_set = {a.GetIntProp("org_idx") for a in scaffold.GetAtoms()}
+
+        # 2. Get non-scaffold atoms (R-groups/decorations)
+        non_scaffold_indices = set(range(_mol.GetNumAtoms())) - scaffold_atom_set
+
+        # 3. Get functional group atoms
+        fgroups = identify_functional_groups(_mol)
+        functional_group_indices = set()
+        for f in fgroups:
+            functional_group_indices.update(f.atomIds)
+
+        # 4. Combine: atoms that are either non-scaffold OR functional groups
+        elaboration_indices = non_scaffold_indices | functional_group_indices
+
+        # 5. Exclude any atom that is part of a ring
+        ring_atoms = set()
+        for ring in _mol.GetRingInfo().AtomRings():
+            ring_atoms.update(ring)
+        elaboration_indices = elaboration_indices - ring_atoms
+
+        # 6. Include neighboring H atoms if requested
+        if includeHs:
+            elaboration_with_h = set()
+            for idx in elaboration_indices:
+                elaboration_with_h.add(idx)
+                for neighbor in _mol.GetAtomWithIdx(idx).GetNeighbors():
+                    if neighbor.GetSymbol() == "H":
+                        elaboration_with_h.add(neighbor.GetIdx())
+            elaboration_indices = elaboration_with_h
+
+        if len(elaboration_indices) > 0:
+            try:
+                mask[torch.tensor(list(elaboration_indices))] = 1
+            except Exception as e:
+                print(e)
+
+        if invert_mask:
+            mask = ~mask
+        return mask
+
+    return [
+        elaboration_per_mol(mol, invert_mask=invert_mask, includeHs=includeHs)
         for mol in to_mols
     ]
 
@@ -543,9 +776,17 @@ def get_num_ring_systems(mol) -> int:
 
 
 def extract_cores(
-    to_mols: list[Chem.Mol], invert_mask: bool = False, ring_system_index: int = 0
+    to_mols: list[Chem.Mol],
+    invert_mask: bool = False,
+    ring_system_index: int = 0,
+    random_select: bool = False,
 ):
-    def cores_per_mol(mol, invert_mask: bool = False, ring_system_index: int = 0):
+    def cores_per_mol(
+        mol,
+        invert_mask: bool = False,
+        ring_system_index: int = 0,
+        random_select: bool = False,
+    ):
         """
         Extract core atoms from an RDKit molecule.
 
@@ -554,6 +795,9 @@ def extract_cores(
             ring_system_index: If None, extract all ring systems (original behavior).
                             If an integer, extract only that specific ring system (0-indexed).
                             Use get_num_ring_systems() to check how many systems exist.
+                            Ignored when random_select=True.
+            random_select: If True, randomly select one ring system (for training).
+                          If False, use the fixed ring_system_index (for inference).
 
         Returns:
             Boolean tensor mask where True indicates core atoms.
@@ -586,7 +830,10 @@ def extract_cores(
             return torch.zeros(_mol.GetNumAtoms(), dtype=bool)
 
         # Select which ring atoms to use
-        if ring_system_index is not None:
+        if random_select:
+            # Training: randomly select one ring system so the model sees all cores
+            ring_atoms = random.choice(ring_systems)
+        elif ring_system_index is not None:
             if ring_system_index < 0 or ring_system_index >= len(ring_systems):
                 print(
                     f"ring_system_index {ring_system_index} out of range. "
@@ -617,7 +864,12 @@ def extract_cores(
         return mask
 
     return [
-        cores_per_mol(mol, invert_mask=invert_mask, ring_system_index=ring_system_index)
+        cores_per_mol(
+            mol,
+            invert_mask=invert_mask,
+            ring_system_index=ring_system_index,
+            random_select=random_select,
+        )
         for mol in to_mols
     ]
 
@@ -639,15 +891,16 @@ def extract_linkers(to_mols: list[Chem.Mol], invert_mask=False):
         if scaffold is None:
             print("Scaffold could not be extracted. Returning zero mask.")
             return torch.zeros(mol.GetNumAtoms(), dtype=bool)
-        # Collect indices for all atoms in rings
+        # Collect indices for all atoms in rings (using original molecule indices)
         ring_atoms = set()
         for ring in _mol.GetRingInfo().AtomRings():
             ring_atoms.update(ring)
         # Define linker atoms as atoms in the scaffold that are not in any ring
+        # Use org_idx (original molecule index) for comparison, NOT scaffold internal index
         linker_atoms = [
             a.GetIntProp("org_idx")
             for a in scaffold.GetAtoms()
-            if a.GetIdx() not in ring_atoms
+            if a.GetIntProp("org_idx") not in ring_atoms
         ]
         if not linker_atoms:
             # No linker atoms found, return a zero mask (i.e. mask with all zeros)
@@ -1471,10 +1724,18 @@ class GeometricNoiseSampler(NoiseSampler):
             print(f"Error in harmonic matrix diagonalization: {e}")
             return None, None
 
-    def sample_molecule(self, n_atoms: int, symmetrize: bool = False) -> GeometricMol:
+    def sample_molecule(
+        self,
+        n_atoms: int,
+        symmetrize: bool = False,
+        anisotropic_cov: Optional[torch.Tensor] = None,
+    ) -> GeometricMol:
 
-        # Sample coords and scale, if required
-        coords = self.coord_dist.sample((n_atoms, 3))
+        # Sample coords: anisotropic N(0, Σ) or isotropic N(0, I)
+        if anisotropic_cov is not None:
+            coords = sample_anisotropic_coords(n_atoms, anisotropic_cov)
+        else:
+            coords = self.coord_dist.sample((n_atoms, 3))
 
         if self.type_noise == "uniform-sample":
             atomics = torch.randint(1, self.vocab_size, (n_atoms,))
@@ -1608,8 +1869,8 @@ class GeometricInterpolant(Interpolant):
         fixed_time: Optional[float] = None,
         split_continuous_discrete_time: bool = False,
         mixed_uniform_beta_time: bool = False,
-        scaffold_inpainting: bool = False,
-        func_group_inpainting: bool = False,
+        scaffold_hopping: bool = False,
+        scaffold_elaboration: bool = False,
         linker_inpainting: bool = False,
         core_growing: bool = False,
         max_fragment_cuts: int = 3,
@@ -1631,6 +1892,7 @@ class GeometricInterpolant(Interpolant):
         rotation_alignment: bool = False,
         permutation_alignment: bool = False,
         fragment_size_variation: float = 0.1,
+        anisotropic_prior: bool = False,
     ):
 
         if fixed_time is not None and (fixed_time < 0 or fixed_time > 1):
@@ -1663,8 +1925,8 @@ class GeometricInterpolant(Interpolant):
         self.split_continuous_discrete_time = split_continuous_discrete_time
         self.graph_inpainting = graph_inpainting
         self.sample_mol_sizes = sample_mol_sizes
-        self.scaffold_inpainting = scaffold_inpainting
-        self.func_group_inpainting = func_group_inpainting
+        self.scaffold_hopping = scaffold_hopping
+        self.scaffold_elaboration = scaffold_elaboration
         self.linker_inpainting = linker_inpainting
         self.core_growing = core_growing
         self.fragment_inpainting = fragment_inpainting
@@ -1691,13 +1953,14 @@ class GeometricInterpolant(Interpolant):
         self.dataset = dataset
         self.inference = inference
         self.fragment_size_variation = fragment_size_variation
+        self.anisotropic_prior = anisotropic_prior
 
         self.vocab = vocab
         self.vocab_charges = vocab_charges
         self.vocab_hybridization = vocab_hybridization
         self.inpainting_mode = (
-            scaffold_inpainting
-            or func_group_inpainting
+            scaffold_hopping
+            or scaffold_elaboration
             or linker_inpainting
             or core_growing
             or substructure_inpainting
@@ -1746,8 +2009,8 @@ class GeometricInterpolant(Interpolant):
         # Global modes: everything else (keep the specified structure, generate the rest)
         self.local_modes = {"fragment_inpainting", "substructure_inpainting"}
         self.global_modes = {
-            "scaffold_inpainting",
-            "func_group_inpainting",
+            "scaffold_hopping",
+            "scaffold_elaboration",
             "linker_inpainting",
             "core_growing",
             "fragment_growing",
@@ -1975,6 +2238,51 @@ class GeometricInterpolant(Interpolant):
         times = torch.stack([times_cont, times_disc], dim=1)
         return from_mols, to_mols, interp_mols, times
 
+    def _compute_anisotropic_covariance(
+        self,
+        to_mol: GeometricMol,
+        mode: str,
+        mask: torch.Tensor,
+    ) -> Optional[torch.Tensor]:
+        """Compute an anisotropic covariance for the prior when ``self.anisotropic_prior`` is enabled.
+
+        Returns ``None`` when the feature is disabled or the mode is not applicable,
+        so that the default isotropic sampling path is used.
+
+        Applicable modes: scaffold_hopping, scaffold_elaboration, linker, core,
+        fragment_growing.
+        """
+        if not self.anisotropic_prior:
+            return None
+
+        if mode not in _ANISOTROPIC_APPLICABLE_MODES:
+            return None
+
+        coords = to_mol.coords  # (N, 3)
+
+        if mode == "fragment_growing" and self._transformed_prior_center is not None:
+            # Directional covariance: elongate along fragment→growth direction
+            fixed_indices = torch.where(mask)[0]
+            if len(fixed_indices) > 0:
+                source_com = coords[fixed_indices].mean(dim=0)
+                target_com = self._transformed_prior_center.to(coords.device).squeeze()
+                return compute_directional_covariance(source_com, target_com)
+            # Fall through to shape covariance
+            return compute_shape_covariance(coords)
+
+        if mode in ("core", "scaffold_hopping", "scaffold_elaboration"):
+            # Shape covariance from the *variable* atoms (the part being generated)
+            variable_indices = torch.where(~mask)[0]
+            if len(variable_indices) >= 3:
+                return compute_shape_covariance(coords[variable_indices])
+            return compute_shape_covariance(coords)
+
+        if mode == "linker":
+            # Shape covariance from the full molecule (linker bridges fixed parts)
+            return compute_shape_covariance(coords)
+
+        return None
+
     def _training_inpainting(
         self,
         to_mols: list[GeometricMol],
@@ -2002,14 +2310,25 @@ class GeometricInterpolant(Interpolant):
             to_mols, rdkit_mols, interaction_mask
         )
 
+        # Compute per-molecule anisotropic covariances (None when disabled)
+        if self.anisotropic_prior:
+            aniso_covs = [
+                self._compute_anisotropic_covariance(to_mol, mode, mask)
+                for to_mol, (mode, mask, _is_local) in zip(to_mols, modes_and_masks)
+            ]
+        else:
+            aniso_covs = [None] * batch_size
+
         # Align prior to reference (permutation + rotation)
         if self.permutation_alignment or self.rotation_alignment:
             # Sample prior molecules (standard size)
             from_mols = [
                 self.prior_sampler.sample_molecule(
-                    num_atoms, symmetrize=self.symmetrize
+                    num_atoms,
+                    symmetrize=self.symmetrize,
+                    anisotropic_cov=acov,
                 )
-                for _ in to_mols
+                for acov in aniso_covs
             ]
             from_mols = [
                 self._match_mols(from_mol, to_mol, mol_size=mol_size)
@@ -2018,17 +2337,19 @@ class GeometricInterpolant(Interpolant):
         else:
             # Sample prior molecules (standard size)
             from_mols = [
-                self.prior_sampler.sample_molecule(mol_size, symmetrize=self.symmetrize)
-                for mol_size in mol_sizes
+                self.prior_sampler.sample_molecule(
+                    mol_size,
+                    symmetrize=self.symmetrize,
+                    anisotropic_cov=acov,
+                )
+                for mol_size, acov in zip(mol_sizes, aniso_covs)
             ]
 
         # Apply inpainting logic based on mode
         from_mols = [
-            self._apply_training_inpainting(
-                from_mol, to_mol, rdkit_mol, mode, mask, is_local
-            )
-            for from_mol, to_mol, rdkit_mol, (mode, mask, is_local) in zip(
-                from_mols, to_mols, rdkit_mols, modes_and_masks
+            self._apply_training_inpainting(from_mol, to_mol, mode, mask, is_local)
+            for from_mol, to_mol, (mode, mask, is_local) in zip(
+                from_mols, to_mols, modes_and_masks
             )
         ]
 
@@ -2068,7 +2389,6 @@ class GeometricInterpolant(Interpolant):
         self,
         from_mol: GeometricMol,
         to_mol: GeometricMol,
-        rdkit_mol: Chem.Mol,
         mode: str,
         mask: torch.Tensor,
         is_local: bool,
@@ -2263,9 +2583,14 @@ class GeometricInterpolant(Interpolant):
         # Extract fixed fragment
         fixed_fragment = self._extract_submolecule(to_mol, fixed_indices)
 
+        # Compute anisotropic covariance for the variable fragment (None if disabled)
+        aniso_cov = self._compute_anisotropic_covariance(to_mol, mode, mask)
+
         # Sample variable fragment
         variable_fragment = self.prior_sampler.sample_molecule(
-            N_variable_sampled, symmetrize=self.symmetrize
+            N_variable_sampled,
+            symmetrize=self.symmetrize,
+            anisotropic_cov=aniso_cov,
         )
 
         # Shift variable fragment to prior center if specified (for fragment growing)
@@ -2309,22 +2634,22 @@ class GeometricInterpolant(Interpolant):
         active_local_modes = []
         active_graph_modes = []
 
-        if self.scaffold_inpainting:
-            active_global_modes.append("scaffold")
-        if self.func_group_inpainting:
-            active_global_modes.append("func_group")
+        if self.scaffold_hopping:
+            active_global_modes.append("scaffold_hopping")
+        if self.scaffold_elaboration:
+            active_global_modes.append("scaffold_elaboration")
         if self.linker_inpainting:
-            active_global_modes.append("linker")
+            active_global_modes.append("linker_inpainting")
         if self.core_growing:
-            active_global_modes.append("core")
+            active_global_modes.append("core_growing")
         if interaction_mask is not None:
-            active_global_modes.append("interaction")
+            active_global_modes.append("interaction_conditional")
         if self.fragment_growing:
             active_global_modes.append("fragment_growing")
         if self.fragment_inpainting:
             active_local_modes.append("fragment_inpainting")
         if self.substructure_inpainting and self.inference:
-            active_local_modes.append("substructure")
+            active_local_modes.append("substructure_inpainting")
         if self.graph_inpainting:
             active_graph_modes.append("graph")
 
@@ -2388,16 +2713,20 @@ class GeometricInterpolant(Interpolant):
                 # For graph inpainting, all atoms need coordinates generated
                 # but graph structure (types, bonds) is fixed
                 mask = torch.ones(to_mols[i].seq_length, dtype=torch.bool)
-            elif mode == "scaffold":
+            elif mode == "scaffold_hopping":
                 mask = extract_scaffolds([rdkit_mols[i]], invert_mask=True)[0]
-            elif mode == "func_group":
-                mask = extract_func_groups(
-                    [rdkit_mols[i]], invert_mask=True, includeHs=True
+            elif mode == "scaffold_elaboration":
+                mask = extract_scaffold_elaboration(
+                    [rdkit_mols[i]], invert_mask=True, includeHs=False
                 )[0]
-            elif mode == "linker":
+            elif mode == "linker_inpainting":
                 mask = extract_linkers([rdkit_mols[i]], invert_mask=True)[0]
-            elif mode == "core":
-                mask = extract_cores([rdkit_mols[i]], invert_mask=False)[0]
+            elif mode == "core_growing":
+                mask = extract_cores(
+                    [rdkit_mols[i]],
+                    invert_mask=False,
+                    ring_system_index=getattr(self, "ring_system_index", 0),
+                )[0]
             elif mode == "fragment_growing":
                 # If grow_size is set, the input ligand IS the fragment to grow
                 # All atoms are fixed (mask = all True)
@@ -2432,13 +2761,13 @@ class GeometricInterpolant(Interpolant):
                         maxCuts=self.max_fragment_cuts,
                         fragment_mode="fragment",
                     )[0]
-            elif mode == "substructure":
+            elif mode == "substructure_inpainting":
                 mask = extract_substructure(
                     [rdkit_mols[i]],
                     substructure_query=self.substructure,
                     invert_mask=False,
                 )[0]
-            elif mode == "interaction":
+            elif mode == "interaction_conditional":
                 mask = interaction_mask[i]
             else:
                 raise ValueError(f"Unknown mode: {mode}")
@@ -2734,8 +3063,8 @@ class ComplexInterpolant(GeometricInterpolant):
         dataset: str = "plinder",
         sample_mol_sizes: Optional[bool] = False,
         interaction_conditional: bool = False,
-        scaffold_inpainting: bool = False,
-        func_group_inpainting: bool = False,
+        scaffold_hopping: bool = False,
+        scaffold_elaboration: bool = False,
         linker_inpainting: bool = False,
         core_growing: bool = False,
         max_fragment_cuts: int = 3,
@@ -2755,6 +3084,7 @@ class ComplexInterpolant(GeometricInterpolant):
         batch_ot: bool = False,
         rotation_alignment: bool = False,
         permutation_alignment: bool = False,
+        anisotropic_prior: bool = False,
     ):
 
         super().__init__(
@@ -2769,8 +3099,8 @@ class ComplexInterpolant(GeometricInterpolant):
             fixed_time=ligand_fixed_time,
             split_continuous_discrete_time=split_continuous_discrete_time,
             mixed_uniform_beta_time=mixed_uniform_beta_time,
-            scaffold_inpainting=scaffold_inpainting,
-            func_group_inpainting=func_group_inpainting,
+            scaffold_hopping=scaffold_hopping,
+            scaffold_elaboration=scaffold_elaboration,
             linker_inpainting=linker_inpainting,
             core_growing=core_growing,
             fragment_inpainting=fragment_inpainting,
@@ -2791,6 +3121,7 @@ class ComplexInterpolant(GeometricInterpolant):
             batch_ot=batch_ot,
             rotation_alignment=rotation_alignment,
             permutation_alignment=permutation_alignment,
+            anisotropic_prior=anisotropic_prior,
         )
         if sample_mol_sizes:
             print("Running inference with sampled molecule sizes!")

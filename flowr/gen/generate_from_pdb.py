@@ -19,6 +19,7 @@ from flowr.gen.generate import generate_ligands_per_target
 from flowr.scriptutil import (
     load_model,
 )
+from flowr.util.device import get_device
 from flowr.util.functional import (
     LigandPocketOptimization,
 )
@@ -78,7 +79,7 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to("cuda")
+    model = model.to(get_device())
     model.eval()
     print("Model complete.")
 
@@ -561,6 +562,7 @@ def get_args():
     parser.add_argument("--corrector_iters", type=int, default=0)
     parser.add_argument("--rotation_alignment", action="store_true")
     parser.add_argument("--permutation_alignment", action="store_true")
+    parser.add_argument("--anisotropic_prior", action="store_true")
     parser.add_argument("--save_traj", action="store_true")
 
     # Filtering parameters
@@ -580,8 +582,8 @@ def get_args():
     parser.add_argument("--interaction_time", type=float, default=None)
     parser.add_argument("--fixed_interactions", action="store_true")
     parser.add_argument("--interaction_conditional", action="store_true")
-    parser.add_argument("--scaffold_inpainting", action="store_true")
-    parser.add_argument("--func_group_inpainting", action="store_true")
+    parser.add_argument("--scaffold_hopping", action="store_true")
+    parser.add_argument("--scaffold_elaboration", action="store_true")
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
     parser.add_argument("--fragment_growing", action="store_true")
@@ -599,6 +601,7 @@ def get_args():
     )
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--core_growing", action="store_true")
+    parser.add_argument("--ring_system_index", type=int, default=0, help="Index of the ring system to grow when using --core_growing")
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument(
         "--substructure", 

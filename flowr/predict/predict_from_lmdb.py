@@ -168,8 +168,8 @@ def get_args():
     parser.add_argument("--interaction_time", type=float, default=None)
     parser.add_argument("--resampling_steps", type=int, default=None)
     parser.add_argument("--interaction_inpainting", action="store_true")
-    parser.add_argument("--scaffold_inpainting", action="store_true")
-    parser.add_argument("--func_group_inpainting", action="store_true")
+    parser.add_argument("--scaffold_hopping", action="store_true")
+    parser.add_argument("--scaffold_elaboration", action="store_true")
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--core_inpainting", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
@@ -188,6 +188,7 @@ def get_args():
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--rotation_alignment", action="store_true")
     parser.add_argument("--permutation_alignment", action="store_true")
+    parser.add_argument("--anisotropic_prior", action="store_true")
     parser.add_argument("--separate_pocket_interpolation", action="store_true")
     parser.add_argument("--separate_interaction_interpolation", action="store_true")
     parser.add_argument(

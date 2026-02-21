@@ -910,6 +910,8 @@ def process_complex(
     ligand_mol: Chem.Mol = None,
     ligand_sdf_path: str = None,
     ligand_idx: int = 0,
+    num_heavy_atoms: int = None,
+    add_placeholder_ligand: bool = False,
     txt_path: str = None,
     chain_id: str = None,
     canonicalize_conformer: bool = False,
@@ -999,6 +1001,17 @@ def process_complex(
         if ligand is None:
             print("Could not process provided ligand molecule. Skipping.")
             return
+    elif add_placeholder_ligand:
+        # Create a placeholder ligand with the specified number of heavy atoms
+        if num_heavy_atoms is None:
+            raise ValueError(
+                "num_heavy_atoms must be specified when add_placeholder_ligand is True"
+            )
+        if cut_pocket:
+            raise ValueError(
+                "Either provide a protein pocket file, or a ligand_sdf_path/ligand_mol alongside the protein file to cut the pocket!"
+            )
+        ligand = GeometricMol.from_placeholder(num_heavy_atoms)
     else:
         if cut_pocket:
             raise ValueError(

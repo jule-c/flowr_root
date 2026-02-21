@@ -95,6 +95,14 @@ def dict_to_device(data_dict: dict, device=None) -> dict:
     return {k: v.to(device) if torch.is_tensor(v) else v for k, v in data_dict.items()}
 
 
+def clear_cache():
+    """Clear GPU memory cache for the current device (CUDA or MPS)."""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+
 def is_cuda_available() -> bool:
     """Check if CUDA is available."""
     return torch.cuda.is_available()

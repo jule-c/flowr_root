@@ -26,3 +26,11 @@ scripts/tests/
 
 # Local data
 .data/
+
+# HPC user configuration (contains user-specific paths)
+flowr_vis/hpc/hpc.env
+flowr_vis/hpc/worker_gamma.sh
+flowr_vis/hpc/run_hpc_frontend_gamma.sh
+
+# checkpoint files
+**/*.ckpt

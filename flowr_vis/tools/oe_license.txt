@@ -1,0 +1,216 @@
+################# STANDARD LICENSE ########################################
+#                                                                       #
+#   This file is a license for Cadence Design Systems, Inc. (Cadence).  #
+#   Any modifications to this file may invalidate the license.          #
+#                                                                       #
+#   Pfizer, Inc.                                                        #
+#   Global Research Sites                                               #
+#                                                                       #
+#   Fri Aug 15 17:28:45 2025                                            #
+#########################################################################
+#PRODUCT: afitt
+#EXP_DATE: 2026 09 30
+#FEATURES: beta
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 6902f372b4408a2695b914a8cb50ab1436aa0c62e1ea59c2ccf384dbf7504644
+#PRODUCT: bioisostere
+#EXP_DATE: 2026 09 30
+#FEATURES: python
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: e49563cc65f545a236b22f97eac6f09e025b00a1f2add4e242b3553799c9c31f
+#PRODUCT: bioisosteretk
+#EXP_DATE: 2026 09 30
+#FEATURES: python
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: df34681e3e9f3aea5e54ab4ffeb1f32756d891b340a85a7167e240921f98e869
+#PRODUCT: docking
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 9199b8eeff203d072ec54fe197624a997b517d7e8722b4f885f2cd566d7c4adf
+#PRODUCT: eon
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: fb3b90a12a063782349fd0c6d77dab2ad36e21070f5a45d133db816bc521bb64
+#PRODUCT: eontk
+#EXP_DATE: 2026 09 30
+#FEATURES: python
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: bc14f1138f49e8f10c7838ecb9186b7cfada5e80221ba35231621a4ffbf38d70
+#PRODUCT: fastrocs
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 72f97c040f24868cae541ad546b69bae9a4bfcc4c30acdd54e0c68d1d184776c
+#PRODUCT: filter
+#EXP_DATE: 2026 09 30
+#FEATURES: toolkit;python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: d786fe647bcbfc73df60866dcc3b9b18be53c150917b7352cb3a6acd9d9eeb00
+#PRODUCT: flynn
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 91fd68210574b1a1e3b373149b808dcbec4eaeeb8799e39b83e4775b77947b2c
+#PRODUCT: fred2
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: a591a6ff81987ecec85cbacfdeb93d3a37ddc596b69494bddebe6bd733722fe5
+#PRODUCT: grapheme
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: feccb244d636245a60ff628b0c173825d31bbd9a64cd31495c14a5bfcfcd3799
+#PRODUCT: graphsim
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 8b5306fb05f4f2ed43861155b063d9de2953a9acd0934921cebbb268cb97d76d
+#PRODUCT: iupac
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 0a92e75d997acbeb7ae9914614a71e6960150c4673f0e5e56bd6d0de878290a9
+#PRODUCT: oechem
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 1f6d7196407b1e26032081d2004f36c6c0eab8a58d6143a74b6a30f2b7b076a2
+#PRODUCT: oedepict
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 76f859250cf696893e0219912351dc3980561eee088527066e7f9b88ad9b1b9b
+#PRODUCT: oemedchem
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 59c3f2976e0bd2f44b52bd6ebae59eb6028d816a0d3cb861a070eb2c375f88dc
+#PRODUCT: omega
+#EXP_DATE: 2026 09 30
+#FEATURES: gas-phase;toolkit;python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: c8200ccc9296adf01c999ba92ca381a7e90936ae483545b459d794d8ce15595a
+#PRODUCT: omega-db
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: f9499c3e19fed7a1c7765abcf93a9f59bad021ce98b6915ac581fcb54954bca2
+#PRODUCT: picto
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 8c336780c6fc2473b6b542f72447878bdf5537b2f9cbc9e9f744b3db62d97bba
+#PRODUCT: pkadata
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 52ae0cb0f8ed9552c9ad741f9e89da08c22e19a39d916c6ada2183933af7d705
+#PRODUCT: posit
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 3f1e43e6b76708d512d3df99945cb9676f60cb9430faf6903c0b62113e8d9f22
+#PRODUCT: quacpac
+#EXP_DATE: 2026 09 30
+#FEATURES: beta;python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 9e053ee39bc77808e57f6d76fe4e451ffbb1486bc7d1dba0d707e5421a61eb4c
+#PRODUCT: rocs
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 639cc596672181022d29dc163c3ab03969180fef42251b44d144bc7e4662f4b3
+#PRODUCT: shape
+#EXP_DATE: 2026 09 30
+#FEATURES: molecules;grids;python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: c52282f37fe954dda6ffd43a10dbee5bd3e05717dae188b74446b75795ccd929
+#PRODUCT: sitehoppertk
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 7435b213ea534876a9c258f0bd503e5a3bca9687794b7a2e108e7b7172e70f30
+#PRODUCT: sitehopper
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: a0aa30672803759d0bf0071709084778ee0aa2370476bcbd223eb0440ae336a0
+#PRODUCT: spicoli
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 4d86591233c8e05019cf2370e86fc7ccd2706f1135fefb9454f1d31830eeb162
+#PRODUCT: sprucetk
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: e6c6b071deb6f9adb52b0c841f886939971b4fd9a99f4cf459ca7f755557dd7f
+#PRODUCT: spruce
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 58c2290e1db27d9cccfa71973569693404d40ff839e9b53a5e59c9dcb64869d9
+#PRODUCT: szmap
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 9b8927ccbed15da44cc51bdc8b3187f506595066bc070226796a6a3e00f82bd6
+#PRODUCT: szmaptk
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 50243ed665083cf0a945e24b8209dd59a2dbd1f90cf0557a4eda870a5a161bf3
+#PRODUCT: szybki
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: d5b3a2c62055f041ad8ffad08a9ce47ea52336b9ba059a1f1b2a7d6c2c1d4293
+#PRODUCT: case
+#EXP_DATE: 2026 09 30
+#FEATURES: python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 1a76f5748c3aa27faffa872ff68aad7b32c4395afc5a33bb46e12d25eaf76122
+#PRODUCT: vida
+#EXP_DATE: 2026 09 30
+#FEATURES: script line
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: af0431ee82d9151e8c8eec90357275fae27e4c73a6c5ef79865b53a0e511b5bb
+#PRODUCT: vivant
+#EXP_DATE: 2026 09 30
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: e15b969fc799fbcf7207af12ae7edb4d293aa17201e04ffe73dcaa45e7db8e9b
+#PRODUCT: zap
+#EXP_DATE: 2026 09 30
+#FEATURES: basic toolkit;protein pka;perfect charge;python;java;clr
+#LICENSEE: Pfizer, Inc.
+#SITE: Global Research Sites
+LICENSE_KEY: 72e656cde84dbf8c3d3ec4bb5a862819301150e975c998e0a9db4e3d77a810f8
+
+

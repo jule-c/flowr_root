@@ -82,8 +82,8 @@ python -m flowr.train \
     --mixed_uncond_inpaint \
     --fragment_inpainting \
     --fragment_growing \
-    --scaffold_inpainting \
-    --func_group_inpainting \
+    --scaffold_hopping \
+    --scaffold_elaboration \
     --predict_affinity \
     --affinity_loss_weight 1.0 \
     # --distance_loss_weight_lig 2.0 \

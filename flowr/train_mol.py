@@ -248,7 +248,7 @@ if __name__ == "__main__":
 
     ################################ INTERPOLATION ################################
     parser.add_argument("--scale_coords", action="store_true")
-    parser.add_argument("--scaffold_inpainting", action="store_true")
+    parser.add_argument("--scaffold_hopping", action="store_true")
     parser.add_argument(
         "--graph_inpainting",
         default=None,
@@ -256,7 +256,7 @@ if __name__ == "__main__":
         choices=["conformer", "random", "harmonic"],
     )
     parser.add_argument("--mixed_uncond_inpaint", action="store_true")
-    parser.add_argument("--func_group_inpainting", action="store_true")
+    parser.add_argument("--scaffold_elaboration", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--substructure_inpainting", action="store_true")
@@ -315,6 +315,7 @@ if __name__ == "__main__":
         action="store_true",
         default=DEFAULT_PERMUTATION_ALIGNMENT,
     )
+    parser.add_argument("--anisotropic_prior", action="store_true")
     parser.add_argument("--corrector_iters", type=int, default=DEFAULT_CORRECTOR_ITERS)
 
     ################################ DEFAULTS ################################

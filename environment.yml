@@ -1,10 +1,11 @@
-name: flowr_root
+name: flowr_root_test
 channels:
   - pytorch
   - nvidia
   - conda-forge
   - schrodinger
   - mx
+  - openeye
 dependencies:
   # Core Python
   - python=3.12.12
@@ -53,6 +54,7 @@ dependencies:
   - conda-forge::prody=2.6.1
   - conda-forge::datamol=0.12.5
   - conda-forge::pypdb=2.4
+  - openeye-toolkits
   
   # ML & Deep Learning utilities
   - conda-forge::lightning=2.6.0
@@ -89,3 +91,7 @@ dependencies:
       - torch_geometric==2.7.0
       - tensordict==0.10.0
       - gemmi==0.7.4
+      # FLOWR Visualization web server
+      - fastapi>=0.104.0
+      - uvicorn[standard]>=0.24.0
+      - python-multipart>=0.0.6

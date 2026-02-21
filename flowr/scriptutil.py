@@ -778,8 +778,8 @@ def build_model(
         use_lig_pocket_rbf=args.use_lig_pocket_rbf,
         use_fourier_time_embed=args.use_fourier_time_embed,
         graph_inpainting=args.graph_inpainting,
-        use_inpaint_mode_embed=args.scaffold_inpainting
-        or args.func_group_inpainting
+        use_inpaint_mode_embed=args.scaffold_hopping
+        or args.scaffold_elaboration
         or args.interaction_conditional
         or args.core_growing
         or args.linker_inpainting
@@ -918,8 +918,8 @@ def build_model(
         flow_interactions=args.flow_interactions,
         predict_interactions=args.predict_interactions,
         interaction_conditional=args.interaction_conditional,
-        scaffold_inpainting=args.scaffold_inpainting,
-        func_group_inpainting=args.func_group_inpainting,
+        scaffold_hopping=args.scaffold_hopping,
+        scaffold_elaboration=args.scaffold_elaboration,
         linker_inpainting=args.linker_inpainting,
         core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
@@ -941,15 +941,19 @@ def load_model(
     return_info: bool = True,
     dataset_info: Optional[dict] = None,
 ):
-    checkpoint = torch.load(args.ckpt_path if ckpt_path is None else ckpt_path)
+    checkpoint = torch.load(
+        args.ckpt_path if ckpt_path is None else ckpt_path,
+        map_location="cpu",
+        weights_only=False,
+    )
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
     # Set sampling hyperparameters
     hparams["integration-steps"] = args.integration_steps
     hparams["sampling_strategy"] = args.ode_sampling_strategy
     hparams["use_inpaint_mode_embed"] = (
-        hparams.get("scaffold_inpainting", False)
-        or hparams.get("func_group_inpainting", False)
+        hparams.get("scaffold_hopping", False)
+        or hparams.get("scaffold_elaboration", False)
         or hparams.get("interaction_conditional", False)
         or hparams.get("core_growing", False)
         or hparams.get("linker_inpainting", False)
@@ -958,8 +962,8 @@ def load_model(
         or hparams.get("substructure_inpainting", False)
     )
     hparams["interaction_conditional"] = args.interaction_conditional
-    hparams["scaffold_inpainting"] = args.scaffold_inpainting
-    hparams["func_group_inpainting"] = args.func_group_inpainting
+    hparams["scaffold_hopping"] = args.scaffold_hopping
+    hparams["scaffold_elaboration"] = args.scaffold_elaboration
     hparams["linker_inpainting"] = args.linker_inpainting
     hparams["core_growing"] = args.core_growing
     hparams["fragment_inpainting"] = args.fragment_inpainting
@@ -1447,7 +1451,11 @@ def load_mol_model(
     return_info: bool = True,
     dataset_info: Optional[dict] = None,
 ):
-    checkpoint = torch.load(args.ckpt_path if ckpt_path is None else ckpt_path)
+    checkpoint = torch.load(
+        args.ckpt_path if ckpt_path is None else ckpt_path,
+        map_location="cpu",
+        weights_only=False,
+    )
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
     # Set dataset and save paths
@@ -1457,15 +1465,15 @@ def load_mol_model(
     hparams["integration-steps"] = args.integration_steps
     hparams["sampling_strategy"] = args.ode_sampling_strategy
     hparams["use_inpaint_mode_embed"] = (
-        hparams.get("scaffold_inpainting", False)
-        or hparams.get("func_group_inpainting", False)
+        hparams.get("scaffold_hopping", False)
+        or hparams.get("scaffold_elaboration", False)
         or hparams.get("core_growing", False)
         or hparams.get("linker_inpainting", False)
         or hparams.get("fragment_inpainting", False)
         or hparams.get("substructure_inpainting", False)
     )
-    hparams["scaffold_inpainting"] = args.scaffold_inpainting
-    hparams["func_group_inpainting"] = args.func_group_inpainting
+    hparams["scaffold_hopping"] = args.scaffold_hopping
+    hparams["scaffold_elaboration"] = args.scaffold_elaboration
     hparams["linker_inpainting"] = args.linker_inpainting
     hparams["core_growing"] = args.core_growing
     hparams["fragment_inpainting"] = args.fragment_inpainting
@@ -1729,8 +1737,8 @@ def build_mol_model(
         use_crossproducts=args.use_crossproducts,
         use_fourier_time_embed=args.use_fourier_time_embed,
         graph_inpainting=args.graph_inpainting,
-        use_inpaint_mode_embed=args.scaffold_inpainting
-        or args.func_group_inpainting
+        use_inpaint_mode_embed=args.scaffold_hopping
+        or args.scaffold_elaboration
         or args.core_growing
         or args.linker_inpainting
         or args.fragment_inpainting
@@ -1840,8 +1848,8 @@ def build_mol_model(
         save_dir=args.save_dir,
         dataset_info=dataset_info,
         data_path=args.data_path,
-        scaffold_inpainting=args.scaffold_inpainting,
-        func_group_inpainting=args.func_group_inpainting,
+        scaffold_hopping=args.scaffold_hopping,
+        scaffold_elaboration=args.scaffold_elaboration,
         linker_inpainting=args.linker_inpainting,
         core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
@@ -2331,8 +2339,8 @@ def build_dm(
         interaction_time_beta=args.time_beta,
         flow_interactions=args.flow_interactions,
         interaction_conditional=args.interaction_conditional,
-        scaffold_inpainting=args.scaffold_inpainting,
-        func_group_inpainting=args.func_group_inpainting,
+        scaffold_hopping=args.scaffold_hopping,
+        scaffold_elaboration=args.scaffold_elaboration,
         substructure_inpainting=args.substructure_inpainting,
         substructure=args.substructure,
         linker_inpainting=args.linker_inpainting,
@@ -2356,6 +2364,7 @@ def build_dm(
         vocab_hybridization=vocab_hybridization,
         rotation_alignment=args.rotation_alignment,
         permutation_alignment=args.permutation_alignment,
+        anisotropic_prior=getattr(args, "anisotropic_prior", False),
         sample_mol_sizes=False,
         inference=False,
     )
@@ -2386,8 +2395,8 @@ def build_dm(
         ),
         flow_interactions=args.flow_interactions,
         interaction_conditional=args.interaction_conditional,
-        scaffold_inpainting=args.scaffold_inpainting,
-        func_group_inpainting=args.func_group_inpainting,
+        scaffold_hopping=args.scaffold_hopping,
+        scaffold_elaboration=args.scaffold_elaboration,
         linker_inpainting=args.linker_inpainting,
         core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
@@ -2401,9 +2410,9 @@ def build_dm(
             args.linker_inpainting
             or args.fragment_inpainting
             or args.fragment_growing
-            or args.func_group_inpainting
+            or args.scaffold_elaboration
             or args.substructure_inpainting
-            or args.scaffold_inpainting
+            or args.scaffold_hopping
             or args.interaction_conditional
             or args.core_growing
         )
@@ -2412,13 +2421,14 @@ def build_dm(
             args.linker_inpainting
             or args.fragment_inpainting
             or args.fragment_growing
-            or args.func_group_inpainting
+            or args.scaffold_elaboration
             or args.substructure_inpainting
-            or args.scaffold_inpainting
+            or args.scaffold_hopping
             or args.interaction_conditional
             or args.core_growing
         )
         and args.permutation_alignment,
+        anisotropic_prior=getattr(args, "anisotropic_prior", False),
         sample_mol_sizes=getattr(args, "sample_mol_sizes", False),
         inference=True,
     )
@@ -2562,8 +2572,8 @@ def load_dm(
             interaction_time_alpha=args.time_alpha,
             interaction_time_beta=args.time_beta,
             interaction_conditional=args.interaction_conditional,
-            scaffold_inpainting=args.scaffold_inpainting,
-            func_group_inpainting=args.func_group_inpainting,
+            scaffold_hopping=args.scaffold_hopping,
+            scaffold_elaboration=args.scaffold_elaboration,
             substructure_inpainting=args.substructure_inpainting,
             substructure=args.substructure,
             linker_inpainting=args.linker_inpainting,
@@ -2588,6 +2598,7 @@ def load_dm(
             vocab_hybridization=vocab_hybridization,
             rotation_alignment=args.rotation_alignment,
             permutation_alignment=args.permutation_alignment,
+            anisotropic_prior=getattr(args, "anisotropic_prior", False),
             sample_mol_sizes=False,
             inference=False,
         )
@@ -2610,8 +2621,8 @@ def load_dm(
         ),
         flow_interactions=hparams["flow_interactions"],
         interaction_conditional=args.interaction_conditional,
-        scaffold_inpainting=args.scaffold_inpainting,
-        func_group_inpainting=args.func_group_inpainting,
+        scaffold_hopping=args.scaffold_hopping,
+        scaffold_elaboration=args.scaffold_elaboration,
         linker_inpainting=args.linker_inpainting,
         core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
@@ -2630,9 +2641,9 @@ def load_dm(
             args.linker_inpainting
             or args.fragment_inpainting
             or args.fragment_growing
-            or args.func_group_inpainting
+            or args.scaffold_elaboration
             or args.substructure_inpainting
-            or args.scaffold_inpainting
+            or args.scaffold_hopping
             or args.core_growing
         )
         and args.rotation_alignment,
@@ -2640,12 +2651,13 @@ def load_dm(
             args.linker_inpainting
             or args.fragment_inpainting
             or args.fragment_growing
-            or args.func_group_inpainting
+            or args.scaffold_elaboration
             or args.substructure_inpainting
-            or args.scaffold_inpainting
+            or args.scaffold_hopping
             or args.core_growing
         )
         and args.permutation_alignment,
+        anisotropic_prior=getattr(args, "anisotropic_prior", False),
         inference=True,
     )
 
@@ -3021,8 +3033,8 @@ def build_mol_dm(
         time_alpha=args.time_alpha,
         time_beta=args.time_beta,
         fixed_time=None,
-        scaffold_inpainting=args.scaffold_inpainting,
-        func_group_inpainting=args.func_group_inpainting,
+        scaffold_hopping=args.scaffold_hopping,
+        scaffold_elaboration=args.scaffold_elaboration,
         substructure_inpainting=args.substructure_inpainting,
         substructure=args.substructure,
         linker_inpainting=args.linker_inpainting,
@@ -3039,6 +3051,7 @@ def build_mol_dm(
         vocab_aromatic=vocab_aromatic,
         rotation_alignment=args.rotation_alignment,
         permutation_alignment=args.permutation_alignment,
+        anisotropic_prior=getattr(args, "anisotropic_prior", False),
         sample_mol_sizes=False,
         inference=False,
     )
@@ -3047,8 +3060,8 @@ def build_mol_dm(
         coord_interpolation=("linear" if not args.use_cosine_scheduler else "cosine"),
         type_interpolation=categorical_interpolation,
         bond_interpolation=categorical_interpolation,
-        scaffold_inpainting=args.scaffold_inpainting,
-        func_group_inpainting=args.func_group_inpainting,
+        scaffold_hopping=args.scaffold_hopping,
+        scaffold_elaboration=args.scaffold_elaboration,
         substructure_inpainting=args.substructure_inpainting,
         substructure=args.substructure,
         linker_inpainting=args.linker_inpainting,
@@ -3066,11 +3079,12 @@ def build_mol_dm(
             args.linker_inpainting
             or args.fragment_inpainting
             or args.fragment_growing
-            or args.func_group_inpainting
+            or args.scaffold_elaboration
             or args.substructure_inpainting
-            or args.scaffold_inpainting
+            or args.scaffold_hopping
         )
         and args.permutation_alignment,
+        anisotropic_prior=getattr(args, "anisotropic_prior", False),
         fixed_time=None,
         sample_mol_sizes=getattr(args, "sample_mol_sizes", False),
         inference=True,

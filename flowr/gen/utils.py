@@ -30,8 +30,8 @@ from flowr.data.interpolate import (
     GeometricNoiseSampler,
     extract_cores,
     extract_fragments,
-    extract_func_groups,
     extract_linkers,
+    extract_scaffold_elaboration,
     extract_scaffolds,
     extract_substructure,
 )
@@ -189,28 +189,28 @@ class dotdict(dict):
 
 def get_conditional_mode(args):
     return (
-        "scaffold"
-        if args.scaffold_inpainting
+        "scaffold_hopping"
+        if args.scaffold_hopping
         else (
-            "func_group"
-            if args.func_group_inpainting
+            "scaffold_elaboration"
+            if args.scaffold_elaboration
             else (
-                "linker"
+                "linker_inpainting"
                 if args.linker_inpainting
                 else (
-                    "core"
+                    "core_growing"
                     if args.core_growing
                     else (
                         "fragment_growing"
                         if getattr(args, "fragment_growing", False)
                         else (
-                            "fragment"
+                            "fragment_inpainting"
                             if args.fragment_inpainting
                             else (
-                                "substructure"
+                                "substructure_inpainting"
                                 if args.substructure_inpainting
                                 else (
-                                    "interaction"
+                                    "interaction_conditional"
                                     if args.interaction_conditional
                                     else None
                                 )
@@ -237,8 +237,9 @@ def filter_substructure(
     Args:
         gen_ligs: List of generated RDKit molecules
         ref_mols: List of reference RDKit molecules
-        inpainting_mode: One of ['scaffold', 'func_group', 'linker', 'core',
-                        'fragment', 'substructure', 'interaction']
+        inpainting_mode: One of ['scaffold_hopping', 'scaffold_elaboration', 'linker_inpainting',
+                        'core_growing', 'fragment_inpainting', 'substructure_inpainting',
+                        'interaction_conditional']
         substructure_query: SMILES/SMARTS string for substructure mode or list of atom IDs
         max_fragment_cuts: Maximum cuts for fragment mode
     Returns:
@@ -272,8 +273,9 @@ def check_substructure_match(
     Args:
         gen_mol: Generated RDKit molecule
         ref_mol: Reference RDKit molecule
-        inpainting_mode: One of ['scaffold', 'func_group', 'linker', 'core',
-                        'fragment', 'substructure', 'interaction']
+        inpainting_mode: One of ['scaffold_hopping', 'scaffold_elaboration', 'linker_inpainting',
+                        'core_growing', 'fragment_inpainting', 'substructure_inpainting',
+                        'interaction_conditional']
         substructure_query: SMILES/SMARTS string for substructure mode or list of atom IDs
         max_fragment_cuts: Maximum cuts for fragment mode
 
@@ -281,18 +283,23 @@ def check_substructure_match(
         True if the generated molecule contains the required substructure, False otherwise
     """
 
-    # Extract the expected substructure mask based on mode
-    if inpainting_mode == "scaffold":
-        expected_mask = extract_scaffolds([ref_mol])[0]
-    elif inpainting_mode == "func_group":
-        expected_mask = extract_func_groups([ref_mol], includeHs=True)[0]
-    elif inpainting_mode == "linker":
-        expected_mask = extract_linkers([ref_mol])[0]
-    elif inpainting_mode == "core":
+    # Extract the expected substructure mask based on mode.
+    # For modes that REPLACE a structural motif (scaffold_hopping, scaffold_elaboration,
+    # linker_inpainting), we use invert_mask=True so the mask marks the FIXED atoms
+    # — those are the atoms that must still be present in the generated molecule.
+    if inpainting_mode == "scaffold_hopping":
+        expected_mask = extract_scaffolds([ref_mol], invert_mask=True)[0]
+    elif inpainting_mode == "scaffold_elaboration":
+        expected_mask = extract_scaffold_elaboration(
+            [ref_mol], invert_mask=True, includeHs=False
+        )[0]
+    elif inpainting_mode == "linker_inpainting":
+        expected_mask = extract_linkers([ref_mol], invert_mask=True)[0]
+    elif inpainting_mode == "core_growing":
         expected_mask = extract_cores([ref_mol])[0]
-    elif inpainting_mode == "fragment":
+    elif inpainting_mode == "fragment_inpainting":
         expected_mask = extract_fragments([ref_mol], maxCuts=max_fragment_cuts)[0]
-    elif inpainting_mode == "substructure":
+    elif inpainting_mode == "substructure_inpainting":
         if substructure_query is None:
             raise ValueError(
                 "substructure_query must be provided for substructure mode"
@@ -300,7 +307,7 @@ def check_substructure_match(
         expected_mask = extract_substructure(
             [ref_mol], substructure_query=substructure_query, invert_mask=True
         )[0]
-    elif inpainting_mode == "interaction":
+    elif inpainting_mode == "interaction_conditional":
         # For interaction mode, we can't check from ref_mol alone
         print("Warning: Interaction mode validation not implemented")
         return True
@@ -462,8 +469,8 @@ def load_util(
         ),
         flow_interactions=hparams["flow_interactions"],
         interaction_conditional=args.interaction_conditional,
-        scaffold_inpainting=args.scaffold_inpainting,
-        func_group_inpainting=args.func_group_inpainting,
+        scaffold_hopping=args.scaffold_hopping,
+        scaffold_elaboration=args.scaffold_elaboration,
         linker_inpainting=args.linker_inpainting,
         core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
@@ -484,9 +491,9 @@ def load_util(
             args.linker_inpainting
             or args.fragment_inpainting
             or args.fragment_growing
-            or args.func_group_inpainting
+            or args.scaffold_elaboration
             or args.substructure_inpainting
-            or args.scaffold_inpainting
+            or args.scaffold_hopping
             or args.core_growing
         )
         and args.rotation_alignment,
@@ -494,14 +501,18 @@ def load_util(
             args.linker_inpainting
             or args.fragment_inpainting
             or args.fragment_growing
-            or args.func_group_inpainting
+            or args.scaffold_elaboration
             or args.substructure_inpainting
-            or args.scaffold_inpainting
+            or args.scaffold_hopping
             or args.core_growing
         )
         and args.permutation_alignment,
+        anisotropic_prior=getattr(args, "anisotropic_prior", False),
         inference=True,
     )
+
+    # Store ring_system_index for core_growing mode
+    eval_interpolant.ring_system_index = getattr(args, "ring_system_index", 0)
 
     # Print fragment growing configuration once
     if getattr(args, "fragment_growing", False) and getattr(args, "grow_size", None):
@@ -588,8 +599,8 @@ def load_util_mol(
         coord_interpolation=("linear" if not args.use_cosine_scheduler else "cosine"),
         type_interpolation=categorical_interpolation,
         bond_interpolation=categorical_interpolation,
-        scaffold_inpainting=args.scaffold_inpainting,
-        func_group_inpainting=args.func_group_inpainting,
+        scaffold_hopping=args.scaffold_hopping,
+        scaffold_elaboration=args.scaffold_elaboration,
         linker_inpainting=args.linker_inpainting,
         core_growing=args.core_growing,
         fragment_inpainting=args.fragment_inpainting,
@@ -608,9 +619,9 @@ def load_util_mol(
             args.linker_inpainting
             or args.fragment_inpainting
             or args.fragment_growing
-            or args.func_group_inpainting
+            or args.scaffold_elaboration
             or args.substructure_inpainting
-            or args.scaffold_inpainting
+            or args.scaffold_hopping
             or args.core_growing
         )
         and args.rotation_alignment,
@@ -618,12 +629,13 @@ def load_util_mol(
             args.linker_inpainting
             or args.fragment_inpainting
             or args.fragment_growing
-            or args.func_group_inpainting
+            or args.scaffold_elaboration
             or args.substructure_inpainting
-            or args.scaffold_inpainting
+            or args.scaffold_hopping
             or args.core_growing
         )
         and args.permutation_alignment,
+        anisotropic_prior=getattr(args, "anisotropic_prior", False),
         inference=True,
     )
     return transform, eval_interpolant

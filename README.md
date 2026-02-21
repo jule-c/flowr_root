@@ -98,8 +98,9 @@ We recommend using (Schrödinger-)prepared complexes for best results with the p
 
 Note, if you want to run conditional generation, you need to provide a ligand file as reference.
 Crucially, there are two different modes, "global" and "local".
-Global: If you want to run scaffold hopping or elaboration (scaffold_inpainting, func_group_inpainting), interaction- (interaction_conditional), core-conditional (core_growing) or general fragment-conditional (fragment_growing) generation, simply specifiy it via the respective flags (more below).
+Global: If you want to run scaffold hopping or elaboration (scaffold_hopping, scaffold_elaboration), interaction- (interaction_conditional), core-conditional (core_growing) or general fragment-conditional (fragment_growing) generation, simply specifiy it via the respective flags (more below).
 Local: If you want to replace a core, or a fragment/any part of your reference ligand, specify the --substructure_inpainting flag and provide the atom indices with the --substructure flag that you want to change. This will trigger a local replacement via automated prior-shifting.
+In both cases, the generation is not fully deterministic and fixed parts might also be slightly changed by the model. This can be seen as a feature (shape-based exploration), or as a bug. If you are team bug, set the --filter_cond_substructure flag (RDKit will try to filter based on substructure matching).
 
 Modify `scripts/generate_pdb.sl` according to your requirements, then submit the job via SLURM:
 
@@ -116,9 +117,10 @@ sbatch scripts/generate_pdb.sl
 - `--fragment_growing`: Fragment-constrained generation (using provided fragment to grow from)
 - `--grow_size`: Number of atoms to grow additional to given fragment (only for fragment_growing mode)
 - `--prior_center_file`: Provide starting coordinate(s)/density as xyz file (can be std. xyz-file, only x y z, or numpy array-like 2d matrix; only for fragment_growing mode)
-- `--core_growing`: Core-constrained generation (using RDKit to extract a core; if multiple cores, select by index--defaults to 0)
-- `--scaffold_inpainting`: Scaffold generation (using RDKit to extract functional groups)
-- `--func_group_inpainting`: Functional group generation (using RDKit to extract scaffold)
+- `--core_growing`: Core-constrained generation (using RDKit to extract a core; if multiple cores, select by index using -- ring_system_index, which defaults to 0)
+- `--ring_system_index`: Use when running core_growing to select the core (default: 0; only relevant if number of cores > 0)
+- `--scaffold_hopping`: Scaffold generation (using RDKit to extract functional groups)
+- `--scaffold_elaboration`: Functional group generation (using RDKit to extract scaffold)
 - `--interaction_conditional`: Interaction-constrained generation mode (using ProLIF to extract interactions)
 - `--compute_interactions`: Needed for interaction_conditional (using ProLIF to extract interactions)
 
@@ -161,8 +163,8 @@ Modify `scripts/generate_sdf.sl` according to your requirements:
 
 - `--substructure_inpainting`: Enable substructure generation
 - `--substructure`: Atom indices that you want to change (!) (e.g., `21 23 30 31 32 33 34 35`)
-- `--scaffold_inpainting`: Scaffold generation (using RDKit to extract RDKit)
-- `--func_group_inpainting`: Functional group generation (using RDKit to extract all functional groups)
+- `--scaffold_hopping`: Scaffold generation (using RDKit to extract RDKit)
+- `--scaffold_elaboration`: Functional group generation (using RDKit to extract all functional groups)
 
 **Post-processing Options:**
 

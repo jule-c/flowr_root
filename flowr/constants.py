@@ -18,14 +18,14 @@ CORE_ATOMS = [
 ATOM_ENCODER = {atom: idx for idx, atom in enumerate(CORE_ATOMS)}
 
 INPAINT_ENCODER = {
-    "de_novo": [0, 0],
-    "scaffold": [1, 1],
-    "func_group": [1, 2],
-    "interaction": [1, 3],
-    "linker": [1, 4],
-    "core": [1, 5],
-    "fragment": [2, 6],
-    "substructure": [2, 7],
+    "denovo": [0, 0],
+    "scaffold_hopping": [1, 1],
+    "scaffold_elaboration": [1, 2],
+    "interaction_conditional": [1, 3],
+    "linker_inpainting": [1, 4],
+    "core_growing": [1, 5],
+    "fragment_inpainting": [2, 6],
+    "substructure_inpainting": [2, 7],
     "graph": [3, 8],
 }
 

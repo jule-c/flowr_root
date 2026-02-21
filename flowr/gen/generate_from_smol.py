@@ -22,6 +22,7 @@ from flowr.gen.generate import generate_ligands_per_target
 from flowr.models.fm_pocket import LigandPocketCFM
 from flowr.models.integrator import Integrator
 from flowr.models.pocket import LigandGenerator, PocketEncoder
+from flowr.util.device import get_device, clear_cache
 from flowr.util.pocket import PROLIF_INTERACTIONS, PocketComplexBatch
 from flowr.util.rdkit import ConformerGenerator
 
@@ -65,8 +66,8 @@ def load_model(args):
     hparams["integration-steps"] = args.integration_steps
     hparams["sampling_strategy"] = args.ode_sampling_strategy
     hparams["interaction_conditional"] = args.interaction_conditional
-    hparams["scaffold_inpainting"] = args.scaffold_inpainting
-    hparams["func_group_inpainting"] = args.func_group_inpainting
+    hparams["scaffold_hopping"] = args.scaffold_hopping
+    hparams["scaffold_elaboration"] = args.scaffold_elaboration
     hparams["linker_inpainting"] = args.linker_inpainting
     hparams["data_path"] = args.data_path
     hparams["save_dir"] = args.save_dir
@@ -321,8 +322,8 @@ def load_util(
         ),
         flow_interactions=hparams["flow_interactions"],
         interaction_conditional=args.interaction_conditional,
-        scaffold_inpainting=args.scaffold_inpainting,
-        func_group_inpainting=args.func_group_inpainting,
+        scaffold_hopping=args.scaffold_hopping,
+        scaffold_elaboration=args.scaffold_elaboration,
         linker_inpainting=args.linker_inpainting,
         fragment_inpainting=args.fragment_inpainting,
         fragment_growing=getattr(args, "fragment_growing", False),
@@ -334,6 +335,7 @@ def load_util(
         batch_ot=False,
         dataset=args.dataset,
         sample_mol_sizes=False,
+        anisotropic_prior=getattr(args, "anisotropic_prior", False),
         inference=True,
         vocab=vocab,
         vocab_charges=vocab_charges,
@@ -386,7 +388,7 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to("cuda")
+    model = model.to(get_device())
     model.eval()
     print("Model complete.")
 
@@ -492,7 +494,7 @@ def evaluate(args):
         )
 
         # Empty the cache
-        torch.cuda.empty_cache()
+        clear_cache()
 
         # Save the generated ligands
         out_dict["gen_ligs"].append(all_gen_ligs)
@@ -567,8 +569,8 @@ def get_args():
     parser.add_argument("--interaction_time", type=float, default=None)
     parser.add_argument("--resampling_steps", type=int, default=None)
     parser.add_argument("--interaction_conditional", action="store_true")
-    parser.add_argument("--scaffold_inpainting", action="store_true")
-    parser.add_argument("--func_group_inpainting", action="store_true")
+    parser.add_argument("--scaffold_hopping", action="store_true")
+    parser.add_argument("--scaffold_elaboration", action="store_true")
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--core_growing", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
@@ -588,6 +590,7 @@ def get_args():
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--rotation_alignment", action="store_true")
     parser.add_argument("--permutation_alignment", action="store_true")
+    parser.add_argument("--anisotropic_prior", action="store_true")
     parser.add_argument("--separate_pocket_interpolation", action="store_true")
     parser.add_argument("--separate_interaction_interpolation", action="store_true")
     parser.add_argument(
