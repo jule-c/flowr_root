@@ -37,3 +37,4 @@ flowr_vis/hpc/run_hpc_frontend_gamma.sh
 
 # code2pdf
 code_to_pdf.py
+flowr_code.pdf
