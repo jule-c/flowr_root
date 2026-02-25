@@ -16,10 +16,10 @@ import flowr.gen.utils as util
 import flowr.util.rdkit as smolRD
 from flowr.data.dataset import GeometricDataset
 from flowr.gen.generate import generate_ligands_per_target
+from flowr.gen.mol_filter import ADMEFilter, MolFilterPipeline, PropertyFilter
 from flowr.scriptutil import (
     load_model,
 )
-from flowr.util.device import get_device
 from flowr.util.functional import (
     LigandPocketOptimization,
 )
@@ -79,8 +79,9 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to(get_device())
+    model = model.to("cuda")
     model.eval()
+
     print("Model complete.")
 
     # load util
@@ -117,6 +118,18 @@ def evaluate(args):
     gen_pdbs = None
     inpainting_mode = util.get_conditional_mode(args)
     out_dict = defaultdict(list)
+
+    # Build molecular property / ADME filter pipeline
+    _mol_filters = []
+    if args.property_filter:
+        _prop_filter = PropertyFilter.from_strings(args.property_filter)
+        _mol_filters.append(_prop_filter)
+        print(f"Property filter active: {_prop_filter}")
+    if args.adme_filter:
+        _adme_filter = ADMEFilter.from_strings(args.adme_filter)
+        _mol_filters.append(_adme_filter)
+        print(f"ADME filter active: {_adme_filter}")
+    mol_filter_pipeline = MolFilterPipeline(_mol_filters)
 
     print("\nStarting sampling...\n")
     start = time.time()
@@ -213,6 +226,15 @@ def evaluate(args):
                         all_gen_ligs, threshold=args.diversity_threshold
                     )
                 print(f"Diversity rate: {round(len(all_gen_ligs) / n_ligands, 2)}")
+
+            # Filter by molecular properties / ADME models
+            if mol_filter_pipeline.active:
+                num_before = len(gen_ligs)
+                gen_ligs = mol_filter_pipeline(gen_ligs)
+                print(
+                    f"Property/ADME filter pass rate: "
+                    f"{round(len(gen_ligs) / max(num_before, 1), 2)}"
+                )
 
             # Update number of generated ligands
             num_ligands = len(all_gen_ligs)
@@ -510,6 +532,7 @@ def get_args():
     parser = argparse.ArgumentParser(description='Data generation')
     parser.add_argument('--pdb_id', type=str, default=None)
     parser.add_argument('--ligand_id', type=str, default=None)
+    parser.add_argument('--ligand_idx', type=int, default=None)
     parser.add_argument('--pdb_file', type=str, default=None)
     parser.add_argument('--ligand_file', type=str, default=None)
     parser.add_argument('--res_txt_file', type=str, default=None)
@@ -562,7 +585,6 @@ def get_args():
     parser.add_argument("--corrector_iters", type=int, default=0)
     parser.add_argument("--rotation_alignment", action="store_true")
     parser.add_argument("--permutation_alignment", action="store_true")
-    parser.add_argument("--anisotropic_prior", action="store_true")
     parser.add_argument("--save_traj", action="store_true")
 
     # Filtering parameters
@@ -573,6 +595,16 @@ def get_args():
     parser.add_argument("--calculate_pb_valid", action="store_true")
     parser.add_argument("--filter_cond_substructure", action="store_true")
     parser.add_argument("--calculate_strain_energies", action="store_true")
+    parser.add_argument(
+        "--property_filter", nargs="+", default=None, metavar="NAME:MIN:MAX",
+        help="RDKit property filters, e.g. 'molwt:200:500 num_h_donors:1:5 logp::3.5'. "
+             "Flexible naming (e.g. num_h_donors, NumHDonors, hbd all work)."
+    )
+    parser.add_argument(
+        "--adme_filter", nargs="+", default=None, metavar="NAME:MIN:MAX:MODEL",
+        help="ADME model filters, e.g. 'clearance:0:50:/path/model.pt'. "
+             "Each entry needs name, min, max, and model path (use empty string to omit a bound)."
+    )
 
     # Generation parameters
     parser.add_argument("--batch_cost", type=int)
@@ -585,6 +617,9 @@ def get_args():
     parser.add_argument("--scaffold_hopping", action="store_true")
     parser.add_argument("--scaffold_elaboration", action="store_true")
     parser.add_argument("--linker_inpainting", action="store_true")
+    parser.add_argument("--anisotropic_prior", action="store_true")
+    parser.add_argument("--ref_ligand_com_prior", action="store_true")
+    parser.add_argument("--ref_ligand_com_noise_std", type=float, default=1.0)
     parser.add_argument("--fragment_inpainting", action="store_true")
     parser.add_argument("--fragment_growing", action="store_true")
     parser.add_argument(
@@ -601,7 +636,7 @@ def get_args():
     )
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--core_growing", action="store_true")
-    parser.add_argument("--ring_system_index", type=int, default=0, help="Index of the ring system to grow when using --core_growing")
+    parser.add_argument("--ring_system_indexing", default=0, type=int)
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument(
         "--substructure", 

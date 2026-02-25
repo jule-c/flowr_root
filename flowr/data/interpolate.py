@@ -568,6 +568,7 @@ def extract_substructure(
                 "Substructure could not be extracted from the reference molecule. Skipping."
             )
             return mask
+        substructure_atoms = ()
         if mol.HasSubstructMatch(
             substructure
         ):  # TODO: handle the case where multiple substructures are present
@@ -607,10 +608,8 @@ def extract_substructure(
     return mask
 
 
-def extract_functional_groups(
-    to_mols: list[Chem.Mol], invert_mask=False, includeHs=False
-):
-    def functional_groups_per_mol(mol, invert_mask=False, includeHs=True):
+def extract_func_groups(to_mols: list[Chem.Mol], invert_mask=False, includeHs=False):
+    def func_groups_per_mol(mol, invert_mask=False, includeHs=True):
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
         _mol = Chem.Mol(mol)
         try:
@@ -644,7 +643,7 @@ def extract_functional_groups(
         return mask
 
     return [
-        functional_groups_per_mol(mol, invert_mask=invert_mask, includeHs=includeHs)
+        func_groups_per_mol(mol, invert_mask=invert_mask, includeHs=includeHs)
         for mol in to_mols
     ]
 
@@ -695,12 +694,12 @@ def extract_scaffold_elaboration(
 
         # 3. Get functional group atoms
         fgroups = identify_functional_groups(_mol)
-        functional_group_indices = set()
+        fg_indices = set()
         for f in fgroups:
-            functional_group_indices.update(f.atomIds)
+            fg_indices.update(f.atomIds)
 
         # 4. Combine: atoms that are either non-scaffold OR functional groups
-        elaboration_indices = non_scaffold_indices | functional_group_indices
+        elaboration_indices = non_scaffold_indices | fg_indices
 
         # 5. Exclude any atom that is part of a ring
         ring_atoms = set()
@@ -1758,7 +1757,7 @@ class GeometricNoiseSampler(NoiseSampler):
         if self.type_noise == "uniform-sample":
             charges = torch.randint(1, self.n_charge_types, (n_atoms,))
             charges = smolF.one_hot_encode_tensor(charges, self.n_charge_types)
-        elif self.charge_noise == "prior-sample":
+        elif self.type_noise == "prior-sample":
             charge_types_distribution = torch.zeros(
                 (self.n_charge_types,), dtype=torch.float32
             )
@@ -1893,6 +1892,8 @@ class GeometricInterpolant(Interpolant):
         permutation_alignment: bool = False,
         fragment_size_variation: float = 0.1,
         anisotropic_prior: bool = False,
+        ref_ligand_com_prior: bool = False,
+        ref_ligand_com_noise_std: float = 1.0,
     ):
 
         if fixed_time is not None and (fixed_time < 0 or fixed_time > 1):
@@ -1954,6 +1955,8 @@ class GeometricInterpolant(Interpolant):
         self.inference = inference
         self.fragment_size_variation = fragment_size_variation
         self.anisotropic_prior = anisotropic_prior
+        self.ref_ligand_com_prior = ref_ligand_com_prior
+        self.ref_ligand_com_noise_std = ref_ligand_com_noise_std
 
         self.vocab = vocab
         self.vocab_charges = vocab_charges
@@ -1973,10 +1976,12 @@ class GeometricInterpolant(Interpolant):
             )
 
         if mixed_uniform_beta_time:
-            self.time_dist = MixedTimeSampler(alpha=4.0, beta=1.0, mix_prob=0.15)
+            self.time_dist = MixedTimeSampler(
+                alpha=time_alpha, beta=time_beta, mix_prob=0.15
+            )
             if self.split_continuous_discrete_time:
                 self.time_dist_disc = MixedTimeSampler(
-                    alpha=4.0, beta=1.0, mix_prob=0.15
+                    alpha=time_alpha, beta=time_beta, mix_prob=0.15
                 )
         else:
             self.time_dist = torch.distributions.Beta(time_alpha, time_beta)
@@ -2249,7 +2254,7 @@ class GeometricInterpolant(Interpolant):
         Returns ``None`` when the feature is disabled or the mode is not applicable,
         so that the default isotropic sampling path is used.
 
-        Applicable modes: scaffold_hopping, scaffold_elaboration, linker, core,
+        Applicable modes: scaffold_hopping, scaffold_elaboration, linker_inpainting, core_growing,
         fragment_growing.
         """
         if not self.anisotropic_prior:
@@ -2270,18 +2275,79 @@ class GeometricInterpolant(Interpolant):
             # Fall through to shape covariance
             return compute_shape_covariance(coords)
 
-        if mode in ("core", "scaffold_hopping", "scaffold_elaboration"):
+        if mode in ("core_growing", "scaffold_hopping"):
             # Shape covariance from the *variable* atoms (the part being generated)
             variable_indices = torch.where(~mask)[0]
             if len(variable_indices) >= 3:
                 return compute_shape_covariance(coords[variable_indices])
             return compute_shape_covariance(coords)
 
-        if mode == "linker":
+        if mode in ("linker_inpainting", "scaffold_elaboration"):
             # Shape covariance from the full molecule (linker bridges fixed parts)
             return compute_shape_covariance(coords)
 
         return None
+
+    def _get_ref_com_shift(
+        self,
+        to_mol: GeometricMol,
+        mode: str,
+        mask: torch.Tensor,
+        is_local: bool,
+        add_noise: bool = False,
+    ) -> Optional[torch.Tensor]:
+        """Compute the CoM shift for the variable fragment's prior placement.
+
+        Only applies to global modes where a reference ligand is provided
+        (scaffold_hopping, scaffold_elaboration, linker_inpainting, core_growing).
+
+        Does NOT apply to:
+        - de_novo (no reference ligand)
+        - fragment_growing (uses prior_center mechanism instead)
+        - local modes (handled by _align_prior_to_fragment)
+        - graph inpainting
+
+        Args:
+            to_mol: Target molecule (the reference ligand)
+            mode: Generation mode string
+            mask: Boolean mask (True = fixed atoms, False = variable/to-generate)
+            is_local: Whether this is a local inpainting mode
+            add_noise: Whether to add Gaussian noise to the shift (for training robustness)
+
+        Returns:
+            (3,) tensor shift vector, or None if not applicable
+        """
+        if not self.ref_ligand_com_prior:
+            return None
+
+        # Only applies to specific global modes where a reference ligand exists
+        applicable_modes = {
+            "scaffold_hopping",
+            "scaffold_elaboration",
+            "linker_inpainting",
+            "core_growing",
+        }
+        if mode not in applicable_modes:
+            return None
+
+        if is_local:
+            return None
+
+        # Compute the variable fragment's CoM in the reference ligand
+        variable_indices = torch.where(~mask)[0]
+        if len(variable_indices) == 0:
+            return None
+
+        target_com = to_mol.coords[variable_indices].mean(dim=0)
+
+        if add_noise and self.ref_ligand_com_noise_std > 0:
+            noise = (
+                torch.randn(3, device=target_com.device, dtype=target_com.dtype)
+                * self.ref_ligand_com_noise_std
+            )
+            target_com = target_com + noise
+
+        return target_com
 
     def _training_inpainting(
         self,
@@ -2352,6 +2418,32 @@ class GeometricInterpolant(Interpolant):
                 from_mols, to_mols, modes_and_masks
             )
         ]
+
+        # Apply reference ligand CoM shift for applicable global modes during training
+        if self.ref_ligand_com_prior:
+            from_mols_shifted = []
+            for from_mol, to_mol, (mode, mask, is_local) in zip(
+                from_mols, to_mols, modes_and_masks
+            ):
+                shift = self._get_ref_com_shift(
+                    to_mol, mode, mask, is_local, add_noise=True
+                )
+                if shift is not None:
+                    # Shift only variable atoms (non-masked) to be centered at the reference CoM
+                    frag_mask = from_mol.fragment_mask
+                    if frag_mask is not None:
+                        variable_atoms = ~frag_mask
+                    else:
+                        variable_atoms = ~mask
+
+                    if variable_atoms.any():
+                        prior_com = from_mol.coords[variable_atoms].mean(dim=0)
+                        translation = shift.to(from_mol.coords.device) - prior_com
+                        new_coords = from_mol.coords.clone()
+                        new_coords[variable_atoms] += translation
+                        from_mol = from_mol._copy_with(coords=new_coords)
+                from_mols_shifted.append(from_mol)
+            from_mols = from_mols_shifted
 
         # Sample the batch times
         if self.fixed_time is not None:
@@ -2602,6 +2694,16 @@ class GeometricInterpolant(Interpolant):
             )
             variable_fragment = variable_fragment._copy_with(coords=shifted_coords)
 
+        # Apply ref ligand CoM shift for applicable global modes
+        ref_shift = self._get_ref_com_shift(
+            to_mol, mode, mask, is_local, add_noise=False
+        )
+        if ref_shift is not None:
+            shifted_coords = variable_fragment.coords + ref_shift.to(
+                variable_fragment.coords.device
+            )
+            variable_fragment = variable_fragment._copy_with(coords=shifted_coords)
+
         # Fuse fragments
         from_mol = self.prior_sampler.fuse_fragments(
             fixed_fragment, variable_fragment, mode
@@ -2679,6 +2781,8 @@ class GeometricInterpolant(Interpolant):
                 all_active = (
                     active_local_modes + active_global_modes + active_graph_modes
                 )
+                if self.mixed_uncond_inpaint:
+                    all_active.append("de_novo")
                 mode = random.choice(all_active) if all_active else "de_novo"
             else:
                 # Training: weighted probability for each category
@@ -2722,11 +2826,7 @@ class GeometricInterpolant(Interpolant):
             elif mode == "linker_inpainting":
                 mask = extract_linkers([rdkit_mols[i]], invert_mask=True)[0]
             elif mode == "core_growing":
-                mask = extract_cores(
-                    [rdkit_mols[i]],
-                    invert_mask=False,
-                    ring_system_index=getattr(self, "ring_system_index", 0),
-                )[0]
+                mask = extract_cores([rdkit_mols[i]], invert_mask=False)[0]
             elif mode == "fragment_growing":
                 # If grow_size is set, the input ligand IS the fragment to grow
                 # All atoms are fixed (mask = all True)
@@ -2855,7 +2955,8 @@ class GeometricInterpolant(Interpolant):
         # Create matrix with to mols on outer axis and from mols on inner axis
         for to_mol in to_mols:
             best_from_mols = [
-                self._match_mols(from_mol, to_mol) for from_mol in from_mols
+                self._match_mols(from_mol, to_mol, mol_size=to_mol.seq_length)
+                for from_mol in from_mols
             ]
             best_costs = [self._match_cost(mol, to_mol) for mol in best_from_mols]
             mol_matrix.append(list(best_from_mols))
@@ -3085,6 +3186,8 @@ class ComplexInterpolant(GeometricInterpolant):
         rotation_alignment: bool = False,
         permutation_alignment: bool = False,
         anisotropic_prior: bool = False,
+        ref_ligand_com_prior: bool = False,
+        ref_ligand_com_noise_std: float = 1.0,
     ):
 
         super().__init__(
@@ -3122,6 +3225,8 @@ class ComplexInterpolant(GeometricInterpolant):
             rotation_alignment=rotation_alignment,
             permutation_alignment=permutation_alignment,
             anisotropic_prior=anisotropic_prior,
+            ref_ligand_com_prior=ref_ligand_com_prior,
+            ref_ligand_com_noise_std=ref_ligand_com_noise_std,
         )
         if sample_mol_sizes:
             print("Running inference with sampled molecule sizes!")
@@ -3165,18 +3270,22 @@ class ComplexInterpolant(GeometricInterpolant):
         hparams["n-interaction-types"] = self.n_interaction_types
         hparams["flow-interactions"] = self.flow_interactions
         hparams["interaction-conditional"] = self.interaction_conditional
+        hparams["ref-ligand-com-prior"] = self.ref_ligand_com_prior
+        hparams["ref-ligand-com-noise-std"] = self.ref_ligand_com_noise_std
 
         if self.separate_pocket_interpolation:
             hparams["pocket-time-alpha"] = self.pocket_time_alpha
             hparams["pocket-time-beta"] = self.pocket_time_beta
             if self.pocket_fixed_time is not None:
-                hparams["pocket-fixed-interpolation-time"] = self.fixed_time
+                hparams["pocket-fixed-interpolation-time"] = self.pocket_fixed_time
 
         if self.separate_interaction_interpolation:
             hparams["interaction-time-alpha"] = self.interaction_time_alpha
             hparams["interaction-time-beta"] = self.interaction_time_beta
             if self.interaction_fixed_time is not None:
-                hparams["interaction-fixed-interpolation-time"] = self.fixed_time
+                hparams["interaction-fixed-interpolation-time"] = (
+                    self.interaction_fixed_time
+                )
 
         return hparams
 

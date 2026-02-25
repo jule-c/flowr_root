@@ -941,11 +941,7 @@ def load_model(
     return_info: bool = True,
     dataset_info: Optional[dict] = None,
 ):
-    checkpoint = torch.load(
-        args.ckpt_path if ckpt_path is None else ckpt_path,
-        map_location="cpu",
-        weights_only=False,
-    )
+    checkpoint = torch.load(args.ckpt_path if ckpt_path is None else ckpt_path)
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
     # Set sampling hyperparameters
@@ -1180,7 +1176,8 @@ def load_model(
                 mod=egnn_gen.pocket_enc,
             )
 
-    print(f"Loading pretrained checkpoint from {args.ckpt_path}...")
+    _ckpt_display = ckpt_path if ckpt_path is not None else args.ckpt_path
+    print(f"Loading pretrained checkpoint from {_ckpt_display}...")
     # Initialize the ligand-pocket conditional flow model
     CFM = LigandPocketCFM
     type_mask_index = None
@@ -1198,8 +1195,9 @@ def load_model(
         bond_mask_index=bond_mask_index,
         use_cosine_scheduler=args.use_cosine_scheduler,
     )
+    _ckpt = ckpt_path if ckpt_path is not None else args.ckpt_path
     fm_model = CFM.load_from_checkpoint(
-        args.ckpt_path,
+        _ckpt,
         gen=egnn_gen,
         vocab=vocab,
         vocab_charges=vocab_charges,
@@ -1451,11 +1449,7 @@ def load_mol_model(
     return_info: bool = True,
     dataset_info: Optional[dict] = None,
 ):
-    checkpoint = torch.load(
-        args.ckpt_path if ckpt_path is None else ckpt_path,
-        map_location="cpu",
-        weights_only=False,
-    )
+    checkpoint = torch.load(args.ckpt_path if ckpt_path is None else ckpt_path)
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
     # Set dataset and save paths
@@ -1860,6 +1854,7 @@ def build_mol_model(
         use_t_loss_weights=args.use_t_loss_weights,
         corrector_iters=args.corrector_iters,
         pretrained_weights=args.load_pretrained_ckpt is not None,
+        inpaint_self_condition=getattr(args, "inpaint_self_condition", False),
         **hparams,
     )
     return fm_model
@@ -2365,6 +2360,8 @@ def build_dm(
         rotation_alignment=args.rotation_alignment,
         permutation_alignment=args.permutation_alignment,
         anisotropic_prior=getattr(args, "anisotropic_prior", False),
+        ref_ligand_com_prior=getattr(args, "ref_ligand_com_prior", False),
+        ref_ligand_com_noise_std=getattr(args, "ref_ligand_com_noise_std", 1.0),
         sample_mol_sizes=False,
         inference=False,
     )
@@ -2429,6 +2426,8 @@ def build_dm(
         )
         and args.permutation_alignment,
         anisotropic_prior=getattr(args, "anisotropic_prior", False),
+        ref_ligand_com_prior=getattr(args, "ref_ligand_com_prior", False),
+        ref_ligand_com_noise_std=getattr(args, "ref_ligand_com_noise_std", 1.0),
         sample_mol_sizes=getattr(args, "sample_mol_sizes", False),
         inference=True,
     )
@@ -2599,6 +2598,8 @@ def load_dm(
             rotation_alignment=args.rotation_alignment,
             permutation_alignment=args.permutation_alignment,
             anisotropic_prior=getattr(args, "anisotropic_prior", False),
+            ref_ligand_com_prior=getattr(args, "ref_ligand_com_prior", False),
+            ref_ligand_com_noise_std=getattr(args, "ref_ligand_com_noise_std", 1.0),
             sample_mol_sizes=False,
             inference=False,
         )
@@ -2658,6 +2659,8 @@ def load_dm(
         )
         and args.permutation_alignment,
         anisotropic_prior=getattr(args, "anisotropic_prior", False),
+        ref_ligand_com_prior=getattr(args, "ref_ligand_com_prior", False),
+        ref_ligand_com_noise_std=getattr(args, "ref_ligand_com_noise_std", 1.0),
         inference=True,
     )
 
@@ -3052,6 +3055,8 @@ def build_mol_dm(
         rotation_alignment=args.rotation_alignment,
         permutation_alignment=args.permutation_alignment,
         anisotropic_prior=getattr(args, "anisotropic_prior", False),
+        ref_ligand_com_prior=getattr(args, "ref_ligand_com_prior", False),
+        ref_ligand_com_noise_std=getattr(args, "ref_ligand_com_noise_std", 1.0),
         sample_mol_sizes=False,
         inference=False,
     )
@@ -3085,6 +3090,8 @@ def build_mol_dm(
         )
         and args.permutation_alignment,
         anisotropic_prior=getattr(args, "anisotropic_prior", False),
+        ref_ligand_com_prior=getattr(args, "ref_ligand_com_prior", False),
+        ref_ligand_com_noise_std=getattr(args, "ref_ligand_com_noise_std", 1.0),
         fixed_time=None,
         sample_mol_sizes=getattr(args, "sample_mol_sizes", False),
         inference=True,

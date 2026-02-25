@@ -14,13 +14,18 @@ The worker URL is configured via the ``FLOWR_WORKER_URL`` environment
 variable (default: ``http://localhost:8788``).
 """
 
+import asyncio
+import atexit
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
+import traceback
 import uuid
+from collections import namedtuple
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -28,7 +33,7 @@ import numpy as np
 import requests as http_requests
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -38,6 +43,7 @@ from pydantic import BaseModel, Field
 try:
     from rdkit import Chem, DataStructs
     from rdkit.Chem import AllChem, Descriptors
+    from rdkit.Chem.Draw import rdMolDraw2D
     from rdkit.Chem.Scaffolds.MurckoScaffold import GetScaffoldForMol
 
     RDKIT_AVAILABLE = True
@@ -60,6 +66,9 @@ from chem_utils import (
 )
 from chem_utils import (
     compute_all_properties as _compute_all_properties,
+)
+from chem_utils import (
+    compute_pocket_com as _compute_pocket_com_shared,
 )
 from chem_utils import (
     crawl_sdf_affinity as _crawl_sdf_affinity,
@@ -102,11 +111,39 @@ if "OE_LICENSE" not in os.environ:
 # ---------------------------------------------------------------------------
 OPENEYE_AVAILABLE = False
 try:
-    from openeye import oechem, oedepict, oegrapheme
+    from openeye import oechem, oedepict, oegrapheme, oeomega
 
     OPENEYE_AVAILABLE = True
 except ImportError:
     print("WARNING: OpenEye not available – 2D interaction diagrams disabled.")
+
+# ---------------------------------------------------------------------------
+# SciPy (optional – for fast pairwise distances)
+# ---------------------------------------------------------------------------
+try:
+    from scipy.spatial.distance import cdist
+
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
+# scikit-learn / UMAP (optional – for chemical space projection)
+# ---------------------------------------------------------------------------
+try:
+    from sklearn.decomposition import PCA
+    from sklearn.manifold import TSNE
+
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+
+try:
+    import umap
+
+    UMAP_AVAILABLE = True
+except ImportError:
+    UMAP_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Worker URL & mode
@@ -161,8 +198,23 @@ class NoCacheMiddleware(BaseHTTPMiddleware):
 app.add_middleware(NoCacheMiddleware)
 
 UPLOAD_DIR = Path(tempfile.mkdtemp(prefix="flowr_vis_"))
+
+
+def _cleanup_upload_dir():
+    """Remove the upload directory on graceful shutdown."""
+    try:
+        if UPLOAD_DIR.exists():
+            shutil.rmtree(UPLOAD_DIR, ignore_errors=True)
+            print(f"Cleaned up upload directory: {UPLOAD_DIR}")
+    except Exception:
+        pass
+
+
+atexit.register(_cleanup_upload_dir)
+
 JOBS: Dict[str, Dict[str, Any]] = {}
 _selected_ckpt_path: Optional[str] = None  # Set from landing page, sent to worker
+_selected_workflow_type: str = "sbdd"  # "sbdd" or "lbdd" – set from landing page
 
 # ── Job TTL cleanup ──
 _JOB_TTL_SECONDS = 3600  # 1 hour
@@ -175,7 +227,8 @@ def _cleanup_expired_jobs():
         jid
         for jid, jdata in JOBS.items()
         if now - jdata.get("created_at", now) > _JOB_TTL_SECONDS
-        and jdata.get("status") not in ("generating", "allocating_gpu", "starting")
+        and jdata.get("status")
+        not in ("generating", "allocating_gpu", "starting", "loading_model")
     ]
     for jid in expired:
         job_dir = UPLOAD_DIR / jid
@@ -198,8 +251,6 @@ _worker_lock = threading.Lock()
 
 @app.on_event("startup")
 async def _start_cleanup_loop():
-    import asyncio
-
     async def _periodic_cleanup():
         while True:
             await asyncio.sleep(600)
@@ -236,6 +287,8 @@ _VALID_GEN_MODES = {
 
 class GenerationRequest(BaseModel):
     job_id: str
+    workflow_type: Optional[str] = None  # request override; falls back to job/global
+    ckpt_path: Optional[str] = None  # request override; falls back to job/global
     protein_path: Optional[str] = None
     ligand_path: Optional[str] = None
     gen_mode: str = "denovo"
@@ -262,6 +315,17 @@ class GenerationRequest(BaseModel):
     optimize_gen_ligs_hs: bool = False
     anisotropic_prior: bool = False
     ring_system_index: int = 0
+    ref_ligand_com_prior: bool = False
+    # De novo: number of heavy atoms when no reference ligand
+    num_heavy_atoms: Optional[int] = None
+    # Property / ADMET filtering
+    property_filter: Optional[List[dict]] = None  # [{"name":..., "min":..., "max":...}]
+    adme_filter: Optional[List[dict]] = (
+        None  # [{"name":..., "min":..., "max":..., "model_file":...}]
+    )
+    # LBDD-specific
+    optimize_method: str = "none"  # "none" | "rdkit" | "xtb"
+    sample_n_molecules_per_mol: int = Field(default=1, ge=1, le=50)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -311,8 +375,6 @@ else:
 
 def _identify_functional_groups(mol):
     """Identify functional groups (Ertl IFG algorithm). Pure RDKit."""
-    from collections import namedtuple
-
     marked = set()
     for atom in mol.GetAtoms():
         if atom.GetAtomicNum() not in (6, 1):
@@ -557,8 +619,8 @@ def _compute_interactions(
     lig_coords = np.array([[a["x"], a["y"], a["z"]] for a in lig_atoms])
     lig_center = lig_coords.mean(axis=0)
 
-    # Coarse filter: only keep protein atoms within (cutoff + 15) of ligand center
-    max_r = cutoff + 15.0
+    # Coarse filter: only keep protein atoms within (cutoff + 10) of ligand center
+    max_r = cutoff + 10.0
     coarse_dists = np.linalg.norm(prot_coords - lig_center, axis=1)
     near_mask = coarse_dists <= max_r
     near_indices = np.where(near_mask)[0]
@@ -568,11 +630,9 @@ def _compute_interactions(
 
     # Vectorized pairwise distance: (N_near, M_lig)
     near_coords = prot_coords[near_indices]
-    try:
-        from scipy.spatial.distance import cdist
-
+    if SCIPY_AVAILABLE:
         dist_matrix = cdist(near_coords, lig_coords)
-    except ImportError:
+    else:
         diff = near_coords[:, np.newaxis, :] - lig_coords[np.newaxis, :, :]
         dist_matrix = np.sqrt(np.sum(diff * diff, axis=2))
 
@@ -682,7 +742,8 @@ def _is_worker_reachable(url: str = None) -> bool:
 def _submit_slurm_worker() -> str:
     """Submit the worker SLURM job. Returns the SLURM job ID."""
     env = os.environ.copy()
-    env["FLOWR_CKPT_PATH"] = _selected_ckpt_path or ""
+    if _selected_ckpt_path:
+        env["FLOWR_CKPT_PATH"] = _selected_ckpt_path
     # Tell the worker which port to use and the frontend URL for file downloads
     env["FLOWR_WORKER_PORT"] = str(int(os.environ.get("FLOWR_WORKER_PORT", "8788")))
     server_port = int(os.environ.get("FLOWR_PORT", "8787"))
@@ -777,18 +838,36 @@ def _ensure_worker_running(job: dict) -> str:
     with _worker_lock:
         # Already running?
         if _worker_state["status"] == "running" and _worker_state.get("url"):
-            if _is_worker_reachable(_worker_state["url"]):
-                return _worker_state["url"]
-            # Worker died — clean up
-            _worker_state.update(status="idle", slurm_job_id=None, node=None, url=None)
-
-        # Already starting?
-        if _worker_state["status"] == "starting":
-            # Another thread is already waiting — we'll wait outside the lock
-            pass
+            cached_url = _worker_state["url"]
         else:
-            # Submit new SLURM job
-            _worker_state.update(status="starting", error=None)
+            cached_url = None
+
+        need_submit = False
+        if cached_url is None:
+            if _worker_state["status"] == "starting":
+                # Another thread is already waiting — we'll wait outside the lock
+                pass
+            else:
+                need_submit = True
+                _worker_state.update(status="starting", error=None)
+
+    # Probe the cached URL outside the lock (network I/O)
+    if cached_url is not None:
+        if _is_worker_reachable(cached_url):
+            return cached_url
+        # Worker died — clean up (guard against concurrent recovery)
+        with _worker_lock:
+            if _worker_state["status"] == "starting":
+                need_submit = False  # Another thread already handling recovery
+            else:
+                _worker_state.update(
+                    status="idle", slurm_job_id=None, node=None, url=None
+                )
+                need_submit = True
+                _worker_state.update(status="starting", error=None)
+
+    if need_submit:
+        with _worker_lock:
             try:
                 slurm_id = _submit_slurm_worker()
                 _worker_state["slurm_job_id"] = slurm_id
@@ -827,9 +906,11 @@ def _ensure_worker_running(job: dict) -> str:
         time.sleep(poll_interval)
 
     # Timeout
-    _worker_state.update(status="idle", error="Worker startup timed out")
-    if _worker_state.get("slurm_job_id"):
-        _cancel_slurm_job(_worker_state["slurm_job_id"])
+    with _worker_lock:
+        _worker_state.update(status="idle", error="Worker startup timed out")
+        slurm_id_to_cancel = _worker_state.get("slurm_job_id")
+    if slurm_id_to_cancel:
+        _cancel_slurm_job(slurm_id_to_cancel)
     raise RuntimeError(
         f"GPU worker did not start within {SLURM_STARTUP_TIMEOUT}s. "
         "The SLURM queue may be full."
@@ -876,6 +957,10 @@ def _proxy_generation(job_id: str, req: dict):
     This function is called in a background thread from POST /generate.
     """
     job = JOBS[job_id]
+
+    def _is_cancelled() -> bool:
+        return bool(job.get("cancel_requested_at") or job.get("cancelled"))
+
     job["status"] = "allocating_gpu" if WORKER_MODE == "slurm" else "generating"
     job["progress"] = 1
     did_increment = False
@@ -893,136 +978,307 @@ def _proxy_generation(job_id: str, req: dict):
 
         # 2. Build file-download URLs that the worker can fetch from us
         server_base = os.environ.get("FLOWR_SERVER_URL", "http://localhost:8787")
-        protein_url = f"{server_base}/files/{job_id}/{Path(job['protein_path']).name}"
-        ligand_url = f"{server_base}/files/{job_id}/{Path(job['ligand_path']).name}"
+        workflow = req.get("workflow_type", job.get("workflow_type", "sbdd"))
 
-        prior_center_url = None
-        prior_center_filename = None
-        prior_center_coords = req.get("prior_center_coords")
+        # Ligand URL may be None for de novo pocket-only / scratch mode
+        ligand_url = None
+        ligand_filename = None
+        if job.get("ligand_path"):
+            ligand_url = f"{server_base}/files/{job_id}/{Path(job['ligand_path']).name}"
+            ligand_filename = Path(job["ligand_path"]).name
 
-        if prior_center_coords:
-            # User visually placed the prior cloud — write a temp XYZ file
-            # so the worker can load it via the standard prior_center_file path
-            job_dir = UPLOAD_DIR / job_id
-            job_dir.mkdir(parents=True, exist_ok=True)
-            xyz_name = "_prior_center_placed.xyz"
-            xyz_path = job_dir / xyz_name
-            xyz_path.write_text(
-                f"1\nPlaced prior center\n"
-                f"Ar  {prior_center_coords['x']:.6f}  "
-                f"{prior_center_coords['y']:.6f}  "
-                f"{prior_center_coords['z']:.6f}\n"
-            )
-            prior_center_url = f"{server_base}/files/{job_id}/{xyz_name}"
-            prior_center_filename = xyz_name
-        elif req.get("prior_center_filename"):
-            safe_name = Path(req["prior_center_filename"]).name
-            candidate = UPLOAD_DIR / job_id / safe_name
-            if candidate.exists():
-                prior_center_url = f"{server_base}/files/{job_id}/{safe_name}"
-                prior_center_filename = safe_name
+        num_heavy_atoms = req.get("num_heavy_atoms") or job.get("num_heavy_atoms")
 
-        # 3. Send generation request to the worker
-        worker_payload = {
-            "job_id": job_id,
-            "protein_url": protein_url,
-            "ligand_url": ligand_url,
-            "protein_filename": Path(job["protein_path"]).name,
-            "ligand_filename": Path(job["ligand_path"]).name,
-            "ckpt_path": job.get("ckpt_path") or _selected_ckpt_path,
-            "gen_mode": req["gen_mode"],
-            "fixed_atoms": req["fixed_atoms"],
-            "n_samples": req["n_samples"],
-            "batch_size": req["batch_size"],
-            "integration_steps": req["integration_steps"],
-            "pocket_cutoff": req["pocket_cutoff"],
-            "coord_noise_scale": req.get("coord_noise_scale", 0.0),
-            "grow_size": req.get("grow_size"),
-            "prior_center_url": prior_center_url,
-            "prior_center_filename": prior_center_filename,
-            "filter_valid_unique": req.get("filter_valid_unique", True),
-            "filter_cond_substructure": req.get("filter_cond_substructure", False),
-            "filter_diversity": req.get("filter_diversity", False),
-            "diversity_threshold": req.get("diversity_threshold", 0.9),
-            "sample_mol_sizes": req.get("sample_mol_sizes", False),
-            "filter_pb_valid": req.get("filter_pb_valid", False),
-            "calculate_pb_valid": req.get("calculate_pb_valid", False),
-            "calculate_strain_energies": req.get("calculate_strain_energies", False),
-            "optimize_gen_ligs": req.get("optimize_gen_ligs", False),
-            "optimize_gen_ligs_hs": req.get("optimize_gen_ligs_hs", False),
-            "anisotropic_prior": req.get("anisotropic_prior", False),
-            "ring_system_index": req.get("ring_system_index", 0),
-        }
+        # ── LBDD branch: no protein, but supports all gen modes ──
+        if workflow == "lbdd":
+            # Handle prior center for fragment growing (same as SBDD)
+            prior_center_url = None
+            prior_center_filename = None
+            prior_center_coords = req.get("prior_center_coords")
 
-        resp = http_requests.post(
-            f"{worker_url}/generate",
-            json=worker_payload,
-            timeout=30,
-        )
-        resp.raise_for_status()
-
-        job["status"] = "generating"
-        job["progress"] = 10
-
-        # 4. Poll worker until done (blocking in this background thread)
-        generation_timeout = int(
-            os.environ.get("FLOWR_GENERATION_TIMEOUT", "1800")
-        )  # 30 min
-        poll_deadline = time.time() + generation_timeout
-        while time.time() < poll_deadline:
-            # Check for user-initiated cancellation
-            if job.get("status") == "cancelled":
-                print(f"[Job {job_id}] Cancelled by user")
-                break
-
-            time.sleep(2)
-            worker_data = _poll_worker_job(job_id, worker_url)
-            if worker_data is None:
-                continue
-
-            w_status = worker_data.get("status")
-            if w_status == "completed":
-                # Invalidate visualization caches from previous generation
-                for key in list(job.keys()):
-                    if key.startswith("chemspace_") or key in (
-                        "propspace_cache",
-                        "affinity_dist_cache",
-                        "results_full",
-                    ):
-                        del job[key]
-                job.update(
-                    status="completed",
-                    progress=100,
-                    results=worker_data.get("results", []),
-                    metrics=worker_data.get("metrics", []),
-                    elapsed_time=worker_data.get("elapsed_time"),
-                    mode=worker_data.get("mode", "flowr"),
-                    n_generated=worker_data.get("n_generated", 0),
-                    used_optimization=worker_data.get("used_optimization", False),
-                    prior_cloud=worker_data.get("prior_cloud"),
+            if prior_center_coords:
+                job_dir = UPLOAD_DIR / job_id
+                job_dir.mkdir(parents=True, exist_ok=True)
+                xyz_name = "_prior_center_placed.xyz"
+                xyz_path = job_dir / xyz_name
+                xyz_path.write_text(
+                    f"1\nPlaced prior center\n"
+                    f"Ar  {prior_center_coords['x']:.6f}  "
+                    f"{prior_center_coords['y']:.6f}  "
+                    f"{prior_center_coords['z']:.6f}\n"
                 )
-                break
-            elif w_status == "failed":
+                prior_center_url = f"{server_base}/files/{job_id}/{xyz_name}"
+                prior_center_filename = xyz_name
+            elif req.get("prior_center_filename"):
+                safe_name = Path(req["prior_center_filename"]).name
+                candidate = UPLOAD_DIR / job_id / safe_name
+                if candidate.exists():
+                    prior_center_url = f"{server_base}/files/{job_id}/{safe_name}"
+                    prior_center_filename = safe_name
+
+            worker_payload = {
+                "job_id": job_id,
+                "workflow_type": "lbdd",
+                "ligand_url": ligand_url,
+                "ligand_filename": ligand_filename,
+                "ckpt_path": job.get("ckpt_path") or _selected_ckpt_path,
+                "gen_mode": req["gen_mode"],
+                "fixed_atoms": req.get("fixed_atoms", []),
+                "n_samples": req["n_samples"],
+                "batch_size": req["batch_size"],
+                "integration_steps": req["integration_steps"],
+                "coord_noise_scale": req.get("coord_noise_scale", 0.0),
+                "grow_size": req.get("grow_size"),
+                "prior_center_url": prior_center_url,
+                "prior_center_filename": prior_center_filename,
+                "filter_valid_unique": req.get("filter_valid_unique", True),
+                "filter_cond_substructure": req.get("filter_cond_substructure", False),
+                "filter_diversity": req.get("filter_diversity", False),
+                "diversity_threshold": req.get("diversity_threshold", 0.9),
+                "sample_mol_sizes": req.get("sample_mol_sizes", False),
+                "calculate_strain_energies": req.get(
+                    "calculate_strain_energies", False
+                ),
+                "optimize_method": req.get("optimize_method", "none"),
+                "anisotropic_prior": req.get("anisotropic_prior", False),
+                "ring_system_index": req.get("ring_system_index", 0),
+                "ref_ligand_com_prior": req.get("ref_ligand_com_prior", False),
+                "sample_n_molecules_per_mol": req.get("sample_n_molecules_per_mol", 1),
+                "num_heavy_atoms": num_heavy_atoms,
+                "property_filter": req.get("property_filter"),
+                "adme_filter": req.get("adme_filter"),
+            }
+
+            resp = http_requests.post(
+                f"{worker_url}/generate",
+                json=worker_payload,
+                timeout=30,
+            )
+            resp.raise_for_status()
+
+            if not _is_cancelled():
+                job["status"] = "generating"
+                job["progress"] = 10
+
+            # Poll worker until done
+            generation_timeout = int(os.environ.get("FLOWR_GENERATION_TIMEOUT", "1800"))
+            poll_deadline = time.time() + generation_timeout
+            while time.time() < poll_deadline:
+                if job.get("status") == "cancelled":
+                    print(f"[Job {job_id}] Cancelled by user")
+                    break
+                time.sleep(2)
+                worker_data = _poll_worker_job(job_id, worker_url)
+                if worker_data is None:
+                    continue
+                w_status = worker_data.get("status")
+                w_progress = worker_data.get("progress", 0)
+                if not _is_cancelled():
+                    job["progress"] = max(job["progress"], w_progress)
+                if w_status == "completed":
+                    if _is_cancelled():
+                        job["status"] = "cancelled"
+                    else:
+                        job.update(
+                            status="completed",
+                            progress=100,
+                            results=worker_data.get("results", []),
+                            metrics=worker_data.get("metrics", []),
+                            elapsed_time=worker_data.get("elapsed_time"),
+                            mode=worker_data.get("mode", "flowr"),
+                            n_generated=worker_data.get("n_generated", 0),
+                            used_optimization=worker_data.get(
+                                "used_optimization", False
+                            ),
+                            prior_cloud=worker_data.get("prior_cloud"),
+                        )
+                        # Invalidate visualization caches after status is set
+                        for key in list(job.keys()):
+                            if key.startswith("chemspace_") or key in (
+                                "propspace_cache",
+                                "affinity_dist_cache",
+                                "results_full",
+                            ):
+                                del job[key]
+                    break
+                elif w_status == "cancelled":
+                    job.update(status="cancelled", error="Cancelled by user")
+                    break
+                elif w_status == "failed":
+                    if _is_cancelled():
+                        job["status"] = "cancelled"
+                    else:
+                        job.update(
+                            status="failed",
+                            progress=0,
+                            error=worker_data.get("error", "Worker generation failed"),
+                        )
+                    break
+                elif w_status == "loading_model":
+                    if not _is_cancelled():
+                        job["status"] = "loading_model"
+
+            if job["status"] not in ("completed", "failed", "cancelled"):
+                job["status"] = "failed"
+                job["error"] = "Generation timed out"
+
+        else:
+            # ── SBDD branch (existing logic) ──
+            protein_url = (
+                f"{server_base}/files/{job_id}/{Path(job['protein_path']).name}"
+            )
+
+            prior_center_url = None
+            prior_center_filename = None
+            prior_center_coords = req.get("prior_center_coords")
+
+            if prior_center_coords:
+                # User visually placed the prior cloud — write a temp XYZ file
+                # so the worker can load it via the standard prior_center_file path
+                job_dir = UPLOAD_DIR / job_id
+                job_dir.mkdir(parents=True, exist_ok=True)
+                xyz_name = "_prior_center_placed.xyz"
+                xyz_path = job_dir / xyz_name
+                xyz_path.write_text(
+                    f"1\nPlaced prior center\n"
+                    f"Ar  {prior_center_coords['x']:.6f}  "
+                    f"{prior_center_coords['y']:.6f}  "
+                    f"{prior_center_coords['z']:.6f}\n"
+                )
+                prior_center_url = f"{server_base}/files/{job_id}/{xyz_name}"
+                prior_center_filename = xyz_name
+            elif req.get("prior_center_filename"):
+                safe_name = Path(req["prior_center_filename"]).name
+                candidate = UPLOAD_DIR / job_id / safe_name
+                if candidate.exists():
+                    prior_center_url = f"{server_base}/files/{job_id}/{safe_name}"
+                    prior_center_filename = safe_name
+
+            # 3. Send generation request to the worker
+            worker_payload = {
+                "job_id": job_id,
+                "workflow_type": "sbdd",
+                "protein_url": protein_url,
+                "ligand_url": ligand_url,
+                "protein_filename": Path(job["protein_path"]).name,
+                "ligand_filename": ligand_filename,
+                "ckpt_path": job.get("ckpt_path") or _selected_ckpt_path,
+                "gen_mode": req["gen_mode"],
+                "fixed_atoms": req["fixed_atoms"],
+                "n_samples": req["n_samples"],
+                "batch_size": req["batch_size"],
+                "integration_steps": req["integration_steps"],
+                "pocket_cutoff": req["pocket_cutoff"],
+                "coord_noise_scale": req.get("coord_noise_scale", 0.0),
+                "grow_size": req.get("grow_size"),
+                "prior_center_url": prior_center_url,
+                "prior_center_filename": prior_center_filename,
+                "filter_valid_unique": req.get("filter_valid_unique", True),
+                "filter_cond_substructure": req.get("filter_cond_substructure", False),
+                "filter_diversity": req.get("filter_diversity", False),
+                "diversity_threshold": req.get("diversity_threshold", 0.9),
+                "sample_mol_sizes": req.get("sample_mol_sizes", False),
+                "filter_pb_valid": req.get("filter_pb_valid", False),
+                "calculate_pb_valid": req.get("calculate_pb_valid", False),
+                "calculate_strain_energies": req.get(
+                    "calculate_strain_energies", False
+                ),
+                "optimize_gen_ligs": req.get("optimize_gen_ligs", False),
+                "optimize_gen_ligs_hs": req.get("optimize_gen_ligs_hs", False),
+                "anisotropic_prior": req.get("anisotropic_prior", False),
+                "ring_system_index": req.get("ring_system_index", 0),
+                "ref_ligand_com_prior": req.get("ref_ligand_com_prior", False),
+                "num_heavy_atoms": num_heavy_atoms,
+                "property_filter": req.get("property_filter"),
+                "adme_filter": req.get("adme_filter"),
+            }
+
+            resp = http_requests.post(
+                f"{worker_url}/generate",
+                json=worker_payload,
+                timeout=30,
+            )
+            resp.raise_for_status()
+
+            if not _is_cancelled():
+                job["status"] = "generating"
+                job["progress"] = 10
+
+            # 4. Poll worker until done (blocking in this background thread)
+            generation_timeout = int(
+                os.environ.get("FLOWR_GENERATION_TIMEOUT", "1800")
+            )  # 30 min
+            poll_deadline = time.time() + generation_timeout
+            while time.time() < poll_deadline:
+                # Check for user-initiated cancellation
+                if job.get("status") == "cancelled":
+                    print(f"[Job {job_id}] Cancelled by user")
+                    break
+
+                time.sleep(2)
+                worker_data = _poll_worker_job(job_id, worker_url)
+                if worker_data is None:
+                    continue
+
+                w_status = worker_data.get("status")
+                if w_status == "completed":
+                    if _is_cancelled():
+                        job["status"] = "cancelled"
+                    else:
+                        job.update(
+                            status="completed",
+                            progress=100,
+                            results=worker_data.get("results", []),
+                            metrics=worker_data.get("metrics", []),
+                            elapsed_time=worker_data.get("elapsed_time"),
+                            mode=worker_data.get("mode", "flowr"),
+                            n_generated=worker_data.get("n_generated", 0),
+                            used_optimization=worker_data.get(
+                                "used_optimization", False
+                            ),
+                            prior_cloud=worker_data.get("prior_cloud"),
+                        )
+                        # Invalidate visualization caches after status is set
+                        for key in list(job.keys()):
+                            if key.startswith("chemspace_") or key in (
+                                "propspace_cache",
+                                "affinity_dist_cache",
+                                "results_full",
+                            ):
+                                del job[key]
+                    break
+                elif w_status == "cancelled":
+                    job.update(status="cancelled", error="Cancelled by user")
+                    break
+                elif w_status == "failed":
+                    if _is_cancelled():
+                        job["status"] = "cancelled"
+                    else:
+                        job.update(
+                            status="failed",
+                            progress=0,
+                            error=worker_data.get("error", "Worker generation failed"),
+                        )
+                    break
+                elif w_status == "loading_model":
+                    if not _is_cancelled():
+                        job["status"] = "loading_model"
+                else:
+                    if not _is_cancelled():
+                        job["progress"] = max(
+                            job.get("progress", 10),
+                            worker_data.get("progress", 0),
+                        )
+
+            # If we exited the loop without break, we timed out
+            if job.get("status") not in ("completed", "failed", "cancelled"):
                 job.update(
                     status="failed",
                     progress=0,
-                    error=worker_data.get("error", "Worker generation failed"),
+                    error=f"Generation timed out after {generation_timeout}s",
                 )
-                break
-            else:
-                job["progress"] = worker_data.get("progress", job.get("progress", 10))
-
-        # If we exited the loop without break, we timed out
-        if job.get("status") not in ("completed", "failed", "cancelled"):
-            job.update(
-                status="failed",
-                progress=0,
-                error=f"Generation timed out after {generation_timeout}s",
-            )
 
     except Exception as exc:
-        import traceback
-
         traceback.print_exc()
         job.update(status="failed", progress=0, error=f"Generation failed: {exc}")
 
@@ -1069,20 +1325,28 @@ async def index():
 
 
 @app.get("/checkpoints")
-async def list_checkpoints():
-    """Scan the ckpts directory and return available checkpoints."""
+async def list_checkpoints(workflow: str = "sbdd"):
+    """Scan the ckpts/{workflow} directory and return available checkpoints."""
     base: List[Dict[str, str]] = []
     project: List[Dict[str, Any]] = []
 
-    print(f"[checkpoints] Scanning {CKPTS_DIR} (exists={CKPTS_DIR.is_dir()})")
+    # Determine root based on workflow type
+    if workflow == "lbdd":
+        scan_dir = CKPTS_DIR / "lbdd"
+    else:
+        scan_dir = CKPTS_DIR / "sbdd"
 
-    if CKPTS_DIR.is_dir():
-        for f in sorted(CKPTS_DIR.iterdir()):
+    print(
+        f"[checkpoints] Scanning {scan_dir} (workflow={workflow}, exists={scan_dir.is_dir()})"
+    )
+
+    if scan_dir.is_dir():
+        for f in sorted(scan_dir.iterdir()):
             if f.is_file() and f.suffix == ".ckpt":
                 base.append({"name": f.stem, "path": str(f)})
                 print(f"[checkpoints]   base: {f.name}")
 
-        project_root = CKPTS_DIR / "project_model"
+        project_root = scan_dir / "project_model"
         if project_root.is_dir():
             for proj_dir in sorted(project_root.iterdir()):
                 if proj_dir.is_dir():
@@ -1123,6 +1387,7 @@ class LoadModelRequest(BaseModel):
 
 class RegisterCheckpointRequest(BaseModel):
     ckpt_path: str
+    workflow_type: str = "sbdd"  # "sbdd" or "lbdd"
 
 
 @app.post("/register-checkpoint")
@@ -1132,11 +1397,13 @@ async def register_checkpoint(request: RegisterCheckpointRequest):
     Model loading is deferred until the user clicks Generate, at which
     point the worker will load it on the GPU if not already loaded.
     """
-    global _selected_ckpt_path
+    global _selected_ckpt_path, _selected_workflow_type
     _selected_ckpt_path = request.ckpt_path
+    _selected_workflow_type = request.workflow_type
     return {
         "status": "registered",
         "ckpt_path": request.ckpt_path,
+        "workflow_type": request.workflow_type,
     }
 
 
@@ -1200,9 +1467,7 @@ async def model_status():
 @app.get("/files/{job_id}/{filename}")
 async def serve_file(job_id: str, filename: str):
     """Serve uploaded files so the GPU worker can download them."""
-    import re as _re
-
-    if not _re.fullmatch(r"[a-f0-9\-]+", job_id):
+    if not re.fullmatch(r"[a-f0-9\-]+", job_id):
         raise HTTPException(400, "Invalid job ID.")
     safe_name = Path(filename).name
     file_path = (UPLOAD_DIR / job_id / safe_name).resolve()
@@ -1214,6 +1479,55 @@ async def serve_file(job_id: str, filename: str):
 
 
 # ── File uploads ──
+
+
+class CreateDenovoJobRequest(BaseModel):
+    """Create a job for de novo generation without a reference ligand."""
+
+    job_id: Optional[str] = None  # re-use existing job (e.g. after protein upload)
+    num_heavy_atoms: int = Field(default=25, ge=1, le=200)
+    workflow_type: str = "sbdd"  # "sbdd" or "lbdd"
+
+
+@app.post("/create-denovo-job")
+async def create_denovo_job(request: CreateDenovoJobRequest):
+    """Create (or update) a job for de novo generation without a reference ligand.
+
+    For SBDD pocket-only: the protein must already be uploaded (job_id required).
+    For LBDD scratch: creates a brand-new job with no files at all.
+    """
+    job_id = request.job_id
+    if job_id and job_id in JOBS:
+        # Re-use existing job (e.g. after protein upload)
+        job = JOBS[job_id]
+    elif request.workflow_type == "lbdd":
+        # Create a fresh job with no files
+        job_id = str(uuid.uuid4())[:8]
+        job_dir = UPLOAD_DIR / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "denovo_ready",
+            "created_at": time.time(),
+            "ckpt_path": _selected_ckpt_path,
+            "workflow_type": request.workflow_type,
+        }
+        job = JOBS[job_id]
+    else:
+        raise HTTPException(
+            400,
+            "SBDD pocket-only mode requires an existing job_id with a protein upload.",
+        )
+
+    job["num_heavy_atoms"] = request.num_heavy_atoms
+    job["workflow_type"] = request.workflow_type
+    job["denovo_no_ligand"] = True
+
+    return {
+        "job_id": job_id,
+        "num_heavy_atoms": request.num_heavy_atoms,
+        "workflow_type": request.workflow_type,
+    }
 
 
 @app.post("/upload/protein")
@@ -1238,6 +1552,8 @@ async def upload_protein(file: UploadFile = File(...)):
         "protein_filename": safe_name,
         "status": "protein_uploaded",
         "created_at": time.time(),
+        "ckpt_path": _selected_ckpt_path,
+        "workflow_type": _selected_workflow_type,
     }
     return {
         "job_id": job_id,
@@ -1276,6 +1592,8 @@ async def upload_ligand(job_id: str, file: UploadFile = File(...)):
         status="ligand_uploaded",
         ref_affinity=ref_affinity,
     )
+    JOBS[job_id].setdefault("ckpt_path", _selected_ckpt_path)
+    JOBS[job_id].setdefault("workflow_type", "sbdd")
 
     mol_noH = Chem.RemoveHs(mol)
     smiles_noH = _mol_to_smiles(mol_noH)
@@ -1293,6 +1611,313 @@ async def upload_ligand(job_id: str, file: UploadFile = File(...)):
         "num_atoms": mol.GetNumAtoms(),
         "num_heavy_atoms": mol.GetNumHeavyAtoms(),
         "ref_affinity": ref_affinity,
+        "ref_properties": _compute_all_properties(mol_noH),
+    }
+
+
+# ── LBDD: Upload molecule without protein ──
+
+
+@app.post("/upload/molecule")
+async def upload_molecule(file: UploadFile = File(...)):
+    """Upload a molecule file for LBDD workflow (no protein required).
+
+    Creates a new job and stores the ligand. Accepts SDF, MOL, MOL2.
+    """
+    _cleanup_expired_jobs()
+    ext = Path(file.filename).suffix.lower()
+    if ext not in (".sdf", ".mol", ".mol2"):
+        raise HTTPException(400, f"Unsupported format: {ext}")
+
+    job_id = str(uuid.uuid4())[:8]
+    job_dir = UPLOAD_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_name = Path(file.filename).name
+    save_path = job_dir / safe_name
+    content = await file.read()
+    save_path.write_bytes(content)
+
+    mol = _read_ligand_mol(str(save_path))
+    if mol is None:
+        raise HTTPException(400, "Could not parse molecule file.")
+
+    mol_noH = Chem.RemoveHs(mol)
+    smiles_noH = _mol_to_smiles(mol_noH)
+    has_explicit_hs = any(a.GetAtomicNum() == 1 for a in mol.GetAtoms())
+
+    JOBS[job_id] = {
+        "job_id": job_id,
+        "ligand_path": str(save_path),
+        "ligand_filename": safe_name,
+        "ligand_smiles": _mol_to_smiles(mol),
+        "workflow_type": "lbdd",
+        "status": "ligand_uploaded",
+        "created_at": time.time(),
+        "ckpt_path": _selected_ckpt_path,
+    }
+
+    return {
+        "job_id": job_id,
+        "filename": file.filename,
+        "smiles": _mol_to_smiles(mol),
+        "smiles_noH": smiles_noH,
+        "has_explicit_hs": has_explicit_hs,
+        "sdf_data": _mol_to_sdf_string(mol),
+        "atoms": _mol_to_atom_info(mol),
+        "bonds": _mol_to_bond_info(mol),
+        "num_atoms": mol.GetNumAtoms(),
+        "num_heavy_atoms": mol.GetNumHeavyAtoms(),
+        "ref_properties": _compute_all_properties(mol_noH),
+    }
+
+
+# ── ADMET model upload ──
+
+
+@app.post("/upload/adme-model/{job_id}")
+async def upload_adme_model(job_id: str, file: UploadFile = File(...)):
+    """Upload an ADMET model file for property-based filtering during generation."""
+    if job_id not in JOBS:
+        raise HTTPException(404, "Job not found. Upload protein/ligand first.")
+
+    ext = Path(file.filename).suffix.lower()
+    allowed_exts = (".pt", ".pth", ".pkl", ".joblib", ".ckpt", ".onnx", ".bin")
+    if ext not in allowed_exts:
+        raise HTTPException(
+            400,
+            f"Unsupported model format: {ext}. Accepted: {', '.join(allowed_exts)}",
+        )
+
+    job_dir = UPLOAD_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = f"adme_{Path(file.filename).name}"
+    save_path = job_dir / safe_name
+    content = await file.read()
+    save_path.write_bytes(content)
+
+    # Build a URL the worker can use to download the model
+    server_base = os.environ.get("FLOWR_SERVER_URL", "http://localhost:8787")
+    model_url = f"{server_base}/files/{job_id}/{safe_name}"
+
+    return {
+        "job_id": job_id,
+        "filename": safe_name,
+        "model_url": model_url,
+    }
+
+
+# ── LBDD: SMILES to molecule + conformer generation ──
+
+
+class SmilesConformerRequest(BaseModel):
+    smiles: str
+    max_confs: int = Field(default=10, ge=1, le=50)
+
+
+@app.post("/generate-conformers")
+async def generate_conformers(request: SmilesConformerRequest):
+    """Generate 3D conformers from a SMILES string using OpenEye Omega.
+
+    Returns a list of conformers with SDF data and relative energies.
+    Falls back to RDKit ETKDG if OpenEye is not available.
+    """
+    smiles = request.smiles.strip()
+    max_confs = request.max_confs
+
+    if not smiles:
+        raise HTTPException(400, "Empty SMILES string.")
+
+    # Create job for this molecule
+    job_id = str(uuid.uuid4())[:8]
+    job_dir = UPLOAD_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    conformers = []
+
+    if OPENEYE_AVAILABLE:
+        try:
+            # Parse SMILES into OEMol
+            oemol = oechem.OEMol()
+            if not oechem.OESmilesToMol(oemol, smiles):
+                raise HTTPException(400, f"Invalid SMILES: {smiles}")
+            oechem.OEAddExplicitHydrogens(oemol)
+
+            # Run Omega conformer generation
+            # Use OEOmegaSampling_Pose (matches working oe_conformer.py).
+            omegaOpts = oeomega.OEOmegaOptions(oeomega.OEOmegaSampling_Pose)
+            omegaOpts.SetMaxConfs(max_confs)
+            omegaOpts.SetStrictStereo(False)
+            omega = oeomega.OEOmega(omegaOpts)
+            ret = omega.Build(oemol)
+            if ret != oeomega.OEOmegaReturnCode_Success:
+                raise HTTPException(
+                    500,
+                    f"Omega conformer generation failed: "
+                    f"{oeomega.OEGetOmegaError(ret)}",
+                )
+
+            # Extract each conformer as separate SDF + energy
+            for i, conf in enumerate(oemol.GetConfs()):
+                # Get energy
+                energy = conf.GetEnergy()
+
+                # Convert to RDKit mol for SDF output
+                single_mol = oechem.OEMol(conf)
+                ofs = oechem.oemolostream()
+                ofs.SetFormat(oechem.OEFormat_SDF)
+                ofs.openstring()
+                oechem.OEWriteMolecule(ofs, single_mol)
+                sdf_block = ofs.GetString().decode("utf-8")
+
+                # Also try to get an RDKit mol for property computation
+                rdmol = Chem.MolFromMolBlock(sdf_block, removeHs=False)
+                props = _compute_all_properties(rdmol) if rdmol else {}
+
+                conformers.append(
+                    {
+                        "idx": i,
+                        "sdf": sdf_block,
+                        "energy": round(energy, 4),
+                        "properties": props,
+                    }
+                )
+
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # Fall back to RDKit if OE fails
+            print(f"OpenEye conformer generation failed: {exc}, falling back to RDKit")
+            conformers = _generate_conformers_rdkit(smiles, max_confs)
+    else:
+        conformers = _generate_conformers_rdkit(smiles, max_confs)
+
+    if not conformers:
+        raise HTTPException(500, "Failed to generate any conformers.")
+
+    # Sort by energy (lowest first); None energies (MMFF failures) sort last
+    conformers.sort(
+        key=lambda c: c["energy"] if c.get("energy") is not None else float("inf")
+    )
+    # Re-index after sorting
+    for i, c in enumerate(conformers):
+        c["idx"] = i
+
+    # Save conformers to job directory for later selection
+    JOBS[job_id] = {
+        "job_id": job_id,
+        "workflow_type": "lbdd",
+        "conformers": conformers,
+        "smiles": smiles,
+        "status": "conformers_generated",
+        "created_at": time.time(),
+        "ckpt_path": _selected_ckpt_path,
+    }
+
+    return {
+        "job_id": job_id,
+        "smiles": smiles,
+        "n_conformers": len(conformers),
+        "conformers": conformers,
+        "used_openeye": OPENEYE_AVAILABLE,
+    }
+
+
+def _generate_conformers_rdkit(smiles: str, max_confs: int = 10) -> list:
+    """Fallback conformer generation using RDKit ETKDG."""
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return []
+    mol = Chem.AddHs(mol)
+
+    # Generate conformers
+    params = AllChem.ETKDGv3()
+    params.maxAttempts = 200
+    params.numThreads = 0
+    params.pruneRmsThresh = 0.5
+    cids = AllChem.EmbedMultipleConfs(mol, numConfs=max_confs, params=params)
+    if len(cids) == 0:
+        return []
+
+    # Minimize with MMFF and get energies
+    results = AllChem.MMFFOptimizeMoleculeConfs(mol, maxIters=500)
+    conformers = []
+    for i, cid in enumerate(cids):
+        converged, energy = results[i] if i < len(results) else (1, 0.0)
+        # MMFF failure (converged == -1): deprioritize by setting energy to None
+        if converged == -1:
+            energy = None
+        # Create single-conformer mol for SDF output
+        single = Chem.Mol(mol)
+        single.RemoveAllConformers()
+        single.AddConformer(mol.GetConformer(cid), assignId=True)
+        sdf_block = _mol_to_sdf_string(single)
+        props = _compute_all_properties(single)
+        conformers.append(
+            {
+                "idx": i,
+                "sdf": sdf_block,
+                "energy": round(energy, 4) if energy is not None else None,
+                "properties": props,
+            }
+        )
+    return conformers
+
+
+class SelectConformerRequest(BaseModel):
+    conformer_idx: int
+
+
+@app.post("/select-conformer/{job_id}")
+async def select_conformer(job_id: str, request: SelectConformerRequest):
+    """Select a specific conformer from the generated set for LBDD generation."""
+    if job_id not in JOBS:
+        raise HTTPException(404, "Job not found.")
+    job = JOBS[job_id]
+    conformers = job.get("conformers", [])
+    if not conformers:
+        raise HTTPException(400, "No conformers generated for this job.")
+    if request.conformer_idx < 0 or request.conformer_idx >= len(conformers):
+        raise HTTPException(400, f"Invalid conformer index: {request.conformer_idx}")
+
+    selected = conformers[request.conformer_idx]
+    sdf_block = selected["sdf"]
+
+    # Save selected conformer as SDF file
+    job_dir = UPLOAD_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    sdf_path = job_dir / "selected_conformer.sdf"
+    sdf_path.write_text(sdf_block)
+
+    # Parse with RDKit for atom/bond info
+    mol = Chem.MolFromMolBlock(sdf_block, removeHs=False)
+    if mol is None:
+        raise HTTPException(500, "Failed to parse the selected conformer.")
+
+    mol_noH = Chem.RemoveHs(mol)
+    smiles_noH = _mol_to_smiles(mol_noH)
+    has_explicit_hs = any(a.GetAtomicNum() == 1 for a in mol.GetAtoms())
+
+    job.update(
+        ligand_path=str(sdf_path),
+        ligand_filename="selected_conformer.sdf",
+        ligand_smiles=_mol_to_smiles(mol),
+        status="ligand_uploaded",
+        selected_conformer_idx=request.conformer_idx,
+    )
+
+    return {
+        "job_id": job_id,
+        "conformer_idx": request.conformer_idx,
+        "smiles": _mol_to_smiles(mol),
+        "smiles_noH": smiles_noH,
+        "has_explicit_hs": has_explicit_hs,
+        "sdf_data": sdf_block,
+        "atoms": _mol_to_atom_info(mol),
+        "bonds": _mol_to_bond_info(mol),
+        "num_atoms": mol.GetNumAtoms(),
+        "num_heavy_atoms": mol.GetNumHeavyAtoms(),
+        "energy": selected.get("energy"),
     }
 
 
@@ -1309,15 +1934,13 @@ def _parse_xyz_center(filepath: str) -> np.ndarray:
 
     Returns np.ndarray of shape (3,).
     """
-    import re as _re
-
     with open(filepath, "r") as fh:
         content = fh.read()
 
     coords: list[list[float]] = []
 
     if "[" in content and "]" in content:
-        numbers = [float(n) for n in _re.findall(r"-?\d+\.?\d*", content)]
+        numbers = [float(n) for n in re.findall(r"-?\d+\.?\d*", content)]
         if len(numbers) < 3 or len(numbers) % 3 != 0:
             raise ValueError(f"Cannot parse numpy-style XYZ: {filepath}")
         for i in range(0, len(numbers), 3):
@@ -1350,133 +1973,18 @@ def _parse_xyz_center(filepath: str) -> np.ndarray:
     return arr.mean(axis=0)
 
 
-# Standard amino acid 3-letter codes (for pocket extraction, matching FLOWR)
-_STANDARD_AA = {
-    "ALA",
-    "ARG",
-    "ASN",
-    "ASP",
-    "CYS",
-    "GLN",
-    "GLU",
-    "GLY",
-    "HIS",
-    "ILE",
-    "LEU",
-    "LYS",
-    "MET",
-    "PHE",
-    "PRO",
-    "SER",
-    "THR",
-    "TRP",
-    "TYR",
-    "VAL",
-}
-
-
 def _compute_pocket_com(
     job: Dict[str, Any],
     cutoff: Optional[float] = None,
 ) -> Optional[np.ndarray]:
-    """Compute the protein pocket centre of mass (geometric centroid).
-
-    Mimics the FLOWR preprocessing pipeline:
-    1. Parse all ATOM records from the protein PDB/CIF.
-    2. Get ligand heavy-atom coordinates from the uploaded SDF.
-    3. Select whole residues (standard amino acids) that have at least one
-       atom within ``cutoff`` Å of any ligand atom.
-    4. Return the unweighted mean of all selected pocket atom coords.
-
-    Returns None if computation fails (missing files, parse errors, etc.).
-    """
+    """Thin wrapper: extracts paths from job dict and delegates to shared impl."""
     protein_path = job.get("protein_path")
     ligand_path = job.get("ligand_path")
     if not protein_path or not ligand_path:
         return None
-    if cutoff is None:
-        cutoff = 6.0  # default pocket cutoff
-
-    # ── Ligand coordinates ──
-    if not RDKIT_AVAILABLE:
-        return None
-    try:
-        mol = _read_ligand_mol(ligand_path)
-        if mol is None:
-            return None
-        mol_noH = Chem.RemoveHs(mol)
-        if mol_noH.GetNumConformers() == 0:
-            return None
-        conf = mol_noH.GetConformer()
-        lig_coords = np.array(
-            [list(conf.GetAtomPosition(i)) for i in range(mol_noH.GetNumAtoms())]
-        )
-    except Exception:
-        return None
-
-    # ── Parse protein ATOM records ──
-    try:
-        protein_atoms: List[Dict[str, Any]] = []
-        with open(protein_path, "r") as fh:
-            for line in fh:
-                if not (line.startswith("ATOM") or line.startswith("HETATM")):
-                    continue
-                # Only keep ATOM records (standard residues)
-                if not line.startswith("ATOM"):
-                    continue
-                try:
-                    x = float(line[30:38])
-                    y = float(line[38:46])
-                    z = float(line[46:54])
-                    res_name = line[17:20].strip()
-                    chain_id = line[21:22].strip()
-                    res_seq = line[22:26].strip()
-                except (ValueError, IndexError):
-                    continue
-                protein_atoms.append(
-                    {
-                        "x": x,
-                        "y": y,
-                        "z": z,
-                        "res_name": res_name,
-                        "chain_id": chain_id,
-                        "res_seq": res_seq,
-                    }
-                )
-        if not protein_atoms:
-            return None
-    except Exception:
-        return None
-
-    # ── Select pocket residues within cutoff ──
-    prot_coords = np.array([[a["x"], a["y"], a["z"]] for a in protein_atoms])
-    # Compute pairwise distances: (n_prot, n_lig)
-    diff = prot_coords[:, None, :] - lig_coords[None, :, :]  # (P, L, 3)
-    dists = np.sqrt((diff**2).sum(axis=2))  # (P, L)
-    within_cutoff = (dists < cutoff).any(axis=1)  # (P,) bool
-
-    # Group by residue and keep whole residues where any atom is within cutoff
-    residue_in_pocket = set()
-    for i, atom in enumerate(protein_atoms):
-        if within_cutoff[i] and atom["res_name"] in _STANDARD_AA:
-            residue_in_pocket.add((atom["chain_id"], atom["res_seq"]))
-
-    if not residue_in_pocket:
-        return None
-
-    # Collect all atom coords from pocket residues
-    pocket_coords = []
-    for i, atom in enumerate(protein_atoms):
-        if (atom["chain_id"], atom["res_seq"]) in residue_in_pocket and atom[
-            "res_name"
-        ] in _STANDARD_AA:
-            pocket_coords.append([atom["x"], atom["y"], atom["z"]])
-
-    if not pocket_coords:
-        return None
-
-    pocket_arr = np.array(pocket_coords)
-    return pocket_arr.mean(axis=0)
+    return _compute_pocket_com_shared(
+        protein_path, ligand_path, pocket_cutoff=cutoff if cutoff is not None else 6.0
+    )
 
 
 def _compute_anisotropic_preview_covariance(
@@ -1484,14 +1992,29 @@ def _compute_anisotropic_preview_covariance(
     center: np.ndarray,
     has_prior_center: bool,
     pocket_cutoff: float,
+    gen_mode: str = "fragment_growing",
+    ring_system_index: int = 0,
 ) -> Optional[np.ndarray]:
     """Compute an anisotropic covariance matrix for the prior cloud preview.
 
-    For fragment growing with a prior center: elongate along fragment→growth direction.
-    Otherwise: match the shape of the reference ligand (PCA-based covariance).
+    Mode-specific logic (mirrors interpolate.py _compute_anisotropic_covariance):
+    - fragment_growing + prior_center: directional covariance (fragment→growth)
+    - core_growing, scaffold_hopping: shape covariance from VARIABLE atoms
+    - linker_inpainting, scaffold_elaboration: shape covariance from ALL atoms
+    - Other: shape covariance from ALL atoms
 
     Returns a (3, 3) covariance matrix, or None if computation fails.
     """
+    _ANISO_MODES = {
+        "scaffold_hopping",
+        "scaffold_elaboration",
+        "linker_inpainting",
+        "core_growing",
+        "fragment_growing",
+    }
+    if gen_mode not in _ANISO_MODES:
+        return None
+
     if not RDKIT_AVAILABLE:
         return None
 
@@ -1510,7 +2033,7 @@ def _compute_anisotropic_preview_covariance(
         [list(conf.GetAtomPosition(i)) for i in range(mol_noH.GetNumAtoms())]
     )
 
-    if has_prior_center:
+    if gen_mode == "fragment_growing" and has_prior_center:
         # Directional covariance: elongate along fragment COM → growth center
         source_com = coords.mean(axis=0)
         direction = center - source_com
@@ -1536,9 +2059,28 @@ def _compute_anisotropic_preview_covariance(
         eigenvalues = eigenvalues * (3.0 / eigenvalues.sum())
 
         return rotation @ np.diag(eigenvalues) @ rotation.T
-    else:
-        # Shape covariance from the ligand atoms (PCA)
+
+    if gen_mode in ("core_growing", "scaffold_hopping"):
+        # Shape covariance from VARIABLE atoms only (matching interpolate.py)
+        try:
+            _mode_mask_fns_aniso = {
+                "scaffold_hopping": lambda m: _extract_scaffold_mask(m),
+                "core_growing": lambda m: ~_extract_core_mask(
+                    m, ring_system_index=ring_system_index
+                ),
+            }
+            mask_fn = _mode_mask_fns_aniso.get(gen_mode)
+            if mask_fn:
+                mask = mask_fn(mol_noH)
+                variable_indices = np.where(mask)[0]
+                if len(variable_indices) >= 3:
+                    return _shape_covariance_np(coords[variable_indices])
+        except Exception:
+            pass
         return _shape_covariance_np(coords)
+
+    # linker_inpainting, scaffold_elaboration, fragment_growing (without prior center)
+    return _shape_covariance_np(coords)
 
 
 def _shape_covariance_np(coords: np.ndarray) -> Optional[np.ndarray]:
@@ -1560,11 +2102,68 @@ def _shape_covariance_np(coords: np.ndarray) -> Optional[np.ndarray]:
     return eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
 
 
+def _compute_ref_ligand_com_shift_server(
+    job: Dict[str, Any],
+    gen_mode: str,
+    ring_system_index: int = 0,
+) -> Optional[np.ndarray]:
+    """Compute the reference ligand variable fragment CoM shift for preview.
+
+    Returns the CoM of the variable (to-be-generated) atoms, or None if not applicable.
+    Mirrors interpolate.py ``_get_ref_com_shift`` logic.
+    """
+    _APPLICABLE_MODES = {
+        "scaffold_hopping",
+        "scaffold_elaboration",
+        "linker_inpainting",
+        "core_growing",
+    }
+    if gen_mode not in _APPLICABLE_MODES:
+        return None
+    if not RDKIT_AVAILABLE:
+        return None
+    lig_path = job.get("ligand_path")
+    if not lig_path:
+        return None
+    mol = _read_ligand_mol(lig_path)
+    if mol is None:
+        return None
+    mol_noH = Chem.RemoveHs(mol)
+    if mol_noH.GetNumConformers() == 0 or mol_noH.GetNumAtoms() < 3:
+        return None
+    conf = mol_noH.GetConformer()
+    coords = np.array(
+        [list(conf.GetAtomPosition(i)) for i in range(mol_noH.GetNumAtoms())]
+    )
+
+    try:
+        _mode_mask_fns_ref = {
+            "scaffold_hopping": lambda m: _extract_scaffold_mask(m),
+            "scaffold_elaboration": lambda m: _extract_scaffold_elaboration_mask(m),
+            "linker_inpainting": lambda m: _extract_linker_mask(m),
+            "core_growing": lambda m: ~_extract_core_mask(
+                m, ring_system_index=ring_system_index
+            ),
+        }
+        mask_fn = _mode_mask_fns_ref.get(gen_mode)
+        if mask_fn:
+            mask = mask_fn(mol_noH)
+            variable_indices = np.where(mask)[0]
+            if len(variable_indices) > 0:
+                return coords[variable_indices].mean(axis=0)
+    except Exception:
+        pass
+    return None
+
+
 def _compute_prior_cloud_preview(
     job: Dict[str, Any],
     grow_size: int,
     pocket_cutoff: float = 6.0,
     anisotropic: bool = False,
+    gen_mode: str = "fragment_growing",
+    ring_system_index: int = 0,
+    ref_ligand_com_prior: bool = False,
 ) -> Dict[str, Any]:
     """Compute a preview prior cloud on the CPU (no torch).
 
@@ -1573,7 +2172,9 @@ def _compute_prior_cloud_preview(
     generation pipeline does: the prior is zero-COM in the pocket-COM frame,
     so in the original frame its centre is at the pocket COM).
 
-    Returns dict {center, points, n_atoms, has_prior_center}.
+    Supports anisotropic (mode-specific) sampling and ref ligand CoM shift.
+
+    Returns dict {center, points, n_atoms, has_prior_center, anisotropic, ref_ligand_com_shifted}.
     """
     has_prior_center = "prior_center_path" in job and job["prior_center_path"]
 
@@ -1586,7 +2187,7 @@ def _compute_prior_cloud_preview(
         if pocket_com is not None:
             center = pocket_com
         else:
-            # Fallback: ligand COM (less accurate but better than zeros)
+            # Fallback: ligand COM, protein atom COM, or zeros
             lig_path = job.get("ligand_path")
             if lig_path and RDKIT_AVAILABLE:
                 mol = _read_ligand_mol(lig_path)
@@ -1605,8 +2206,33 @@ def _compute_prior_cloud_preview(
                         center = pts.mean(axis=0)
                 else:
                     center = np.zeros(3)
+            elif job.get("protein_path"):
+                # Pocket-only mode: compute COM of all protein atoms
+                try:
+                    coords = []
+                    with open(job["protein_path"]) as f:
+                        for line in f:
+                            if line.startswith(("ATOM", "HETATM")):
+                                x = float(line[30:38])
+                                y = float(line[38:46])
+                                z = float(line[46:54])
+                                coords.append([x, y, z])
+                    if coords:
+                        center = np.mean(coords, axis=0)
+                    else:
+                        center = np.zeros(3)
+                except Exception:
+                    center = np.zeros(3)
             else:
                 center = np.zeros(3)
+
+    # Apply reference ligand CoM shift if applicable
+    _ref_com_shifted = False
+    if ref_ligand_com_prior:
+        ref_com = _compute_ref_ligand_com_shift_server(job, gen_mode, ring_system_index)
+        if ref_com is not None:
+            center = ref_com
+            _ref_com_shifted = True
 
     rng = np.random.default_rng(seed=42)
 
@@ -1614,7 +2240,12 @@ def _compute_prior_cloud_preview(
     if anisotropic and RDKIT_AVAILABLE:
         # Compute anisotropic covariance for visualization
         covariance = _compute_anisotropic_preview_covariance(
-            job, center, has_prior_center, pocket_cutoff
+            job,
+            center,
+            has_prior_center,
+            pocket_cutoff,
+            gen_mode=gen_mode,
+            ring_system_index=ring_system_index,
         )
         if covariance is not None:
             # Symmetrise + jitter for numerical stability
@@ -1651,6 +2282,7 @@ def _compute_prior_cloud_preview(
         "n_atoms": grow_size,
         "has_prior_center": has_prior_center,
         "anisotropic": _aniso_applied,
+        "ref_ligand_com_shifted": _ref_com_shifted,
     }
 
 
@@ -1673,8 +2305,19 @@ async def upload_prior_center(job_id: str, file: UploadFile):
 
     # Compute preview cloud
     grow_size = JOBS[job_id].get("grow_size", 5)
+    _gen_mode = JOBS[job_id].get("gen_mode", "fragment_growing")
+    _rsi = JOBS[job_id].get("ring_system_index", 0)
+    _aniso = JOBS[job_id].get("anisotropic_prior", False)
+    _ref_com = JOBS[job_id].get("ref_ligand_com_prior", False)
     try:
-        cloud = _compute_prior_cloud_preview(JOBS[job_id], grow_size)
+        cloud = _compute_prior_cloud_preview(
+            JOBS[job_id],
+            grow_size,
+            anisotropic=_aniso,
+            gen_mode=_gen_mode,
+            ring_system_index=_rsi,
+            ref_ligand_com_prior=_ref_com,
+        )
     except Exception as exc:
         cloud = None
         print(f"Prior cloud preview failed: {exc}")
@@ -1690,6 +2333,7 @@ async def prior_cloud_preview(
     anisotropic: bool = False,
     gen_mode: str = "fragment_growing",
     ring_system_index: int = 0,
+    ref_ligand_com_prior: bool = False,
 ):
     """Return a prior-cloud preview for visualisation.
 
@@ -1701,8 +2345,27 @@ async def prior_cloud_preview(
     if job_id not in JOBS:
         raise HTTPException(404, "Job not found.")
     job = JOBS[job_id]
+
+    # De novo without ligand: use num_heavy_atoms for cloud size, pocket COM for center
     if "ligand_path" not in job:
-        raise HTTPException(400, "No ligand uploaded yet.")
+        if not job.get("denovo_no_ligand"):
+            raise HTTPException(400, "No ligand uploaded yet.")
+        # Prefer the query-param grow_size (sent by frontend with the
+        # user's current num_heavy_atoms value) so the cloud updates
+        # dynamically when the user edits the input field.
+        eff_size = grow_size or job.get("num_heavy_atoms") or 20
+        try:
+            cloud = _compute_prior_cloud_preview(
+                job,
+                eff_size,
+                pocket_cutoff=pocket_cutoff,
+                anisotropic=False,
+                gen_mode="denovo",
+                ref_ligand_com_prior=False,
+            )
+        except Exception as exc:
+            raise HTTPException(500, f"Prior cloud computation failed: {exc}")
+        return cloud
 
     # Determine the correct cloud size based on generation mode
     effective_grow_size = grow_size
@@ -1734,6 +2397,9 @@ async def prior_cloud_preview(
             effective_grow_size,
             pocket_cutoff=pocket_cutoff,
             anisotropic=anisotropic,
+            gen_mode=gen_mode,
+            ring_system_index=ring_system_index,
+            ref_ligand_com_prior=ref_ligand_com_prior,
         )
     except Exception as exc:
         raise HTTPException(500, f"Prior cloud computation failed: {exc}")
@@ -1750,9 +2416,19 @@ async def generate(request: GenerationRequest):
     if job_id not in JOBS:
         raise HTTPException(404, "Job not found.")
     job = JOBS[job_id]
-    if "ligand_path" not in job:
-        raise HTTPException(400, "No ligand uploaded.")
-    if "protein_path" not in job:
+    # Allow missing ligand when num_heavy_atoms is provided (de novo pocket-only / scratch)
+    has_ligand = "ligand_path" in job
+    has_denovo = request.num_heavy_atoms is not None and request.num_heavy_atoms > 0
+    if not has_ligand and not has_denovo:
+        raise HTTPException(400, "No ligand uploaded and no num_heavy_atoms specified.")
+    # LBDD does not require a protein upload
+    workflow = (
+        request.workflow_type
+        or job.get("workflow_type")
+        or _selected_workflow_type
+        or "sbdd"
+    )
+    if workflow != "lbdd" and "protein_path" not in job:
         raise HTTPException(400, "No protein uploaded.")
     if request.gen_mode not in _VALID_GEN_MODES:
         raise HTTPException(
@@ -1795,7 +2471,20 @@ async def generate(request: GenerationRequest):
         "optimize_gen_ligs_hs": request.optimize_gen_ligs_hs,
         "anisotropic_prior": request.anisotropic_prior,
         "ring_system_index": request.ring_system_index,
+        "ref_ligand_com_prior": request.ref_ligand_com_prior,
+        "workflow_type": workflow,
+        "optimize_method": request.optimize_method,
+        "sample_n_molecules_per_mol": request.sample_n_molecules_per_mol,
+        "num_heavy_atoms": request.num_heavy_atoms,
+        "property_filter": request.property_filter,
+        "adme_filter": request.adme_filter,
     }
+
+    # Store workflow_type and checkpoint in job for proxy branch logic
+    resolved_ckpt = request.ckpt_path or job.get("ckpt_path") or _selected_ckpt_path
+    job["workflow_type"] = workflow
+    if resolved_ckpt:
+        job["ckpt_path"] = resolved_ckpt
 
     # Run the full lifecycle in a background thread:
     # allocate GPU → load model → generate → release GPU
@@ -1812,10 +2501,25 @@ async def cancel_job(job_id: str):
     if job_id not in JOBS:
         raise HTTPException(404, "Job not found.")
     job = JOBS[job_id]
-    if job.get("status") not in ("starting", "allocating_gpu", "generating"):
+    if job.get("status") not in (
+        "starting",
+        "allocating_gpu",
+        "generating",
+        "loading_model",
+    ):
         raise HTTPException(409, "Job is not currently running.")
+    job["cancel_requested_at"] = time.time()
+    job["cancelled"] = True
     job["status"] = "cancelled"
     job["error"] = "Cancelled by user"
+
+    # Forward cancellation to the worker (best-effort)
+    try:
+        worker_url = _get_worker_url()
+        http_requests.post(f"{worker_url}/cancel/{job_id}", timeout=5)
+    except Exception:
+        pass  # Worker may not be reachable — server-side cancel still works
+
     return {"job_id": job_id, "status": "cancelled"}
 
 
@@ -1862,7 +2566,6 @@ async def mol_image(smiles: str, width: int = 300, height: int = 200):
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise HTTPException(400, "Invalid SMILES")
-    from rdkit.Chem.Draw import rdMolDraw2D
 
     drawer = rdMolDraw2D.MolDraw2DSVG(width, height)
     opts = drawer.drawOptions()
@@ -1870,8 +2573,6 @@ async def mol_image(smiles: str, width: int = 300, height: int = 200):
     drawer.DrawMolecule(mol)
     drawer.FinishDrawing()
     svg = drawer.GetDrawingText()
-    from fastapi.responses import Response
-
     return Response(content=svg, media_type="image/svg+xml")
 
 
@@ -1896,11 +2597,14 @@ async def save_ligand(job_id: str, ligand_idx: int):
     if not sdf_data:
         raise HTTPException(400, "No SDF data for this ligand.")
 
-    pdb_name = Path(job.get("protein_filename", "unknown")).stem
+    if job.get("workflow_type") == "lbdd":
+        base_name = Path(job.get("ligand_filename", "molecule")).stem
+    else:
+        base_name = Path(job.get("protein_filename", "unknown")).stem
     output_dir = ROOT_DIR / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    out_path = output_dir / f"{pdb_name}_{job_id}_ligand_{ligand_idx}.sdf"
+    out_path = output_dir / f"{base_name}_{job_id}_ligand_{ligand_idx}.sdf"
     out_path.write_text(sdf_data)
 
     return {"saved": True, "path": str(out_path), "filename": out_path.name}
@@ -1915,7 +2619,10 @@ async def save_all_ligands(job_id: str):
     if not results:
         raise HTTPException(400, "No results to save.")
 
-    pdb_name = Path(job.get("protein_filename", "unknown")).stem
+    if job.get("workflow_type") == "lbdd":
+        base_name = Path(job.get("ligand_filename", "molecule")).stem
+    else:
+        base_name = Path(job.get("protein_filename", "unknown")).stem
     output_dir = ROOT_DIR / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1923,7 +2630,7 @@ async def save_all_ligands(job_id: str):
     for idx, r in enumerate(results):
         sdf_data = r.get("sdf", "")
         if sdf_data:
-            out_path = output_dir / f"{pdb_name}_{job_id}_ligand_{idx}.sdf"
+            out_path = output_dir / f"{base_name}_{job_id}_ligand_{idx}.sdf"
             out_path.write_text(sdf_data)
             saved.append({"path": str(out_path), "filename": out_path.name})
 
@@ -1943,7 +2650,10 @@ async def save_selected_ligands(job_id: str, request: SaveSelectedRequest):
     if not results:
         raise HTTPException(400, "No results to save.")
 
-    pdb_name = Path(job.get("protein_filename", "unknown")).stem
+    if job.get("workflow_type") == "lbdd":
+        base_name = Path(job.get("ligand_filename", "molecule")).stem
+    else:
+        base_name = Path(job.get("protein_filename", "unknown")).stem
     output_dir = ROOT_DIR / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1952,7 +2662,7 @@ async def save_selected_ligands(job_id: str, request: SaveSelectedRequest):
         if 0 <= idx < len(results):
             sdf_data = results[idx].get("sdf", "")
             if sdf_data:
-                out_path = output_dir / f"{pdb_name}_{job_id}_ligand_{idx}.sdf"
+                out_path = output_dir / f"{base_name}_{job_id}_ligand_{idx}.sdf"
                 out_path.write_text(sdf_data)
                 saved.append({"path": str(out_path), "filename": out_path.name})
 
@@ -2076,18 +2786,23 @@ def _generate_interaction_svg_oe(
     asite.SetTitle("")
     oechem.OEPerceiveInteractionHints(asite)
 
-    oegrapheme.OEPrepareActiveSiteDepiction(asite)
-    adisp = oegrapheme.OE2DActiveSiteDisplay(asite, opts)
-    oegrapheme.OERenderActiveSite(main_frame, adisp)
+    try:
+        oegrapheme.OEPrepareActiveSiteDepiction(asite)
+        adisp = oegrapheme.OE2DActiveSiteDisplay(asite, opts)
+        oegrapheme.OERenderActiveSite(main_frame, adisp)
+    except Exception as exc:
+        print(f"WARNING: OpenEye active-site depiction failed: {exc}")
+        return None
 
     lopts = oegrapheme.OE2DActiveSiteLegendDisplayOptions(18, 1)
     oegrapheme.OEDrawActiveSiteLegend(legend_frame, adisp, lopts)
 
     oedepict.OEDrawCurvedBorder(image, oedepict.OELightGreyPen, 10.0)
 
-    tmp_path = str(UPLOAD_DIR / f"interaction_{uuid.uuid4().hex[:8]}.svg")
-    oedepict.OEWriteImage(tmp_path, image)
+    fd, tmp_path = tempfile.mkstemp(suffix=".svg")
+    os.close(fd)
     try:
+        oedepict.OEWriteImage(tmp_path, image)
         with open(tmp_path, "r") as f:
             svg = f.read()
     finally:
@@ -2130,8 +2845,6 @@ async def interaction_diagram(job_id: str, ligand_idx: int = -1):
         svg = _generate_interaction_svg_oe(protein_path, ligand_path)
         if svg is None:
             raise HTTPException(500, "Failed to generate interaction diagram.")
-        from fastapi.responses import Response
-
         return Response(content=svg, media_type="image/svg+xml")
     except HTTPException:
         raise
@@ -2345,22 +3058,20 @@ async def chemical_space(job_id: str, method: str = "pca", perplexity: int = 30)
 
     try:
         if method == "pca":
-            from sklearn.decomposition import PCA
-
+            if not SKLEARN_AVAILABLE:
+                raise HTTPException(501, "scikit-learn not installed on server.")
             reducer = PCA(n_components=2, random_state=42)
             coords = reducer.fit_transform(X)
         elif method == "tsne":
-            from sklearn.manifold import TSNE
-
+            if not SKLEARN_AVAILABLE:
+                raise HTTPException(501, "scikit-learn not installed on server.")
             eff_perp = min(perplexity, max(1, n_samples - 1))
             reducer = TSNE(
                 n_components=2, perplexity=eff_perp, random_state=42, max_iter=1000
             )
             coords = reducer.fit_transform(X)
         elif method == "umap":
-            try:
-                import umap
-            except ImportError:
+            if not UMAP_AVAILABLE:
                 raise HTTPException(501, "umap-learn not installed on server.")
             n_neighbors = min(15, n_samples - 1)
             if n_neighbors < 2:

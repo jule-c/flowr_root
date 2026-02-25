@@ -191,31 +191,26 @@ class _PairwiseMessages(torch.nn.Module):
             pairwise_feats = torch.cat((pairwise_feats, dists), dim=-1)
 
         if self.include_crossproducts:
-            # # Compute cross products between query and key equivariant features
-            # # Shape: [B, N_q, N_kv, 3, d_equi]
-            # q_expanded = q_equi.unsqueeze(2).expand(-1, -1, k_equi.size(1), -1, -1)
-            # k_expanded = k_equi.unsqueeze(1).expand(-1, q_equi.size(1), -1, -1, -1)
-            # cross_products = torch.cross(
-            #     q_expanded, k_expanded, dim=3
-            # )  # [B, N_q, N_kv, 3, d_equi]
-            # cross_norms = torch.linalg.vector_norm(
-            #     cross_products, dim=3
-            # )  # [B, N_q, N_kv, d_equi]
-            # pairwise_feats = torch.cat((pairwise_feats, cross_norms), dim=-1)
-
-            # Compute cross-product norms using the identity:
-            #   ‖a × b‖² = ‖a‖²·‖b‖² − (a·b)²
-            # This avoids materialising full [B, N_q, N_kv, 3, d_equi] expanded
-            # tensors, which can exceed the 2^31 element limit for 32-bit indexing
-            # on CPU/MPS backends with large complexes.
-            # q_equi: [B, N_q, 3, d_equi], k_equi: [B, N_kv, 3, d_equi]
-            q_sq_norms = (q_equi**2).sum(dim=2)  # [B, N_q, d_equi]
-            k_sq_norms = (k_equi**2).sum(dim=2)  # [B, N_kv, d_equi]
-            # dotprods already has shape [B, N_q, N_kv, d_equi] (a·b per equi dim)
-            cross_sq = (
-                q_sq_norms.unsqueeze(2) * k_sq_norms.unsqueeze(1) - dotprods**2
-            )  # [B, N_q, N_kv, d_equi]
-            cross_norms = torch.sqrt(cross_sq.clamp(min=0))
+            if q_equi.is_cuda:
+                # CUDA supports 64-bit indexing, so we can safely materialise the
+                # full [B, N_q, N_kv, 3, d_equi] intermediate.  torch.linalg.vector_norm
+                # also has a numerically stable backward (returns 0 grad at norm=0).
+                q_expanded = q_equi.unsqueeze(2).expand(-1, -1, k_equi.size(1), -1, -1)
+                k_expanded = k_equi.unsqueeze(1).expand(-1, q_equi.size(1), -1, -1, -1)
+                cross_products = torch.cross(q_expanded, k_expanded, dim=3)
+                cross_norms = torch.linalg.vector_norm(cross_products, dim=3)
+            else:
+                # CPU / MPS: use the identity ‖a × b‖² = ‖a‖²·‖b‖² − (a·b)²
+                # to avoid materialising the large expanded tensor (can exceed the
+                # 2^31 element limit for 32-bit indexing on these backends).
+                q_sq_norms = (q_equi**2).sum(dim=2)  # [B, N_q, d_equi]
+                k_sq_norms = (k_equi**2).sum(dim=2)  # [B, N_kv, d_equi]
+                cross_sq = (
+                    q_sq_norms.unsqueeze(2) * k_sq_norms.unsqueeze(1) - dotprods**2
+                )  # [B, N_q, N_kv, d_equi]
+                # sqrt gradient is 1/(2√x) → ∞ at x=0.  Adding eps² keeps it finite.
+                # Only relevant if this path is ever used for training (e.g. on CPU).
+                cross_norms = torch.sqrt(cross_sq.clamp(min=0) + 1e-16)
             pairwise_feats = torch.cat((pairwise_feats, cross_norms), dim=-1)
 
         if edge_feats is not None:

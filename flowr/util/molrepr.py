@@ -708,6 +708,31 @@ class GeometricMol(SmolMol):
         return mol
 
     @staticmethod
+    def from_placeholder(num_heavy_atoms: int = 15) -> GeometricMol:
+        coords = torch.randn(num_heavy_atoms, 3)
+        atomics = torch.ones(
+            num_heavy_atoms,
+        )
+        charges = torch.zeros(
+            num_heavy_atoms,
+        )
+
+        bond_indices = torch.zeros((num_heavy_atoms - 1, 2), dtype=torch.long)
+        bond_indices[:, 0] = torch.arange(num_heavy_atoms - 1)
+        bond_indices[:, 1] = torch.arange(1, num_heavy_atoms)
+        bond_types = torch.ones(num_heavy_atoms - 1, dtype=torch.long)
+
+        mol = GeometricMol(
+            coords,
+            atomics,
+            bond_indices=bond_indices,
+            bond_types=bond_types,
+            charges=charges,
+            is_mmap=False,
+        )
+        return mol
+
+    @staticmethod
     def from_bytes(
         data: bytes,
         remove_hs: bool = False,

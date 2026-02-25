@@ -803,6 +803,11 @@ class LigandDecoder(torch.nn.Module):
         if self.coord_skip_connect:
             out_coords = coords + out_coords * atom_mask.unsqueeze(-1)
 
+        # For mol-only training (no pocket conditioning), enforce zero-COM
+        # to prevent coordinate drift during generation / inpainting
+        if self.d_pocket_inv is None:
+            out_coords = smolF.zero_com(out_coords, node_mask=atom_mask)
+
         # Project invariant features to atom and charge logits
         invs_norm = self.final_inv_norm(invs)
         atom_type_logits = self.atom_type_proj(invs_norm) * atom_mask.unsqueeze(-1)

@@ -54,6 +54,28 @@
 
             <div class="landing-divider"></div>
 
+            <!-- Workflow selection -->
+            <h2 class="landing-section-title">Workflow</h2>
+            <div class="workflow-selector">
+                <label class="workflow-card selected" id="wf-sbdd" onclick="onWorkflowSelect('sbdd')">
+                    <div class="workflow-card-icon">🧬</div>
+                    <div class="workflow-card-body">
+                        <span class="workflow-card-title">Structure-Based</span>
+                        <span class="workflow-card-desc">Generate ligands conditioned on a protein pocket</span>
+                    </div>
+                </label>
+                <label class="workflow-card" id="wf-lbdd" onclick="onWorkflowSelect('lbdd')">
+                    <div class="workflow-card-icon">💊</div>
+                    <div class="workflow-card-body">
+                        <span class="workflow-card-title">Ligand-Based</span>
+                        <span class="workflow-card-desc">Generate novel molecules from a reference ligand or from
+                            scratch</span>
+                    </div>
+                </label>
+            </div>
+
+            <div class="landing-divider"></div>
+
             <!-- Checkpoint selection -->
             <h2 class="landing-section-title">Select Model Checkpoint</h2>
 
@@ -98,8 +120,8 @@
                 Launch
             </button>
 
-            <p class="landing-footer-text">
-                Checkpoint files are loaded from the <code>ckpts/</code> directory.
+            <p class="landing-footer-text" id="ckpt-dir-text">
+                Checkpoint files are loaded from the <code>ckpts/sbdd</code> directory.
             </p>
         </div>
     </div>
@@ -133,9 +155,13 @@
                     </div>
                     <span class="logo-text">FLOWR</span>
                 </div>
-                <span class="topbar-subtitle">Structure-Based Ligand Generation</span>
+                <span class="topbar-subtitle" id="topbar-subtitle">Structure-Based Ligand Generation</span>
             </div>
             <div class="topbar-right">
+                <button class="btn-reset-session" id="reset-session-btn" onclick="resetCurrentSession()"
+                    title="Clear uploads and reset current session">
+                    ↺ RESET
+                </button>
                 <span id="status-badge" class="badge badge-idle">Ready</span>
                 <span class="topbar-info" id="backend-status">●</span>
             </div>
@@ -150,8 +176,29 @@
                         <span class="section-icon">📁</span> Input Files
                     </h3>
 
-                    <!-- Protein upload -->
-                    <div class="upload-group">
+                    <!-- SBDD guidance banner -->
+                    <div class="input-guidance sbdd-only" id="sbdd-guidance">
+                        <p style="margin:0 0 4px 0;"><strong>Two options for structure-based generation:</strong></p>
+                        <ol style="margin:0; padding-left:18px; font-size:12px; color:#6f637b; line-height:1.5;">
+                            <li><strong>Protein + Ligand</strong> — upload both to identify the binding site</li>
+                            <li><strong>Protein Pocket only</strong> — upload a pre-cut pocket PDB and specify the
+                                number of heavy atoms to generate</li>
+                        </ol>
+                    </div>
+
+                    <!-- LBDD guidance banner -->
+                    <div class="input-guidance lbdd-only hidden" id="lbdd-guidance">
+                        <p style="margin:0 0 4px 0;"><strong>Three options for ligand-based generation:</strong></p>
+                        <ol style="margin:0; padding-left:18px; font-size:12px; color:#6f637b; line-height:1.5;">
+                            <li><strong>Reference molecule</strong> — upload an SDF/MOL file</li>
+                            <li><strong>SMILES string</strong> — enter a SMILES and generate a 3D conformer</li>
+                            <li><strong>From scratch</strong> — specify only the number of heavy atoms (no reference
+                                needed)</li>
+                        </ol>
+                    </div>
+
+                    <!-- Protein upload (SBDD only) -->
+                    <div class="upload-group sbdd-only" id="protein-upload-group">
                         <label class="upload-label">Protein Structure</label>
                         <div class="upload-area" id="protein-upload-area" ondrop="handleProteinDrop(event)"
                             ondragover="event.preventDefault()" ondragleave="this.classList.remove('drag-over')">
@@ -167,11 +214,18 @@
                                 <span id="protein-filename"></span>
                             </div>
                         </div>
+                        <!-- Pocket-only mode button (shown after protein upload, SBDD) -->
+                        <div id="pocket-only-toggle" class="pocket-only-toggle hidden">
+                            <button class="btn btn-sm btn-outline btn-pocket-only" id="pocket-only-btn"
+                                onclick="enablePocketOnlyMode()">
+                                🧬 Continue without ligand (pocket-only de novo)
+                            </button>
+                        </div>
                     </div>
 
-                    <!-- Ligand upload -->
-                    <div class="upload-group">
-                        <label class="upload-label">Ligand</label>
+                    <!-- Ligand upload (both SBDD and LBDD) -->
+                    <div class="upload-group" id="ligand-upload-group">
+                        <label class="upload-label" id="ligand-upload-label">Ligand</label>
                         <div class="upload-area" id="ligand-upload-area" ondrop="handleLigandDrop(event)"
                             ondragover="event.preventDefault()" ondragleave="this.classList.remove('drag-over')">
                             <input type="file" id="ligand-file" accept=".sdf,.mol,.mol2,.pdb"
@@ -217,10 +271,46 @@
                             </span>
                         </div>
                     </div>
+
+                    <!-- SMILES input (LBDD only) -->
+                    <div class="upload-group lbdd-only hidden" id="smiles-input-group">
+                        <label class="upload-label">Or enter a SMILES string</label>
+                        <div class="smiles-input-row">
+                            <input type="text" id="smiles-input" class="input-text"
+                                placeholder="e.g. CC(=O)Oc1ccccc1C(=O)O">
+                            <button class="btn btn-sm btn-primary" onclick="submitSmiles()" id="smiles-submit-btn">
+                                Generate 3D
+                            </button>
+                        </div>
+                        <div class="smiles-file-row" style="margin-top:4px;">
+                            <input type="file" id="smiles-file" accept=".smi,.txt" hidden
+                                onchange="uploadSmilesFile(this)">
+                            <button class="btn btn-xs btn-outline"
+                                onclick="document.getElementById('smiles-file').click()">
+                                Upload .smi / .txt
+                            </button>
+                            <span class="muted-text" id="smiles-file-name"></span>
+                        </div>
+                    </div>
+
+                    <!-- LBDD: Generate from scratch button (no reference) -->
+                    <div class="upload-group lbdd-only hidden" id="lbdd-scratch-group">
+                        <label class="upload-label">Or generate from scratch</label>
+                        <button class="btn btn-sm btn-outline btn-pocket-only" id="lbdd-scratch-btn"
+                            onclick="enableLbddScratchMode()">
+                            🧪 Generate without reference
+                        </button>
+                    </div>
+
+                    <!-- Conformer picker (LBDD, shown after SMILES → 3D) -->
+                    <div id="conformer-picker" class="conformer-picker hidden">
+                        <label class="upload-label">Select Conformer</label>
+                        <div id="conformer-grid" class="conformer-grid"></div>
+                    </div>
                 </div>
 
                 <!-- Generation Mode -->
-                <div class="panel-section needs-inputs hidden">
+                <div class="panel-section needs-inputs hidden" id="gen-mode-section">
                     <h3 class="section-title">
                         <span class="section-icon">🧩</span> Generation Mode
                     </h3>
@@ -277,6 +367,19 @@
                         </label>
                     </div>
 
+                    <!-- Number of heavy atoms (de novo mode, both SBDD and LBDD) -->
+                    <div class="sub-options hidden" id="num-heavy-atoms-group" style="margin-top:6px;">
+                        <label class="setting-label">Number of Heavy Atoms
+                            <span class="help-tooltip"
+                                data-tooltip="Specify the number of heavy atoms for de novo generation.">?</span>
+                        </label>
+                        <div class="num-heavy-atoms-row">
+                            <input type="number" id="num-heavy-atoms" class="input-number" min="1" max="200" value=""
+                                placeholder="e.g. 25" oninput="onNumHeavyAtomsChange()">
+                            <span class="muted-text" id="num-heavy-atoms-hint" style="font-size:11px;"></span>
+                        </div>
+                    </div>
+
                     <!-- Anisotropic prior (shown for applicable conditional modes) -->
                     <div id="anisotropic-prior-opt" class="sub-options hidden" style="margin-top:6px;">
                         <label class="mode-option" style="gap:8px;">
@@ -285,6 +388,17 @@
                             <span class="mode-label">Anisotropic prior</span>
                             <span class="help-tooltip"
                                 data-tooltip="Use a directional (anisotropic) Gaussian prior instead of a spherical one. The prior cloud is elongated along the growth direction, which can improve generation quality for conditional modes. Requires a reference point cloud.">?</span>
+                        </label>
+                    </div>
+
+                    <!-- Ref-ligand CoM prior shift (shown for scaffold_hopping, scaffold_elaboration, linker_inpainting, core_growing) -->
+                    <div id="ref-ligand-com-prior-opt" class="sub-options hidden" style="margin-top:6px;">
+                        <label class="mode-option" style="gap:8px;">
+                            <input type="checkbox" id="ref-ligand-com-prior-cb"
+                                onchange="onRefLigandComPriorChange(this.checked)">
+                            <span class="mode-label">Ref-ligand CoM prior</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Shift the prior cloud center to the center of mass of the variable (to-be-generated) fragment of the reference ligand. Useful for conditional modes where the generated part should roughly align with the original variable region.">?</span>
                         </label>
                     </div>
 
@@ -321,8 +435,8 @@
                                     onclick="togglePriorPlacement()">
                                     <span id="place-prior-icon">📌</span> Place
                                 </button>
-                                <button class="btn btn-sm btn-outline" id="reset-prior-pos-btn"
-                                    onclick="resetPriorPosition()" style="display:none;"
+                                <button class="btn btn-sm btn-outline hidden" id="reset-prior-pos-btn"
+                                    onclick="resetPriorPosition()"
                                     title="Reset to default position (ligand center of mass)">↺ Reset</button>
                                 <span class="muted-text" id="prior-coords-display" style="font-size:11px;"></span>
                             </div>
@@ -345,7 +459,7 @@
                 </div>
 
                 <!-- Atom Selection (only for substructure_inpainting) -->
-                <div class="panel-section" id="atom-selection-section" style="display:none;">
+                <div class="panel-section hidden" id="atom-selection-section">
                     <h3 class="section-title">
                         <span class="section-icon">🎯</span> Substructure Selection
                     </h3>
@@ -403,12 +517,14 @@
                         <span class="setting-value" id="steps-val">100</span>
                     </div>
 
-                    <div class="setting-group">
+                    <div class="setting-group sbdd-only" id="pocket-cutoff-group">
                         <label class="setting-label">Pocket cutoff (Å)</label>
                         <input type="range" id="pocket-cutoff" min="3" max="12" step="0.5" value="6" class="slider"
                             oninput="document.getElementById('cutoff-val').textContent = this.value">
                         <span class="setting-value" id="cutoff-val">6.0</span>
                     </div>
+
+
 
                     <div class="setting-group">
                         <label class="checkbox-label">
@@ -469,14 +585,14 @@
                         </label>
                     </div>
 
-                    <div class="setting-group sub-option-inline" id="diversity-threshold-group" style="display:none;">
+                    <div class="setting-group sub-option-inline hidden" id="diversity-threshold-group">
                         <label class="setting-label" style="min-width:80px;">Threshold</label>
                         <input type="range" id="diversity-threshold" min="0.1" max="1.0" step="0.05" value="0.9"
                             class="slider" oninput="document.getElementById('div-thresh-val').textContent = this.value">
                         <span class="setting-value" id="div-thresh-val">0.9</span>
                     </div>
 
-                    <div class="setting-group">
+                    <div class="setting-group sbdd-only" id="opt-full-group">
                         <label class="checkbox-label">
                             <input type="checkbox" id="optimize-gen-ligs">
                             <span>Optimize ligands (full)</span>
@@ -485,7 +601,7 @@
                         </label>
                     </div>
 
-                    <div class="setting-group">
+                    <div class="setting-group sbdd-only" id="opt-hs-group">
                         <label class="checkbox-label">
                             <input type="checkbox" id="optimize-gen-ligs-hs">
                             <span>Optimize ligand Hs only</span>
@@ -494,7 +610,7 @@
                         </label>
                     </div>
 
-                    <div class="setting-group">
+                    <div class="setting-group sbdd-only" id="pb-valid-calc-group">
                         <label class="checkbox-label">
                             <input type="checkbox" id="calculate-pb-valid">
                             <span>Calculate PB validity</span>
@@ -503,7 +619,7 @@
                         </label>
                     </div>
 
-                    <div class="setting-group">
+                    <div class="setting-group sbdd-only" id="pb-valid-filter-group">
                         <label class="checkbox-label">
                             <input type="checkbox" id="filter-pb-valid">
                             <span>Filter PB-valid only</span>
@@ -519,6 +635,76 @@
                             <span class="help-tooltip"
                                 data-tooltip="Calculate internal strain energies for all generated molecules.">?</span>
                         </label>
+                    </div>
+
+                    <!-- LBDD optimization method -->
+                    <div class="setting-group lbdd-only hidden" id="lbdd-opt-group">
+                        <label class="setting-label">Optimization
+                            <span class="help-tooltip"
+                                data-tooltip="Post-generation optimization method. RDKit uses MMFF force-field; xTB uses semi-empirical quantum mechanics.">?</span>
+                        </label>
+                        <select id="lbdd-optimize-method" class="select-input">
+                            <option value="none">None</option>
+                            <option value="rdkit">RDKit (MMFF)</option>
+                            <option value="xtb">xTB</option>
+                        </select>
+                    </div>
+
+                    <!-- Property Filter (collapsible) -->
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="filter-properties">
+                            <span>Filter by properties</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Filter generated molecules by RDKit molecular properties. When enabled, only molecules within the specified property ranges will be kept. Defaults are ±20% of the reference ligand.">?</span>
+                        </label>
+                    </div>
+
+                    <div id="property-filter-panel" class="prop-filter-panel hidden">
+                        <div id="property-filter-list" class="prop-filter-list">
+                            <!-- Dynamically populated by JS when ref properties are available -->
+                            <div class="prop-filter-placeholder">
+                                Upload a reference ligand to configure property ranges.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ADMET Model Filter -->
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="filter-adme">
+                            <span>ADMET model filter</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Upload a pre-trained ADMET model to filter generated molecules by predicted ADMET properties (e.g., clearance, hERG liability).">?</span>
+                        </label>
+                    </div>
+
+                    <div id="adme-filter-panel" class="prop-filter-panel hidden">
+                        <div id="adme-filter-entries" class="adme-filter-entries">
+                            <div class="adme-entry" id="adme-entry-0">
+                                <div class="adme-entry-row">
+                                    <input type="text" class="input-text adme-name" placeholder="Property name"
+                                        title="Name for this ADMET property (e.g. clearance, hERG)">
+                                    <label class="btn btn-sm btn-outline adme-upload-btn">
+                                        <span>📁 Model</span>
+                                        <input type="file" class="adme-model-file"
+                                            accept=".pt,.pth,.pkl,.joblib,.ckpt,.onnx,.bin" hidden>
+                                    </label>
+                                    <button type="button" class="btn btn-sm btn-outline"
+                                        onclick="this.closest('.adme-entry').remove()"
+                                        title="Remove this filter">✕</button>
+                                </div>
+                                <div class="adme-entry-row">
+                                    <label class="adme-range-label">Min</label>
+                                    <input type="number" class="input-number adme-min" step="any" placeholder="—">
+                                    <label class="adme-range-label">Max</label>
+                                    <input type="number" class="input-number adme-max" step="any" placeholder="—">
+                                </div>
+                                <span class="adme-model-name" title="">No model selected</span>
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline" id="adme-add-entry"
+                            onclick="addAdmeEntry()">+ Add ADMET filter</button>
                     </div>
                 </div>
 
@@ -543,15 +729,15 @@
             <main class="viewer-container">
                 <div class="viewer-toolbar">
                     <div class="toolbar-group">
-                        <button class="toolbar-btn active" onclick="setViewMode('complex')" id="view-complex"
+                        <button class="toolbar-btn active sbdd-only" onclick="setViewMode('complex')" id="view-complex"
                             title="Show complex">
                             Complex
                         </button>
-                        <button class="toolbar-btn" onclick="setViewMode('protein')" id="view-protein"
+                        <button class="toolbar-btn sbdd-only" onclick="setViewMode('protein')" id="view-protein"
                             title="Show protein only">
                             Protein
                         </button>
-                        <button class="toolbar-btn" onclick="setViewMode('ligand')" id="view-ligand"
+                        <button class="toolbar-btn sbdd-only" onclick="setViewMode('ligand')" id="view-ligand"
                             title="Show ligand only">
                             Ligand
                         </button>
@@ -560,15 +746,15 @@
                         <button class="toolbar-btn" onclick="resetView()" title="Reset camera">
                             ⟳ Reset
                         </button>
-                        <button class="toolbar-btn" onclick="toggleSurface()" id="btn-surface"
+                        <button class="toolbar-btn sbdd-only" onclick="toggleSurface()" id="btn-surface"
                             title="Toggle protein surface">
                             Surface
                         </button>
-                        <button class="toolbar-btn" onclick="toggleFullAtom()" id="btn-full-atom"
+                        <button class="toolbar-btn sbdd-only" onclick="toggleFullAtom()" id="btn-full-atom"
                             title="Show all protein atoms as sticks">
                             🔩 Full Atom
                         </button>
-                        <button class="toolbar-btn" onclick="toggleBindingSite()" id="btn-binding-site"
+                        <button class="toolbar-btn sbdd-only" onclick="toggleBindingSite()" id="btn-binding-site"
                             title="Show protein binding site residues within 3.5Å of the ligand">
                             🧲 Binding Site
                         </button>
@@ -580,11 +766,13 @@
                             👁 Hide Ligand
                         </button>
                     </div>
-                    <div class="toolbar-group">
+                    <div class="toolbar-group sbdd-only">
                         <button class="toolbar-btn" onclick="showInteractions3D('ref')" id="btn-int-ref"
                             title="Show interactions for reference ligand">
                             🔗 Show Interactions
                         </button>
+                    </div>
+                    <div class="toolbar-group">
                         <button class="toolbar-btn hidden" onclick="togglePriorCloud()" id="toggle-prior-cloud"
                             title="Toggle the prior point cloud showing where new atoms were sampled from">
                             🔮 Prior Cloud
@@ -601,8 +789,9 @@
                                 <text x="32" y="38" text-anchor="middle" fill="#9c8aac" font-size="24">🧬</text>
                             </svg>
                         </div>
-                        <h3>Upload a Protein & Ligand</h3>
-                        <p>Start by uploading a protein structure (PDB/CIF) and a ligand molecule (SDF/MOL) using the
+                        <h3 id="viewer-overlay-title">Upload a Protein & Ligand</h3>
+                        <p id="viewer-overlay-desc">Start by uploading a protein structure (PDB/CIF) and a ligand
+                            molecule (SDF/MOL) using the
                             left
                             panel.</p>
                     </div>

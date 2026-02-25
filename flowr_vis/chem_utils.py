@@ -524,3 +524,124 @@ def crawl_sdf_affinity(filepath: str) -> Optional[Dict[str, Any]]:
             }
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Standard amino acid 3-letter codes (for pocket extraction, matching FLOWR)
+# ---------------------------------------------------------------------------
+STANDARD_AA = {
+    "ALA",
+    "ARG",
+    "ASN",
+    "ASP",
+    "CYS",
+    "GLN",
+    "GLU",
+    "GLY",
+    "HIS",
+    "ILE",
+    "LEU",
+    "LYS",
+    "MET",
+    "PHE",
+    "PRO",
+    "SER",
+    "THR",
+    "TRP",
+    "TYR",
+    "VAL",
+}
+
+
+def compute_pocket_com(
+    protein_path: str,
+    ligand_path: str,
+    pocket_cutoff: float = 6.0,
+) -> Optional[np.ndarray]:
+    """Compute the protein pocket centre of mass (geometric centroid).
+
+    Mimics the FLOWR preprocessing pipeline:
+    1. Parse all ATOM records from the protein PDB.
+    2. Get ligand heavy-atom coordinates from the uploaded SDF.
+    3. Select whole residues (standard amino acids) that have at least one
+       atom within ``pocket_cutoff`` Å of any ligand atom.
+    4. Return the unweighted mean of all selected pocket atom coords.
+
+    Returns ``None`` if computation fails (missing files, parse errors, etc.).
+
+    This function uses only numpy and RDKit — no torch or GPU dependencies.
+    """
+    if not RDKIT_AVAILABLE:
+        return None
+
+    # ── Ligand coordinates ──
+    try:
+        mol = read_ligand_mol(ligand_path)
+        if mol is None:
+            return None
+        mol_noH = Chem.RemoveHs(mol)
+        if mol_noH.GetNumConformers() == 0:
+            return None
+        conf = mol_noH.GetConformer()
+        lig_coords = np.array(
+            [list(conf.GetAtomPosition(i)) for i in range(mol_noH.GetNumAtoms())]
+        )
+    except Exception:
+        return None
+
+    # ── Parse protein ATOM records ──
+    try:
+        protein_atoms: List[Dict[str, Any]] = []
+        with open(protein_path, "r") as fh:
+            for line in fh:
+                if not line.startswith("ATOM"):
+                    continue
+                try:
+                    x = float(line[30:38])
+                    y = float(line[38:46])
+                    z = float(line[46:54])
+                    res_name = line[17:20].strip()
+                    chain_id = line[21:22].strip()
+                    res_seq = line[22:26].strip()
+                except (ValueError, IndexError):
+                    continue
+                protein_atoms.append(
+                    {
+                        "x": x,
+                        "y": y,
+                        "z": z,
+                        "res_name": res_name,
+                        "chain_id": chain_id,
+                        "res_seq": res_seq,
+                    }
+                )
+        if not protein_atoms:
+            return None
+    except Exception:
+        return None
+
+    # ── Select pocket residues within cutoff ──
+    prot_coords = np.array([[a["x"], a["y"], a["z"]] for a in protein_atoms])
+    diff = prot_coords[:, None, :] - lig_coords[None, :, :]  # (P, L, 3)
+    dists = np.sqrt((diff**2).sum(axis=2))  # (P, L)
+    within_cutoff = (dists < pocket_cutoff).any(axis=1)  # (P,) bool
+
+    residue_in_pocket = set()
+    for i, atom in enumerate(protein_atoms):
+        if within_cutoff[i] and atom["res_name"] in STANDARD_AA:
+            residue_in_pocket.add((atom["chain_id"], atom["res_seq"]))
+
+    if not residue_in_pocket:
+        return None
+
+    pocket_coords = []
+    for i, atom in enumerate(protein_atoms):
+        if (atom["chain_id"], atom["res_seq"]) in residue_in_pocket and atom[
+            "res_name"
+        ] in STANDARD_AA:
+            pocket_coords.append([atom["x"], atom["y"], atom["z"]])
+
+    if not pocket_coords:
+        return None
+
+    return np.array(pocket_coords).mean(axis=0)

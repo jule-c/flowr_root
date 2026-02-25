@@ -116,6 +116,30 @@ body {
     gap: 12px;
 }
 
+.btn-reset-session {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    color: #fff;
+    background: var(--lavender-dark);
+    border: 1px solid var(--lavender-dark);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-reset-session:hover {
+    color: #fff;
+    background: var(--lavender-deeper);
+    border-color: var(--lavender-deeper);
+}
+
 .logo {
     display: flex;
     align-items: center;
@@ -268,6 +292,60 @@ body {
     color: var(--text-muted);
     line-height: 1.55;
     margin-bottom: 10px;
+}
+
+/* ===== INPUT GUIDANCE BANNERS ===== */
+.input-guidance {
+    background: var(--bg-input);
+    border: 1px solid var(--lavender);
+    border-left: 3px solid var(--lavender);
+    border-radius: var(--radius-md);
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.input-guidance strong {
+    color: var(--text-primary);
+}
+
+.input-guidance ol li {
+    margin-bottom: 2px;
+}
+
+/* ===== POCKET-ONLY MODE ===== */
+.pocket-only-toggle {
+    margin-top: 8px;
+}
+
+.btn-pocket-only {
+    width: 100%;
+    text-align: center;
+    font-size: 12px;
+    padding: 8px 10px;
+    border-style: dashed;
+    color: var(--text-secondary);
+    transition: all .2s;
+}
+
+.btn-pocket-only:hover {
+    border-color: var(--lavender);
+    color: var(--lavender);
+    background: var(--lavender-glow);
+}
+
+/* Num heavy atoms row */
+.num-heavy-atoms-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.num-heavy-atoms-row .input-number {
+    width: 100px;
+    flex-shrink: 0;
 }
 
 /* ===== UPLOAD ===== */
@@ -631,6 +709,141 @@ body {
     margin-left: 24px;
     padding-left: 8px;
     border-left: 2px solid var(--border);
+}
+
+/* ===== PROPERTY FILTER PANEL ===== */
+.prop-filter-panel {
+    margin-left: 24px;
+    padding: 8px 10px;
+    border-left: 2px solid var(--border);
+    margin-bottom: 10px;
+    max-height: 280px;
+    overflow-y: auto;
+}
+
+.prop-filter-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.prop-filter-placeholder {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 4px 0;
+}
+
+.prop-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 12px;
+}
+
+.prop-filter-row input[type="checkbox"] {
+    accent-color: var(--lavender-deeper);
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.prop-filter-row .prop-name {
+    color: var(--text-secondary);
+    min-width: 105px;
+    flex-shrink: 0;
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.prop-filter-row .prop-range-inputs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    opacity: 0.4;
+    transition: opacity 0.15s;
+}
+
+.prop-filter-row.active .prop-range-inputs {
+    opacity: 1;
+}
+
+.prop-filter-row .prop-range-inputs .input-number {
+    width: 58px;
+    padding: 2px 4px;
+    font-size: 12px;
+    text-align: center;
+}
+
+.prop-filter-row .prop-range-sep {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+/* ADMET filter styles */
+.adme-filter-entries {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.adme-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 8px;
+    background: var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+
+.adme-entry-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.adme-entry .input-text {
+    flex: 1;
+    padding: 3px 6px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+}
+
+.adme-upload-btn {
+    font-size: 11px !important;
+    padding: 3px 8px !important;
+    white-space: nowrap;
+}
+
+.adme-range-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 24px;
+}
+
+.adme-model-name {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#adme-add-entry {
+    font-size: 11px;
+    padding: 3px 10px;
+    align-self: flex-start;
 }
 
 /* ===== FILE PICK (prior center file) ===== */
@@ -1526,6 +1739,125 @@ body {
     padding: 1px 5px;
     border-radius: 3px;
     font-size: 11px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   WORKFLOW SELECTOR (SBDD / LBDD cards)
+   ═══════════════════════════════════════════════════════════════ */
+.workflow-selector {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 4px;
+}
+
+.workflow-card {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 2px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-elevated);
+    cursor: pointer;
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.workflow-card:hover {
+    border-color: var(--accent);
+    background: rgba(223, 198, 246, 0.06);
+}
+
+.workflow-card.selected {
+    border-color: var(--accent);
+    background: rgba(223, 198, 246, 0.10);
+    box-shadow: 0 0 0 3px rgba(223, 198, 246, 0.15);
+}
+
+.workflow-card-icon {
+    font-size: 28px;
+    line-height: 1;
+}
+
+.workflow-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.workflow-card-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.workflow-card-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.3;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SMILES INPUT (LBDD)
+   ═══════════════════════════════════════════════════════════════ */
+.smiles-input-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.smiles-input-row .input-text {
+    flex: 1;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    outline: none;
+}
+
+.smiles-input-row .input-text:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(223, 198, 246, 0.15);
+}
+
+.smiles-file-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CONFORMER PICKER (LBDD)
+   ═══════════════════════════════════════════════════════════════ */
+.conformer-picker {
+    margin-top: 8px;
+}
+
+.conformer-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.conformer-select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elevated);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.conformer-select:hover,
+.conformer-select:focus {
+    border-color: var(--accent);
 }
 
 /* Hide main app until launched */

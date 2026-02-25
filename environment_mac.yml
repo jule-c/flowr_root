@@ -77,3 +77,8 @@ dependencies:
       - tensordict==0.10.0
       - gemmi==0.7.4
       - rdkit==2025.9.3
+      # FLOWR Visualization web server
+      - fastapi>=0.104.0
+      - uvicorn[standard]>=0.24.0
+      - python-multipart>=0.0.6
+      - requests>=2.31.0

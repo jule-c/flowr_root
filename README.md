@@ -123,6 +123,7 @@ sbatch scripts/generate_pdb.sl
 - `--scaffold_elaboration`: Functional group generation (using RDKit to extract scaffold)
 - `--interaction_conditional`: Interaction-constrained generation mode (using ProLIF to extract interactions)
 - `--compute_interactions`: Needed for interaction_conditional (using ProLIF to extract interactions)
+- `--filter_cond_substructure`: Filter to ensure inpainting constraint is satisfied
 
 **Post-processing Options:**
 

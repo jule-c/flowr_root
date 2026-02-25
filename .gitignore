@@ -34,3 +34,6 @@ flowr_vis/hpc/run_hpc_frontend_gamma.sh
 
 # checkpoint files
 **/*.ckpt
+
+# code2pdf
+code_to_pdf.py

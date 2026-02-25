@@ -53,6 +53,14 @@ class LigandCFM(pl.LightningModule):
         charge_loss_weight: float = 1.0,
         hybridization_loss_weight: float = 1.0,
         distance_loss_weight_lig: float = None,
+        bond_angle_loss_weight: float = None,
+        bond_angle_huber_delta: float = 0.2,
+        bond_length_loss_weight: float = None,
+        dihedral_loss_weight: float = None,
+        dihedral_huber_delta: float = 0.5,
+        energy_loss_weight: float = None,
+        energy_loss_weighting: str = "exponential",
+        energy_loss_decay_rate: float = 1.0,
         use_ema: bool = True,
         self_condition: bool = False,
         remove_hs: bool = False,
@@ -68,6 +76,7 @@ class LigandCFM(pl.LightningModule):
         scaffold_elaboration: bool = False,
         scaffold_hopping: bool = False,
         fragment_inpainting: bool = False,
+        fragment_growing: bool = False,
         core_growing: bool = False,
         linker_inpainting: bool = False,
         substructure_inpainting: bool = False,
@@ -77,6 +86,8 @@ class LigandCFM(pl.LightningModule):
         pretrained_weights: bool = False,
         dataset_info: DataInfos = None,
         data_path: str = None,
+        inpaint_self_condition: bool = False,
+        cosine_decay_fraction: float = 1.0,
         **kwargs,
     ):
         super().__init__()
@@ -87,7 +98,7 @@ class LigandCFM(pl.LightningModule):
         if bond_strategy not in ["ce", "mask"]:
             raise ValueError(f"Unsupported bond training strategy '{bond_strategy}'")
 
-        if lr_schedule not in ["constant", "one-cycle", "exponential"]:
+        if lr_schedule not in ["constant", "one-cycle", "exponential", "cosine"]:
             raise ValueError(f"LR scheduler {lr_schedule} not supported.")
 
         if lr_schedule == "one-cycle" and total_steps is None:
@@ -118,8 +129,17 @@ class LigandCFM(pl.LightningModule):
         self.charge_loss_weight = charge_loss_weight
         self.hybridization_loss_weight = hybridization_loss_weight
         self.distance_loss_weight_lig = distance_loss_weight_lig
+        self.bond_angle_loss_weight = bond_angle_loss_weight
+        self.bond_angle_huber_delta = bond_angle_huber_delta
+        self.bond_length_loss_weight = bond_length_loss_weight
+        self.dihedral_loss_weight = dihedral_loss_weight
+        self.dihedral_huber_delta = dihedral_huber_delta
+        self.energy_loss_weight = energy_loss_weight
+        self.energy_loss_weighting = energy_loss_weighting
+        self.energy_loss_decay_rate = energy_loss_decay_rate
         self.lr_schedule = lr_schedule
         self.lr_gamma = lr_gamma
+        self.cosine_decay_fraction = cosine_decay_fraction
         self.sampling_strategy = sampling_strategy
         self.warm_up_steps = warm_up_steps
         self.total_steps = total_steps
@@ -129,6 +149,7 @@ class LigandCFM(pl.LightningModule):
         self.scaffold_hopping = scaffold_hopping
         self.graph_inpainting = graph_inpainting
         self.fragment_inpainting = fragment_inpainting
+        self.fragment_growing = fragment_growing
         self.core_growing = core_growing
         self.linker_inpainting = linker_inpainting
         self.substructure_inpainting = substructure_inpainting
@@ -144,6 +165,7 @@ class LigandCFM(pl.LightningModule):
             or self.linker_inpainting
             or self.substructure_inpainting
             or self.fragment_inpainting
+            or self.fragment_growing
             or self.core_growing
         ):
             self.inpainting_mode = True
@@ -159,7 +181,7 @@ class LigandCFM(pl.LightningModule):
         self.self_condition = self_condition
         self.self_condition_mode = "stacking"
         self.self_condition_prob = 0.5
-        self._inpaint_self_condition = True
+        self._inpaint_self_condition = inpaint_self_condition
 
         # Anything else passed into kwargs will also be saved
         hparams = {
@@ -172,6 +194,14 @@ class LigandCFM(pl.LightningModule):
             "charge_loss_weight": charge_loss_weight,
             "hybridization_loss_weight": hybridization_loss_weight,
             "distance_loss_weight_lig": distance_loss_weight_lig,
+            "bond_angle_loss_weight": bond_angle_loss_weight,
+            "bond_angle_huber_delta": bond_angle_huber_delta,
+            "bond_length_loss_weight": bond_length_loss_weight,
+            "dihedral_loss_weight": dihedral_loss_weight,
+            "dihedral_huber_delta": dihedral_huber_delta,
+            "energy_loss_weight": energy_loss_weight,
+            "energy_loss_weighting": energy_loss_weighting,
+            "energy_loss_decay_rate": energy_loss_decay_rate,
             "use_t_loss_weights": use_t_loss_weights,
             "type_strategy": type_strategy,
             "bond_strategy": bond_strategy,
@@ -181,11 +211,13 @@ class LigandCFM(pl.LightningModule):
             "linker_inpainting": linker_inpainting,
             "substructure_inpainting": substructure_inpainting,
             "fragment_inpainting": fragment_inpainting,
+            "fragment_growing": fragment_growing,
             "core_growing": core_growing,
             "corrector_iters": corrector_iters,
             "remove_hs": remove_hs,
             "remove_aromaticity": remove_aromaticity,
             "lr_schedule": lr_schedule,
+            "cosine_decay_fraction": cosine_decay_fraction,
             "sampling_strategy": sampling_strategy,
             "use_ema": use_ema,
             "warm_up_steps": warm_up_steps,
@@ -204,6 +236,14 @@ class LigandCFM(pl.LightningModule):
             charge_loss_weight=charge_loss_weight,
             hybridization_loss_weight=hybridization_loss_weight,
             distance_loss_weight_lig=distance_loss_weight_lig,
+            bond_angle_loss_weight=bond_angle_loss_weight,
+            bond_angle_huber_delta=bond_angle_huber_delta,
+            bond_length_loss_weight=bond_length_loss_weight,
+            dihedral_loss_weight=dihedral_loss_weight,
+            dihedral_huber_delta=dihedral_huber_delta,
+            energy_loss_weight=energy_loss_weight,
+            energy_loss_weighting=energy_loss_weighting,
+            energy_loss_decay_rate=energy_loss_decay_rate,
             type_strategy=type_strategy,
             bond_strategy=bond_strategy,
             use_t_loss_weights=use_t_loss_weights,
@@ -224,15 +264,15 @@ class LigandCFM(pl.LightningModule):
         gen_mol_metrics = {
             "validity": Metrics.Validity(),
             "fc-validity": Metrics.Validity(connected=True),
-            "pb-validity": Metrics.PoseBustersValidityMolecule(),
-            "uniqueness": Metrics.Uniqueness(),
-            "energy-validity": Metrics.EnergyValidity(),
-            "opt-energy-validity": Metrics.EnergyValidity(optimise=True),
-            "energy": Metrics.AverageEnergy(),
-            "energy-per-atom": Metrics.AverageEnergy(per_atom=True),
+            "pb_validity": Metrics.PoseBustersValidityMolecule(),
+            # "uniqueness": Metrics.Uniqueness(),
+            # "energy-validity": Metrics.EnergyValidity(),
+            # "opt-energy-validity": Metrics.EnergyValidity(optimise=True),
+            # "energy": Metrics.AverageEnergy(),
+            # "energy-per-atom": Metrics.AverageEnergy(per_atom=True),
             "strain": Metrics.AverageStrainEnergy(),
-            "strain-per-atom": Metrics.AverageStrainEnergy(per_atom=True),
-            "opt-rmsd": Metrics.AverageOptRmsd(),
+            # "strain-per-atom": Metrics.AverageStrainEnergy(per_atom=True),
+            # "opt-rmsd": Metrics.AverageOptRmsd(),
         }
         self.gen_dist_metrics = None
         if self.dataset_info is not None and train_mols is not None:
@@ -332,18 +372,20 @@ class LigandCFM(pl.LightningModule):
                 f"Unknown self-conditioning mode: {self.self_condition_mode}"
             )
 
-        # Apply graph inpainting if needed (for stacking mode)
-        if (
-            self.self_condition_mode == "stacking"
-            and self.graph_inpainting
-            and self._inpaint_self_condition
-        ):
-            cond_batch = self.builder.inpaint_graph(
-                lig_data,
-                cond_batch,
-                feature_keys=["coords", "atomics", "bonds"],
-                overwrite_with_zeros=True,
-            )
+        # Apply inpainting if needed (for stacking mode)
+        if self.self_condition_mode == "stacking" and self._inpaint_self_condition:
+            if self.inpainting_mode:
+                cond_batch = self.builder.inpaint_molecule(
+                    lig_data,
+                    cond_batch,
+                )
+            elif self.graph_inpainting:
+                cond_batch = self.builder.inpaint_graph(
+                    lig_data,
+                    cond_batch,
+                    feature_keys=["coords", "atomics", "bonds"],
+                    overwrite_with_zeros=True,
+                )
 
         # During training, randomly use self-conditioning
         if training and torch.rand(1).item() < self.self_condition_prob:
@@ -381,6 +423,23 @@ class LigandCFM(pl.LightningModule):
                     if self.add_feats:
                         cond_batch["hybridization"] = F.softmax(
                             cond_out["hybridization"], dim=-1
+                        )
+
+                if (
+                    self.self_condition_mode == "stacking"
+                    and self._inpaint_self_condition
+                ):
+                    if self.inpainting_mode:
+                        cond_batch = self.builder.inpaint_molecule(
+                            lig_data,
+                            cond_batch,
+                        )
+                    elif self.graph_inpainting:
+                        cond_batch = self.builder.inpaint_graph(
+                            lig_data,
+                            cond_batch,
+                            feature_keys=["coords", "atomics", "bonds"],
+                            overwrite_with_zeros=True,
                         )
 
         return cond_batch
@@ -468,7 +527,7 @@ class LigandCFM(pl.LightningModule):
         #     data=data,
         #     coord_scale=self.coord_scale,
         #     idx=1,
-        #     save_dir=".",
+        #     save_dir="/hpfs/userws/cremej01/projects/tmp",
         # )
 
         losses = self._loss(data, interpolated, predicted)
@@ -622,17 +681,24 @@ class LigandCFM(pl.LightningModule):
         self.on_validation_epoch_end()
 
     def configure_optimizers(self):
+        """Configure optimizers and learning rate schedulers for the model."""
+
         opt = torch.optim.AdamW(
             self.gen.parameters(),
             lr=self.lr,
             amsgrad=True,
             foreach=True,
-            weight_decay=1e-12,
+            betas=(self.beta1, self.beta2),
+            weight_decay=self.weight_decay,
         )
 
         if self.lr_schedule == "constant":
             warm_up_steps = 0 if self.warm_up_steps is None else self.warm_up_steps
-            scheduler = LinearLR(opt, start_factor=1e-2, total_iters=warm_up_steps)
+            scheduler = LinearLR(
+                opt,
+                start_factor=0.1 if warm_up_steps > 0 else 1.0,
+                total_iters=warm_up_steps,
+            )
 
         # TODO could use warm_up_steps to shift peak of one cycle
         elif self.lr_schedule == "one-cycle":
@@ -640,11 +706,37 @@ class LigandCFM(pl.LightningModule):
                 opt, max_lr=self.lr, total_steps=self.total_steps, pct_start=0.3
             )
         elif self.lr_schedule == "exponential":
+            warm_up_steps = self.warm_up_steps if self.warm_up_steps else 0
             scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=self.lr_gamma)
+
+        elif self.lr_schedule == "cosine":
+            # Calculate actual cosine annealing steps (excluding warmup)
+            # cosine_decay_fraction < 1.0 enables faster decay by shortening the period
+            warm_up_steps = self.warm_up_steps if self.warm_up_steps else 0
+            cosine_steps = self.total_steps - warm_up_steps
+            effective_cosine_steps = int(cosine_steps * self.cosine_decay_fraction)
+
+            # Create cosine annealing scheduler
+            cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=effective_cosine_steps, eta_min=self.lr * 0.1
+            )
+
+            # Combine with warmup if specified
+            if warm_up_steps > 0:
+                warmup_scheduler = LinearLR(
+                    opt, start_factor=0.1, total_iters=warm_up_steps
+                )
+                scheduler = torch.optim.lr_scheduler.SequentialLR(
+                    opt,
+                    schedulers=[warmup_scheduler, cosine_scheduler],
+                    milestones=[warm_up_steps],
+                )
+            else:
+                scheduler = cosine_scheduler
         else:
             raise ValueError(f"LR schedule {self.lr_schedule} is not supported.")
 
-        if self.lr_schedule == "constant":
+        if self.lr_schedule == "constant" or self.lr_schedule == "cosine":
             config = {
                 "optimizer": opt,
                 "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
@@ -757,6 +849,8 @@ class LigandCFM(pl.LightningModule):
         corr_iters=None,
         corr_step_size=None,
         iter: int = 0,
+        final_inpaint: bool = False,
+        final_corr_pred: bool = True,
     ):
 
         corr_iters = 0 if corr_iters is None else corr_iters
@@ -768,8 +862,8 @@ class LigandCFM(pl.LightningModule):
             # time_points = (1 - np.geomspace(0.01, 0.999, steps + 1)).tolist()
             # time_points.reverse()
             time_points = 1.0 - torch.logspace(-2, 0, steps + 1).flip(0)
-            time_points = time_points - torch.min(time_points)
-            time_points = time_points / torch.max(time_points)
+            time_points = time_points - torch.amin(time_points)
+            time_points = time_points / torch.amax(time_points)
         else:
             raise ValueError(f"Unknown ODE integration strategy '{strategy}'")
 
@@ -789,10 +883,16 @@ class LigandCFM(pl.LightningModule):
             "atomics": torch.zeros_like(prior["atomics"]),
             "bonds": torch.zeros_like(prior["bonds"]),
         }
-        if self.graph_inpainting:
-            cond_batch = self.builder.inpaint_graph(
-                prior, cond_batch, feature_keys=self.sc_feature_keys
-            )
+        if self._inpaint_self_condition:
+            if self.inpainting_mode:
+                cond_batch = self.builder.inpaint_molecule(prior, cond_batch)
+            elif self.graph_inpainting:
+                cond_batch = self.builder.inpaint_graph(
+                    prior,
+                    cond_batch,
+                    feature_keys=["coords", "atomics", "bonds"],
+                    overwrite_with_zeros=True,
+                )
 
         step_sizes = [t1 - t0 for t0, t1 in zip(time_points[:-1], time_points[1:])]
         with torch.no_grad():
@@ -816,7 +916,7 @@ class LigandCFM(pl.LightningModule):
                 )
 
                 # Inpainting for the ligand if required
-                if self.inpainting_mode:
+                if self.inpainting_mode and self.inpainting_mode_inf == "fragment":
                     curr = self.builder.inpaint_molecule(
                         data=prior,
                         prediction=curr,
@@ -827,11 +927,20 @@ class LigandCFM(pl.LightningModule):
                         curr,
                         feature_keys=self.feature_keys,
                     )
-                    cond_batch = self.builder.inpaint_graph(
-                        prior,
-                        cond_batch,
-                        feature_keys=self.sc_feature_keys,
-                    )
+                # Self-conditioning inpainting
+                if self._inpaint_self_condition:
+                    if self.inpainting_mode:
+                        cond_batch = self.builder.inpaint_molecule(
+                            prior,
+                            cond_batch,
+                        )
+                    elif self.graph_inpainting:
+                        cond_batch = self.builder.inpaint_graph(
+                            prior,
+                            cond_batch,
+                            feature_keys=["coords", "atomics", "bonds"],
+                            overwrite_with_zeros=True,
+                        )
 
                 # Save trajectory
                 if save_traj:
@@ -860,17 +969,12 @@ class LigandCFM(pl.LightningModule):
                         predicted,
                         feature_keys=self.feature_keys,
                     )
-                    cond_batch = self.builder.inpaint_graph(
-                        prior,
-                        cond_batch,
-                        feature_keys=self.sc_feature_keys,
-                    )
                 step_size = 1 / steps if corr_step_size is None else corr_step_size
                 curr = self.integrator.corrector_iter(
                     curr, predicted, prior, times, step_size
                 )
                 # Inpainting for the ligand if required
-                if self.inpainting_mode:
+                if self.inpainting_mode and self.inpainting_mode_inf == "fragment":
                     curr = self.builder.inpaint_molecule(
                         data=prior,
                         prediction=curr,
@@ -881,34 +985,53 @@ class LigandCFM(pl.LightningModule):
                         curr,
                         feature_keys=self.feature_keys,
                     )
-                    cond_batch = self.builder.inpaint_graph(
-                        prior,
-                        cond_batch,
-                        feature_keys=self.sc_feature_keys,
-                    )
+                # Self-conditioning inpainting
+                if self._inpaint_self_condition:
+                    if self.inpainting_mode:
+                        cond_batch = self.builder.inpaint_molecule(
+                            prior,
+                            cond_batch,
+                        )
+                    elif self.graph_inpainting:
+                        cond_batch = self.builder.inpaint_graph(
+                            prior,
+                            cond_batch,
+                            feature_keys=["coords", "atomics", "bonds"],
+                            overwrite_with_zeros=True,
+                        )
 
         # Final corrector prediction
-        eps = -1e-4
-        times = self._update_times(
-            times,
-            eps,
-        )
-        cond = cond_batch if self.self_condition else None
-        with torch.no_grad():
-            out = self(
-                curr,
+        if final_corr_pred:
+            eps = -1e-4
+            times = self._update_times(
                 times,
-                training=False,
-                cond_batch=cond,
+                eps,
             )
+            with torch.no_grad():
+                cond = cond_batch if self.self_condition else None
+                out = self(
+                    curr,
+                    times,
+                    training=False,
+                    cond_batch=cond,
+                )
+            predicted, _ = self._get_predictions(out)
 
-        predicted, _ = self._get_predictions(out)
-        if self.graph_inpainting:
-            predicted = self.builder.inpaint_graph(
-                prior,
-                predicted,
-                feature_keys=self.feature_keys,
-            )
+            # Final inpainting for the ligand if required
+            if final_inpaint:
+                if self.inpainting_mode and self.inpainting_mode_inf == "fragment":
+                    predicted = self.builder.inpaint_molecule(
+                        data=prior,
+                        prediction=predicted,
+                    )
+                elif self.graph_inpainting:
+                    predicted = self.builder.inpaint_graph(
+                        prior,
+                        predicted,
+                        feature_keys=self.feature_keys,
+                    )
+        else:
+            predicted = curr
 
         # Move everything to CPU
         predicted = {

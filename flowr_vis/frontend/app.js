@@ -31,6 +31,7 @@ const INTERACTION_COLORS = {
 
 // ===== State =====
 let state = {
+    workflowType: 'sbdd',           // 'sbdd' or 'lbdd'
     jobId: null,
     proteinData: null,
     ligandData: null,
@@ -55,6 +56,9 @@ let state = {
     refLigandVisible: true,          // whether the reference ligand is shown
     genHsVisible: false,             // whether Hs are shown on generated ligands
     genUsedOptimization: false,      // whether optimize_gen_ligs or optimize_gen_ligs_hs was used
+    numHeavyAtoms: null,              // user-specified or auto-detected number of heavy atoms
+    pocketOnlyMode: false,           // SBDD: true when user proceeds without ligand (pocket-only de novo)
+    lbddScratchMode: false,          // LBDD: true when generating from scratch (no reference)
     priorCloud: null,                // prior cloud data {center, points, ...}
     priorCloudSpheres: [],           // 3Dmol sphere handles for the cloud
     priorCloudVisible: true,         // visibility toggle for the prior cloud
@@ -64,6 +68,7 @@ let state = {
     _uploadedPriorCenterFilename: null, // filename after early upload of prior center
     _generating: false,                  // concurrency guard for startGeneration
     anisotropicPrior: false,                 // anisotropic (directional) Gaussian prior
+    refLigandComPrior: false,            // shift prior center to variable fragment CoM
     proteinFullAtom: false,              // toggle: show entire protein as sticks
     bindingSiteVisible: false,           // toggle: show pocket residues within 3.5Å as sticks
 };
@@ -102,6 +107,8 @@ function initMainApp() {
     initResizeHandle();
     initFilterDiversityToggle();
     initAddNoiseToggle();
+    initPropertyFilterToggle();
+    initAdmeFilterToggle();
     // Task 2: Hide sidebar sections until both protein and ligand are uploaded
     _updateSidebarVisibility();
 }
@@ -112,21 +119,40 @@ function initMainApp() {
 
 let _ckptData = { base: [], project: [] };
 let _selectedCkptPath = null;
+let _selectedWorkflow = 'sbdd';
 
-async function initLandingPage() {
+function onWorkflowSelect(wf) {
+    _selectedWorkflow = wf;
+    document.querySelectorAll('.workflow-card').forEach(c => c.classList.remove('selected'));
+    const card = document.getElementById('wf-' + wf);
+    if (card) card.classList.add('selected');
+    // Re-fetch checkpoints for the selected workflow (sbdd → ckpts/sbdd, lbdd → ckpts/lbdd)
+    _fetchCheckpoints(wf);
+    // Update checkpoint directory text
+    const ckptDirText = document.getElementById('ckpt-dir-text');
+    if (ckptDirText) {
+        const dir = wf === 'lbdd' ? 'ckpts/lbdd' : 'ckpts/sbdd';
+        ckptDirText.innerHTML = `Checkpoint files are loaded from the <code>${dir}</code> directory.`;
+    }
+}
+
+async function _fetchCheckpoints(workflow) {
     try {
-        const resp = await fetch(`${API_BASE}/checkpoints`);
+        const resp = await fetch(`${API_BASE}/checkpoints?workflow=${workflow}`);
         _ckptData = await resp.json();
     } catch (e) {
         console.error('Failed to fetch checkpoints', e);
         _ckptData = { base: [], project: [] };
     }
-
     populateBaseSelect();
     populateProjectSelect();
+    onCkptTypeChange(document.querySelector('input[name="ckpt-type"]:checked')?.value || 'base');
+}
 
-    // Default to base model
-    onCkptTypeChange('base');
+async function initLandingPage() {
+    // Default workflow is sbdd
+    _selectedWorkflow = 'sbdd';
+    await _fetchCheckpoints('sbdd');
 }
 
 function populateBaseSelect() {
@@ -218,9 +244,11 @@ async function launchApp() {
         const resp = await fetch(`${API_BASE}/register-checkpoint`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ckpt_path: _selectedCkptPath }),
+            body: JSON.stringify({ ckpt_path: _selectedCkptPath, workflow_type: _selectedWorkflow }),
         });
         const data = await resp.json();
+
+        state.workflowType = _selectedWorkflow;
 
         status.className = 'landing-status status-success';
         status.textContent = 'Checkpoint registered. Entering app…';
@@ -263,6 +291,7 @@ function transitionToApp() {
         landing.classList.add('hidden');
         mainApp.classList.remove('hidden');
         initMainApp();
+        _applyWorkflowMode(state.workflowType);
     }, 450);
 }
 
@@ -329,10 +358,18 @@ function returnToLanding() {
     state._uploadedPriorCenterFilename = null;
     state._generating = false;
     state.anisotropicPrior = false;
+    state.refLigandComPrior = false;
     state.proteinFullAtom = false;
     state.bindingSiteVisible = false;
     state.interactionShapes = [];
     state.showingInteractions = null;
+    state.workflowType = 'sbdd';
+    state._conformerJobId = null;
+
+    // De novo mode state
+    state.numHeavyAtoms = null;
+    state.pocketOnlyMode = false;
+    state.lbddScratchMode = false;
 
     // ── Reset all UI elements ──
     // Upload placeholders
@@ -341,6 +378,28 @@ function returnToLanding() {
     document.getElementById('ligand-placeholder')?.classList.remove('hidden');
     document.getElementById('ligand-success')?.classList.add('hidden');
     document.getElementById('ligand-info')?.classList.add('hidden');
+    // Hide de novo UI
+    document.getElementById('pocket-only-toggle')?.classList.add('hidden');
+    document.getElementById('num-heavy-atoms-group')?.classList.add('hidden');
+    document.getElementById('lbdd-scratch-group')?.classList.add('hidden');
+    document.getElementById('pocket-only-btn')?.classList.remove('active');
+    document.getElementById('lbdd-scratch-btn')?.classList.remove('active');
+
+    // Restore all upload options and guidance banners (hidden by dynamic UI logic)
+    document.getElementById('sbdd-guidance')?.classList.remove('hidden');
+    document.getElementById('lbdd-guidance')?.classList.remove('hidden');
+    document.getElementById('ligand-upload-group')?.classList.remove('hidden');
+    document.getElementById('smiles-input-group')?.classList.remove('hidden');
+
+    // Reset LBDD-specific UI
+    const confPicker = document.getElementById('conformer-picker');
+    if (confPicker) { confPicker.classList.add('hidden'); }
+    const confGrid = document.getElementById('conformer-grid');
+    if (confGrid) confGrid.innerHTML = '';
+    const smilesInput = document.getElementById('smiles-input');
+    if (smilesInput) smilesInput.value = '';
+    const smilesFileName = document.getElementById('smiles-file-name');
+    if (smilesFileName) smilesFileName.textContent = '';
     // Viewer overlay
     document.getElementById('viewer-overlay')?.classList.remove('hidden');
     // Results
@@ -404,6 +463,182 @@ function returnToLanding() {
         launchBtn.disabled = !_selectedCkptPath;
         launchBtn.innerHTML = '🚀 Launch';
     }
+}
+
+/**
+ * Reset the current session without returning to the landing page.
+ * Clears uploads, viewer, ligand/protein state, conformer picker,
+ * SMILES input, and results so the user can re-upload fresh.
+ */
+function resetCurrentSession() {
+    // Cancel any running generation
+    if (state._generating && state.jobId) {
+        fetch(`${API_BASE}/cancel/${state.jobId}`, { method: 'POST' }).catch(() => { });
+    }
+
+    // ── Tear down 3D viewer contents ──
+    if (state.generatedModel !== null) {
+        state.viewer.removeModel(state.generatedModel);
+        state.generatedModel = null;
+    }
+    if (state.ligandModel) {
+        state.viewer.removeModel(state.ligandModel);
+        state.ligandModel = null;
+    }
+    if (state.proteinModel) {
+        state.viewer.removeModel(state.proteinModel);
+        state.proteinModel = null;
+    }
+    clearInteractions3D();
+    clearAutoHighlight();
+    clearPriorCloud();
+    closeMol2DOverlay();
+    state.atomLabels.forEach(l => state.viewer.removeLabel(l));
+    state.atomLabels = [];
+    state.selectionSpheres.forEach(s => state.viewer.removeShape(s));
+    state.selectionSpheres = [];
+    state.selectionSphereMap.clear();
+    if (state.viewer) {
+        state.viewer.removeAllSurfaces();
+        state.viewer.render();
+    }
+
+    // ── Reset JS state ──
+    state.jobId = null;
+    state.proteinData = null;
+    state.ligandData = null;
+    state.genMode = 'denovo';
+    state.fixedAtoms.clear();
+    state.heavyAtomMap.clear();
+    state.generatedResults = [];
+    state.activeResultIdx = -1;
+    state.surfaceOn = false;
+    state.viewMode = state.workflowType === 'lbdd' ? 'ligand' : 'complex';
+    state.refHasExplicitHs = false;
+    state.autoHighlightSpheres = [];
+    state.refLigandVisible = true;
+    state.genHsVisible = false;
+    state.genUsedOptimization = false;
+    state.priorCloud = null;
+    state.priorCloudSpheres = [];
+    state.priorCloudVisible = true;
+    state.priorCloudPlacing = false;
+    state._priorDrag = null;
+    state._priorPlacedCenter = null;
+    state._uploadedPriorCenterFilename = null;
+    state._generating = false;
+    state.anisotropicPrior = false;
+    state.refLigandComPrior = false;
+    state.proteinFullAtom = false;
+    state.bindingSiteVisible = false;
+    state._conformerJobId = null;
+
+    // De novo mode state
+    state.numHeavyAtoms = null;
+    state.pocketOnlyMode = false;
+    state.lbddScratchMode = false;
+
+    // ── Reset upload UI ──
+    document.getElementById('protein-placeholder')?.classList.remove('hidden');
+    document.getElementById('protein-success')?.classList.add('hidden');
+    document.getElementById('ligand-placeholder')?.classList.remove('hidden');
+    document.getElementById('ligand-success')?.classList.add('hidden');
+    document.getElementById('ligand-info')?.classList.add('hidden');
+    // Hide de novo UI
+    document.getElementById('pocket-only-toggle')?.classList.add('hidden');
+    document.getElementById('num-heavy-atoms-group')?.classList.add('hidden');
+    document.getElementById('lbdd-scratch-group')?.classList.add('hidden');
+    document.getElementById('pocket-only-btn')?.classList.remove('active');
+    document.getElementById('lbdd-scratch-btn')?.classList.remove('active');
+
+    // Restore all upload options and guidance banners (hidden by dynamic UI logic)
+    document.getElementById('sbdd-guidance')?.classList.remove('hidden');
+    document.getElementById('lbdd-guidance')?.classList.remove('hidden');
+    document.getElementById('ligand-upload-group')?.classList.remove('hidden');
+    document.getElementById('smiles-input-group')?.classList.remove('hidden');
+
+    const protFile = document.getElementById('protein-file');
+    if (protFile) protFile.value = '';
+    const ligFile = document.getElementById('ligand-file');
+    if (ligFile) ligFile.value = '';
+
+    // Reset LBDD-specific UI
+    const confPicker = document.getElementById('conformer-picker');
+    if (confPicker) confPicker.classList.add('hidden');
+    const confGrid = document.getElementById('conformer-grid');
+    if (confGrid) confGrid.innerHTML = '';
+    const smilesInput = document.getElementById('smiles-input');
+    if (smilesInput) smilesInput.value = '';
+    const smilesFileName = document.getElementById('smiles-file-name');
+    if (smilesFileName) smilesFileName.textContent = '';
+
+    // Viewer overlay
+    document.getElementById('viewer-overlay')?.classList.remove('hidden');
+
+    // Results
+    const list = document.getElementById('results-list');
+    if (list) { list.classList.add('hidden'); list.innerHTML = ''; }
+    document.getElementById('results-placeholder')?.classList.remove('hidden');
+    document.getElementById('gen-summary')?.classList.add('hidden');
+    document.getElementById('clear-gen-btn')?.classList.add('hidden');
+    document.getElementById('gen-hs-controls')?.classList.add('hidden');
+    document.getElementById('save-section')?.classList.add('hidden');
+    document.getElementById('viz-controls')?.classList.add('hidden');
+
+    // Metrics
+    document.getElementById('metrics-panel')?.classList.add('hidden');
+    const ml = document.getElementById('metrics-log');
+    if (ml) ml.innerHTML = '';
+
+    // Progress bar
+    const progressContainer = document.getElementById('progress-container');
+    if (progressContainer) progressContainer.classList.add('hidden');
+    const pf = document.getElementById('progress-fill');
+    if (pf) pf.style.width = '0%';
+    const pt = document.getElementById('progress-text');
+    if (pt) pt.textContent = 'Generating...';
+
+    // Rank controls
+    document.getElementById('rank-select-controls')?.classList.add('hidden');
+    document.getElementById('rank-reset-btn')?.classList.add('hidden');
+
+    // Affinity panel
+    document.getElementById('affinity-panel-body')?.classList.add('hidden');
+    document.getElementById('affinity-panel-chevron')?.classList.remove('expanded');
+
+    // Reset generation mode to de novo
+    const denovoRadio = document.querySelector('input[name="gen-mode"][value="denovo"]');
+    if (denovoRadio) denovoRadio.checked = true;
+    document.getElementById('atom-selection-section')?.classList.add('hidden');
+    document.getElementById('fragment-growing-opts')?.classList.add('hidden');
+
+    // Generate button
+    const btn = document.getElementById('generate-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="btn-icon">▶</span> Generate Ligands';
+        btn.onclick = startGeneration;
+    }
+
+    // Hide Ligand button
+    const hideLigBtn = document.getElementById('btn-hide-ligand');
+    if (hideLigBtn) { hideLigBtn.textContent = '👁 Hide Ligand'; hideLigBtn.classList.remove('active'); }
+
+    // Status badge
+    setBadge('idle', 'Ready');
+    _updateDeviceBadge('NO GPU', 'idle');
+
+    // Reset generation settings
+    _resetGenerationSettings();
+
+    // Re-apply workflow mode to restore SBDD/LBDD-specific elements
+    // (e.g. the LBDD scratch option that was explicitly hidden above)
+    _applyWorkflowMode(state.workflowType);
+
+    // Unfreeze sidebar
+    _freezeSidebar(false);
+
+    showToast('Session reset — upload new files to start', 'info');
 }
 
 function initViewer() {
@@ -541,7 +776,7 @@ async function uploadProtein(input) {
         state.genMode = 'denovo';
         const denovoRadio = document.querySelector('input[name="gen-mode"][value="denovo"]');
         if (denovoRadio) denovoRadio.checked = true;
-        document.getElementById('atom-selection-section').style.display = 'none';
+        document.getElementById('atom-selection-section').classList.add('hidden');
         document.getElementById('fragment-growing-opts')?.classList.add('hidden');
         // Reset generation settings & filter options
         _resetGenerationSettings();
@@ -559,6 +794,10 @@ async function uploadProtein(input) {
         document.getElementById('protein-filename').textContent = data.filename;
         document.getElementById('viewer-overlay').classList.add('hidden');
 
+        // Show the pocket-only toggle (SBDD)
+        const pocketToggle = document.getElementById('pocket-only-toggle');
+        if (pocketToggle) pocketToggle.classList.remove('hidden');
+
         renderProtein(data.pdb_data, data.format);
         setBadge('success', 'Protein loaded');
         showToast(`Protein loaded: ${data.filename}`, 'success');
@@ -572,8 +811,13 @@ async function uploadProtein(input) {
 
 async function uploadLigand(input) {
     const file = input.files[0];
-    if (!file || !state.jobId) {
-        if (!state.jobId) showToast('Upload a protein first', 'error');
+    if (!file) return;
+
+    const isLBDD = state.workflowType === 'lbdd';
+
+    // In SBDD mode, protein must be uploaded first (creates the job)
+    if (!isLBDD && !state.jobId) {
+        showToast('Upload a protein first', 'error');
         return;
     }
 
@@ -582,12 +826,26 @@ async function uploadLigand(input) {
     formData.append('file', file);
 
     try {
-        const resp = await fetch(`${API_BASE}/upload/ligand/${state.jobId}`, {
-            method: 'POST',
-            body: formData,
-        });
+        let resp, data;
+        if (isLBDD && !state.jobId) {
+            // LBDD: use /upload/molecule which creates a job without protein
+            resp = await fetch(`${API_BASE}/upload/molecule`, {
+                method: 'POST',
+                body: formData,
+            });
+        } else {
+            resp = await fetch(`${API_BASE}/upload/ligand/${state.jobId}`, {
+                method: 'POST',
+                body: formData,
+            });
+        }
         if (!resp.ok) throw new Error(await resp.text());
-        const data = await resp.json();
+        data = await resp.json();
+
+        // For LBDD, the molecule upload returns a job_id
+        if (isLBDD && data.job_id) {
+            state.jobId = data.job_id;
+        }
 
         // ── Reset ligand-dependent state from previous ligand ──
         if (state.generatedModel !== null) {
@@ -620,6 +878,10 @@ async function uploadLigand(input) {
         if (ml) ml.innerHTML = '';
 
         state.ligandData = data;
+
+        // Build atom index map for O(1) lookups by idx
+        state.ligandData._atomByIdx = new Map();
+        data.atoms.forEach(a => state.ligandData._atomByIdx.set(a.idx, a));
 
         // Build mapping from H-inclusive RDKit indices → heavy-atom-only indices.
         // FLOWR removes hydrogens, so atom numbering changes. We must send
@@ -657,14 +919,59 @@ async function uploadLigand(input) {
             refAffEl.closest('.info-row')?.classList.add('hidden');
         }
 
+        document.getElementById('viewer-overlay')?.classList.add('hidden');
         renderLigand(data.sdf_data);
         setBadge('success', 'Ligand loaded');
         showToast(`Ligand loaded: ${data.filename} (${data.num_heavy_atoms} heavy atoms)`, 'success');
-        updateGenerateBtn();
 
-        // Show prior cloud for the currently selected mode now that both
-        // protein and ligand are available (de novo is the default).
-        if (state.proteinData && state.ligandData && state.jobId) {
+        // ── De novo helpers: populate num_heavy_atoms from reference ligand ──
+        state.numHeavyAtoms = data.num_heavy_atoms;
+        _showNumHeavyAtomsField(data.num_heavy_atoms, 'from reference — editable');
+
+        // ── Populate property filter panel with reference-based defaults ──
+        if (data.ref_properties) {
+            populatePropertyFilterPanel(data.ref_properties);
+        }
+
+        // If pocket-only / scratch mode was previously active, deactivate it
+        // now that a real ligand has been provided.
+        if (state.pocketOnlyMode) {
+            state.pocketOnlyMode = false;
+            document.getElementById('pocket-only-btn')?.classList.remove('active');
+        }
+        if (state.lbddScratchMode) {
+            state.lbddScratchMode = false;
+            document.getElementById('lbdd-scratch-btn')?.classList.remove('active');
+        }
+
+        // Hide unselected upload options and guidance text after successful upload
+        if (!isLBDD) {
+            // SBDD: hide guidance and pocket-only toggle
+            document.getElementById('sbdd-guidance')?.classList.add('hidden');
+            document.getElementById('pocket-only-toggle')?.classList.add('hidden');
+        } else {
+            // LBDD: hide guidance, SMILES input, and scratch button
+            document.getElementById('lbdd-guidance')?.classList.add('hidden');
+            document.getElementById('smiles-input-group')?.classList.add('hidden');
+            document.getElementById('lbdd-scratch-group')?.classList.add('hidden');
+        }
+
+        // Re-enable conditional generation modes now that a reference ligand exists
+        document.querySelectorAll('input[name="gen-mode"]').forEach(r => {
+            r.disabled = false;
+            r.closest('.mode-option')?.classList.remove('hidden');
+        });
+        // Re-show filter-substructure checkbox
+        document.getElementById('filter-cond-substructure')?.closest('.setting-group')?.classList.remove('hidden');
+
+        updateGenerateBtn();
+        _updateSidebarVisibility();
+
+        // Show prior cloud for the currently selected mode now that inputs
+        // are available (de novo is the default).
+        const hasSbddInputs = !isLBDD && state.proteinData && state.ligandData && state.jobId;
+        const hasLbddInputs = isLBDD && state.ligandData && state.jobId;
+        if (hasSbddInputs || hasLbddInputs) {
             if (state.genMode === 'substructure_inpainting') {
                 _updateSubstructurePriorCloud();
             } else {
@@ -675,6 +982,354 @@ async function uploadLigand(input) {
         console.error(e);
         setBadge('error', 'Upload failed');
         showToast('Failed to upload ligand file', 'error');
+    }
+}
+
+// =========================================================================
+// Pocket-Only Mode (SBDD) & Scratch Mode (LBDD) + Heavy Atoms Control
+// =========================================================================
+
+/**
+ * Enable pocket-only de novo mode (SBDD).
+ * The user uploaded a protein pocket file but no ligand.
+ * Shows the num_heavy_atoms field and enables generation controls.
+ */
+async function enablePocketOnlyMode() {
+    state.pocketOnlyMode = true;
+    state.genMode = 'denovo';
+
+    // Show the num heavy atoms field
+    _showNumHeavyAtomsField(25, 'Pocket-only de novo (no reference ligand)');
+
+    // Hide unselected upload options and guidance text
+    document.getElementById('sbdd-guidance')?.classList.add('hidden');
+    document.getElementById('ligand-upload-group')?.classList.add('hidden');
+    document.getElementById('pocket-only-toggle')?.classList.add('hidden');
+
+    // Hide viewer overlay
+    document.getElementById('viewer-overlay')?.classList.add('hidden');
+
+    // Force de novo mode and disable non-applicable modes
+    const denovoRadio = document.querySelector('input[name="gen-mode"][value="denovo"]');
+    if (denovoRadio) denovoRadio.checked = true;
+    // Hide conditional modes that require a reference ligand
+    document.querySelectorAll('input[name="gen-mode"]:not([value="denovo"])').forEach(r => {
+        r.disabled = true;
+        r.closest('.mode-option')?.classList.add('hidden');
+    });
+    // Hide the filter-substructure checkbox (no substructure to filter against)
+    document.getElementById('filter-cond-substructure')?.closest('.setting-group')?.classList.add('hidden');
+
+    // Update UI
+    updateGenerateBtn();
+    _updateSidebarVisibility();
+
+    // Create a de novo job on the server (no ligand needed)
+    try {
+        const resp = await fetch(`${API_BASE}/create-denovo-job`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                job_id: state.jobId,
+                num_heavy_atoms: state.numHeavyAtoms,
+                workflow_type: 'sbdd',
+            }),
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            // job_id stays the same; job now has de novo metadata
+        }
+    } catch (e) {
+        console.warn('Failed to create de novo job:', e);
+    }
+
+    // Fetch and render prior cloud preview at pocket COM
+    _fetchAndRenderPriorCloudPreview();
+
+    showToast('Pocket-only de novo mode enabled — specify the number of heavy atoms', 'info');
+}
+
+/**
+ * Enable LBDD scratch mode — generate molecules without a reference.
+ * Shows the num_heavy_atoms field and enables generation.
+ */
+async function enableLbddScratchMode() {
+    state.lbddScratchMode = true;
+    state.genMode = 'denovo';
+
+    // Show the num heavy atoms field
+    _showNumHeavyAtomsField(25, 'De novo from scratch (no reference molecule)');
+
+    // Hide unselected upload options and guidance text
+    document.getElementById('lbdd-guidance')?.classList.add('hidden');
+    document.getElementById('ligand-upload-group')?.classList.add('hidden');
+    document.getElementById('smiles-input-group')?.classList.add('hidden');
+    document.getElementById('lbdd-scratch-group')?.classList.add('hidden');
+
+    // Hide viewer overlay
+    document.getElementById('viewer-overlay')?.classList.add('hidden');
+
+    // Force de novo mode and disable non-applicable modes
+    const denovoRadio = document.querySelector('input[name="gen-mode"][value="denovo"]');
+    if (denovoRadio) denovoRadio.checked = true;
+    document.querySelectorAll('input[name="gen-mode"]:not([value="denovo"])').forEach(r => {
+        r.disabled = true;
+        r.closest('.mode-option')?.classList.add('hidden');
+    });
+    // Hide the filter-substructure checkbox (no substructure to filter against)
+    document.getElementById('filter-cond-substructure')?.closest('.setting-group')?.classList.add('hidden');
+
+    // Create a scratch job on the server
+    try {
+        const resp = await fetch(`${API_BASE}/create-denovo-job`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                num_heavy_atoms: state.numHeavyAtoms,
+                workflow_type: 'lbdd',
+            }),
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            state.jobId = data.job_id;
+        }
+    } catch (e) {
+        console.warn('Failed to create scratch job:', e);
+    }
+
+    updateGenerateBtn();
+    _updateSidebarVisibility();
+
+    // Render a prior cloud (centered at origin for LBDD scratch)
+    _fetchAndRenderPriorCloudPreview();
+
+    showToast('Scratch mode enabled — specify the number of heavy atoms to generate', 'info');
+}
+
+/**
+ * Handle changes to the Number of Heavy Atoms input.
+ * Dynamically updates the prior cloud preview.
+ */
+let _numHeavyAtomsDebounce = null;
+function onNumHeavyAtomsChange() {
+    const input = document.getElementById('num-heavy-atoms');
+    const val = parseInt(input?.value);
+    if (!val || val < 1 || val > 200) return;
+    state.numHeavyAtoms = val;
+
+    // Debounce the prior cloud update to avoid excessive requests
+    clearTimeout(_numHeavyAtomsDebounce);
+    _numHeavyAtomsDebounce = setTimeout(() => {
+        if (state.genMode === 'denovo' && state.jobId) {
+            _fetchAndRenderPriorCloudPreview();
+        }
+    }, 250);
+
+    updateGenerateBtn();
+}
+
+/**
+ * Show the num-heavy-atoms field with optional reference count.
+ */
+function _showNumHeavyAtomsField(refCount, hintText) {
+    const group = document.getElementById('num-heavy-atoms-group');
+    // Only show the field visually when de novo mode is active
+    if (group && state.genMode === 'denovo') group.classList.remove('hidden');
+    const input = document.getElementById('num-heavy-atoms');
+    if (input) {
+        if (refCount != null) {
+            input.value = refCount;
+            state.numHeavyAtoms = refCount;
+        }
+    }
+    const hint = document.getElementById('num-heavy-atoms-hint');
+    if (hint && hintText) hint.textContent = hintText;
+}
+
+/**
+ * Hide the num-heavy-atoms field.
+ */
+function _hideNumHeavyAtomsField() {
+    const group = document.getElementById('num-heavy-atoms-group');
+    if (group) group.classList.add('hidden');
+    state.numHeavyAtoms = null;
+}
+
+// =========================================================================
+// SMILES Input & Conformer Picker (LBDD)
+// =========================================================================
+
+async function submitSmiles() {
+    const inp = document.getElementById('smiles-input');
+    const smiles = inp?.value?.trim();
+    if (!smiles) { showToast('Enter a SMILES string', 'error'); return; }
+
+    const btn = document.getElementById('smiles-submit-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳…';
+    setBadge('loading', 'Generating conformers…');
+
+    try {
+        const resp = await fetch(`${API_BASE}/generate-conformers`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ smiles, max_confs: 10 }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+
+        if (!data.conformers || data.conformers.length === 0) {
+            showToast('No conformers could be generated', 'error');
+            return;
+        }
+
+        // Store job_id from conformer generation
+        state._conformerJobId = data.job_id;
+
+        // Show conformer picker
+        _renderConformerGrid(data.conformers, data.job_id);
+        setBadge('success', `${data.conformers.length} conformers`);
+        showToast(`Generated ${data.conformers.length} conformers`, 'success');
+    } catch (e) {
+        console.error(e);
+        showToast('Conformer generation failed: ' + e.message, 'error');
+        setBadge('error', 'Failed');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate 3D';
+    }
+}
+
+function uploadSmilesFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function (e) {
+        const text = e.target.result.trim();
+        // Take first line, first column (space/tab separated)
+        const firstSmiles = text.split('\n')[0].split(/[\s\t]/)[0].trim();
+        if (firstSmiles) {
+            document.getElementById('smiles-input').value = firstSmiles;
+            document.getElementById('smiles-file-name').textContent = file.name;
+        }
+    };
+    reader.readAsText(file);
+}
+
+function _renderConformerGrid(conformers, jobId) {
+    const grid = document.getElementById('conformer-grid');
+    const picker = document.getElementById('conformer-picker');
+    grid.innerHTML = '';
+    picker.classList.remove('hidden');
+
+    // Hide the SMILES input and other upload options once conformers are shown
+    document.getElementById('smiles-input-group')?.classList.add('hidden');
+    document.getElementById('lbdd-guidance')?.classList.add('hidden');
+    document.getElementById('ligand-upload-group')?.classList.add('hidden');
+    document.getElementById('lbdd-scratch-group')?.classList.add('hidden');
+
+    // Sort by energy (lowest first) — server already sorts, but ensure here.
+    const sorted = conformers
+        .map((c, i) => ({ ...c, _origIdx: i }))
+        .sort((a, b) => (a.energy ?? Infinity) - (b.energy ?? Infinity));
+
+    // Build a dropdown <select>
+    const sel = document.createElement('select');
+    sel.id = 'conformer-select';
+    sel.className = 'conformer-select';
+    sorted.forEach((conf, rank) => {
+        const opt = document.createElement('option');
+        opt.value = conf._origIdx;
+        const eStr = conf.energy != null ? conf.energy.toFixed(2) + ' kcal/mol' : '—';
+        opt.textContent = `Conformer #${rank + 1}  —  ${eStr}`;
+        sel.appendChild(opt);
+    });
+    sel.onchange = () => _selectConformer(jobId, parseInt(sel.value), conformers);
+    grid.appendChild(sel);
+
+    // Auto-select lowest-energy conformer (first in sorted list)
+    if (sorted.length > 0) {
+        _selectConformer(jobId, sorted[0]._origIdx, conformers);
+    }
+}
+
+async function _selectConformer(jobId, confIdx, conformers) {
+    setBadge('loading', 'Loading conformer…');
+
+    try {
+        const resp = await fetch(`${API_BASE}/select-conformer/${jobId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ conformer_idx: confIdx }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+
+        // Now the SDF is saved as ligand for this job — update state as if uploaded
+        state.jobId = data.job_id;
+        state.ligandData = data;
+
+        // Build atom index map for O(1) lookups by idx
+        state.ligandData._atomByIdx = new Map();
+        (data.atoms || []).forEach(a => state.ligandData._atomByIdx.set(a.idx, a));
+
+        // Build heavy atom map
+        state.heavyAtomMap = new Map();
+        let heavyIdx = 0;
+        (data.atoms || []).forEach(a => {
+            if (a.atomicNum !== 1) {
+                state.heavyAtomMap.set(a.idx, heavyIdx);
+                heavyIdx++;
+            }
+        });
+
+        // Update UI
+        document.getElementById('ligand-placeholder')?.classList.add('hidden');
+        document.getElementById('ligand-success')?.classList.remove('hidden');
+        document.getElementById('ligand-filename').textContent = data.filename || 'conformer.sdf';
+
+        const infoCard = document.getElementById('ligand-info');
+        if (infoCard) {
+            infoCard.classList.remove('hidden');
+            document.getElementById('ligand-smiles').textContent = data.smiles_noH || data.smiles || '';
+            document.getElementById('ligand-heavy-atoms').textContent = data.num_heavy_atoms || '';
+            document.getElementById('ligand-total-atoms').textContent = data.num_atoms || '';
+        }
+
+        document.getElementById('viewer-overlay')?.classList.add('hidden');
+        if (data.sdf_data) renderLigand(data.sdf_data);
+
+        setBadge('success', 'Conformer loaded');
+        showToast(`Conformer #${confIdx + 1} selected`, 'success');
+
+        // Populate num_heavy_atoms from conformer data (same as uploadLigand)
+        state.numHeavyAtoms = data.num_heavy_atoms;
+        _showNumHeavyAtomsField(data.num_heavy_atoms, 'from reference — editable');
+
+        // Hide unselected upload options and guidance text (LBDD conformer path)
+        document.getElementById('lbdd-guidance')?.classList.add('hidden');
+        document.getElementById('ligand-upload-group')?.classList.add('hidden');
+        document.getElementById('lbdd-scratch-group')?.classList.add('hidden');
+
+        updateGenerateBtn();
+        _updateSidebarVisibility();
+
+        // Trigger prior cloud for the current mode (de novo is default)
+        const isLBDD = state.workflowType === 'lbdd';
+        const hasInputs = isLBDD
+            ? (state.ligandData && state.jobId)
+            : (state.proteinData && state.ligandData && state.jobId);
+        if (hasInputs) {
+            if (state.genMode === 'substructure_inpainting') {
+                _updateSubstructurePriorCloud();
+            } else {
+                _fetchAndRenderPriorCloudPreview();
+            }
+        }
+    } catch (e) {
+        console.error(e);
+        showToast('Failed to select conformer', 'error');
+        setBadge('error', 'Failed');
     }
 }
 
@@ -703,6 +1358,15 @@ function renderProtein(pdbData, format) {
     state.viewer.render();
 }
 
+/**
+ * Return the best available ligand model for binding-site/interaction
+ * calculations — prefers the reference ligand, falls back to the
+ * currently selected generated ligand.
+ */
+function _getActiveLigandModel() {
+    return state.ligandModel || state.generatedModel;
+}
+
 function applyProteinStyle() {
     // Base: always cartoon
     state.viewer.setStyle(
@@ -727,7 +1391,7 @@ function applyProteinStyle() {
     }
 
     // Binding site overlay: sticks on whole residues within 3.5Å of ligand
-    if (state.bindingSiteVisible && state.ligandModel) {
+    if (state.bindingSiteVisible && _getActiveLigandModel()) {
         const bsSerials = _getBindingSiteSerials(3.5);
         if (bsSerials.length > 0) {
             state.viewer.addStyle(
@@ -744,8 +1408,9 @@ function applyProteinStyle() {
  * all atoms of that residue are included).
  */
 function _getBindingSiteSerials(cutoff) {
-    if (!state.proteinModel || !state.ligandModel) return [];
-    const ligAtoms = state.ligandModel.selectedAtoms({});
+    const activeLigand = _getActiveLigandModel();
+    if (!state.proteinModel || !activeLigand) return [];
+    const ligAtoms = activeLigand.selectedAtoms({});
     const protAtoms = state.proteinModel.selectedAtoms({});
     if (!ligAtoms.length || !protAtoms.length) return [];
     const cutoffSq = cutoff * cutoff;
@@ -826,7 +1491,7 @@ function reapplyClickable() {
             const idx = findLigandAtomIdx(atom);
             if (idx !== null) {
                 // Double-check it's not H
-                const atomInfo = state.ligandData.atoms.find(a => a.idx === idx);
+                const atomInfo = state.ligandData._atomByIdx.get(idx);
                 if (atomInfo && atomInfo.atomicNum === 1) return;
                 toggleAtom(idx);
             }
@@ -943,9 +1608,25 @@ const MODE_LABELS = {
 function onModeChange(mode) {
     state.genMode = mode;
 
+    // Show/hide number of heavy atoms field (only for de novo)
+    const numHAGroup = document.getElementById('num-heavy-atoms-group');
+    if (numHAGroup) {
+        if (mode === 'denovo') {
+            numHAGroup.classList.remove('hidden');
+            // Pre-populate from reference ligand if available
+            if (state.ligandData && state.ligandData.num_heavy_atoms && !state.numHeavyAtoms) {
+                const input = document.getElementById('num-heavy-atoms');
+                if (input) input.value = state.ligandData.num_heavy_atoms;
+                state.numHeavyAtoms = state.ligandData.num_heavy_atoms;
+            }
+        } else {
+            numHAGroup.classList.add('hidden');
+        }
+    }
+
     // Show/hide atom selection (only for substructure_inpainting)
     const atomSection = document.getElementById('atom-selection-section');
-    atomSection.style.display = mode === 'substructure_inpainting' ? '' : 'none';
+    atomSection.classList.toggle('hidden', mode !== 'substructure_inpainting');
 
     // Show/hide fragment growing sub-options
     const fragOpts = document.getElementById('fragment-growing-opts');
@@ -978,6 +1659,20 @@ function onModeChange(mode) {
             const cb = document.getElementById('anisotropic-prior-cb');
             if (cb) cb.checked = false;
             state.anisotropicPrior = false;
+        }
+    }
+
+    // Show/hide ref-ligand CoM prior checkbox (applicable for scaffold_hopping, scaffold_elaboration, linker_inpainting, core_growing)
+    const refComModes = ['scaffold_hopping', 'scaffold_elaboration', 'linker_inpainting', 'core_growing'];
+    const refComOpt = document.getElementById('ref-ligand-com-prior-opt');
+    if (refComOpt) {
+        if (refComModes.includes(mode)) {
+            refComOpt.classList.remove('hidden');
+        } else {
+            refComOpt.classList.add('hidden');
+            const rcCb = document.getElementById('ref-ligand-com-prior-cb');
+            if (rcCb) rcCb.checked = false;
+            state.refLigandComPrior = false;
         }
     }
 
@@ -1014,15 +1709,15 @@ function onModeChange(mode) {
     state._priorPlacedCenter = null;
     _updatePriorCoordsDisplay(null);
     const resetBtn = document.getElementById('reset-prior-pos-btn');
-    if (resetBtn) resetBtn.style.display = 'none';
+    if (resetBtn) resetBtn.classList.add('hidden');
 
     if (mode !== 'denovo' && mode !== 'substructure_inpainting' && state.ligandData && state.jobId) {
         _fetchAndRenderPriorCloudPreview();
     } else if (mode === 'substructure_inpainting') {
         // Prior cloud will appear dynamically once atoms are selected
         clearPriorCloud();
-    } else if (mode === 'denovo' && state.ligandData && state.jobId) {
-        // Show prior cloud at pocket COM for de novo mode
+    } else if (mode === 'denovo' && state.jobId && (state.ligandData || state.pocketOnlyMode || state.lbddScratchMode)) {
+        // Show prior cloud at pocket COM for de novo mode (including pocket-only / scratch)
         _fetchAndRenderPriorCloudPreview();
     } else {
         _exitPriorPlacement();
@@ -1039,6 +1734,20 @@ function onAnisotropicPriorChange(checked) {
     state.anisotropicPrior = checked;
 
     // Re-fetch and render prior cloud preview with new anisotropic setting
+    if (state.genMode !== 'denovo' && state.ligandData && state.jobId) {
+        _fetchAndRenderPriorCloudPreview();
+    }
+}
+
+/**
+ * Handle ref-ligand CoM prior checkbox toggle.
+ * Shifts the prior cloud center to the variable fragment CoM of the
+ * reference ligand for applicable conditional modes.
+ */
+function onRefLigandComPriorChange(checked) {
+    state.refLigandComPrior = checked;
+
+    // Re-fetch and render prior cloud preview with new ref_ligand_com_prior setting
     if (state.genMode !== 'denovo' && state.ligandData && state.jobId) {
         _fetchAndRenderPriorCloudPreview();
     }
@@ -1079,7 +1788,7 @@ function _updateSubstructurePriorCloud() {
     // Compute COM of selected (to-be-replaced) atoms
     let sx = 0, sy = 0, sz = 0, n = 0;
     state.fixedAtoms.forEach(idx => {
-        const atom = state.ligandData?.atoms?.find(a => a.idx === idx);
+        const atom = state.ligandData?._atomByIdx?.get(idx);
         if (atom && atom.atomicNum !== 1) {
             sx += atom.x; sy += atom.y; sz += atom.z;
             n++;
@@ -1096,7 +1805,7 @@ function _updateSubstructurePriorCloud() {
 
 /** Add or remove a single selection sphere without touching styles/clickable. */
 function _updateSingleSphere(idx, selected) {
-    const atom = state.ligandData?.atoms?.find(a => a.idx === idx);
+    const atom = state.ligandData?._atomByIdx?.get(idx);
     if (!atom || atom.atomicNum === 1) return;
 
     if (selected) {
@@ -1185,7 +1894,7 @@ function updateSelectionUI() {
 
     const sorted = Array.from(state.fixedAtoms).sort((a, b) => a - b);
     const chips = sorted.map(idx => {
-        const atom = state.ligandData?.atoms?.find(a => a.idx === idx);
+        const atom = state.ligandData?._atomByIdx?.get(idx);
         const label = atom ? `${atom.symbol}${idx}` : `#${idx}`;
         return `<span class="atom-chip" onclick="toggleAtom(${idx})" title="Click to deselect">
             ${label} <span class="chip-x">✕</span>
@@ -1365,8 +2074,8 @@ function toggleFullAtom() {
  */
 function toggleBindingSite() {
     if (!state.proteinModel) return;
-    if (!state.ligandModel) {
-        showToast('Upload a ligand first to show the binding site', 'error');
+    if (!_getActiveLigandModel()) {
+        showToast('Upload or generate a ligand first to show the binding site', 'error');
         return;
     }
     state.bindingSiteVisible = !state.bindingSiteVisible;
@@ -1474,7 +2183,7 @@ function _resetGenerationSettings() {
     if (denovoRadio) denovoRadio.checked = true;
 
     // Hide mode-dependent sections
-    document.getElementById('atom-selection-section').style.display = 'none';
+    document.getElementById('atom-selection-section').classList.add('hidden');
     const fragOpts = document.getElementById('fragment-growing-opts');
     if (fragOpts) fragOpts.classList.add('hidden');
 
@@ -1484,6 +2193,13 @@ function _resetGenerationSettings() {
     const anisoCb = document.getElementById('anisotropic-prior-cb');
     if (anisoCb) anisoCb.checked = false;
     state.anisotropicPrior = false;
+
+    // Hide and reset ref-ligand CoM prior checkbox
+    const refComOpt = document.getElementById('ref-ligand-com-prior-opt');
+    if (refComOpt) refComOpt.classList.add('hidden');
+    const refComCb = document.getElementById('ref-ligand-com-prior-cb');
+    if (refComCb) refComCb.checked = false;
+    state.refLigandComPrior = false;
 
     // Clear atom selection state
     state.fixedAtoms.clear();
@@ -1500,13 +2216,28 @@ function _resetGenerationSettings() {
     state._priorPlacedCenter = null;
     _updatePriorCoordsDisplay(null);
     const resetPriorBtn = document.getElementById('reset-prior-pos-btn');
-    if (resetPriorBtn) resetPriorBtn.style.display = 'none';
+    if (resetPriorBtn) resetPriorBtn.classList.add('hidden');
 
     // Clear auto-highlight spheres and inpainting legend
     clearAutoHighlight();
 
     // Clear prior cloud (also exits placement mode internally)
     clearPriorCloud();
+
+    // Reset de novo pocket-only / scratch state
+    state.pocketOnlyMode = false;
+    state.lbddScratchMode = false;
+    state.numHeavyAtoms = null;
+    _hideNumHeavyAtomsField();
+    document.getElementById('pocket-only-btn')?.classList.remove('active');
+    document.getElementById('lbdd-scratch-btn')?.classList.remove('active');
+    // Re-enable all generation mode radio buttons and show their labels
+    document.querySelectorAll('input[name="gen-mode"]').forEach(r => {
+        r.disabled = false;
+        r.closest('.mode-option')?.classList.remove('hidden');
+    });
+    // Re-show filter-substructure checkbox
+    document.getElementById('filter-cond-substructure')?.closest('.setting-group')?.classList.remove('hidden');
 
     // Mode is now de novo — show the default prior cloud preview
     _fetchAndRenderPriorCloudPreview();
@@ -1531,7 +2262,7 @@ function _resetGenerationSettings() {
     const noiseVal = document.getElementById('noise-scale-val');
     if (noiseVal) noiseVal.textContent = '0.1';
     const noiseGroup = document.getElementById('noise-scale-group');
-    if (noiseGroup) noiseGroup.style.display = '';
+    if (noiseGroup) noiseGroup.classList.remove('hidden');
 
     // ── Diversity threshold: reset to 0.9, hide sub-option ──
     const divSlider = document.getElementById('diversity-threshold');
@@ -1539,7 +2270,7 @@ function _resetGenerationSettings() {
     const divVal = document.getElementById('div-thresh-val');
     if (divVal) divVal.textContent = '0.9';
     const divGroup = document.getElementById('diversity-threshold-group');
-    if (divGroup) divGroup.style.display = 'none';
+    if (divGroup) divGroup.classList.add('hidden');
 
     // ── Generation settings sliders ──
     const _setSlider = (id, valId, val) => {
@@ -1626,8 +2357,16 @@ function toggleRefLigandVisibility() {
 
 function updateGenerateBtn() {
     const btn = document.getElementById('generate-btn');
-    btn.disabled = !(state.proteinData && state.ligandData);
-    // Task 2: Update sidebar section visibility whenever input state changes
+    const isLBDD = state.workflowType === 'lbdd';
+
+    // Standard path: need protein+ligand (SBDD) or ligand (LBDD).
+    // De novo path: pocket-only (SBDD) or scratch (LBDD) need numHeavyAtoms + jobId.
+    const standardReady = isLBDD ? !!state.ligandData : !!(state.proteinData && state.ligandData);
+    const denovoReady = isLBDD
+        ? (state.lbddScratchMode && state.numHeavyAtoms > 0 && !!state.jobId)
+        : (state.pocketOnlyMode && !!state.proteinData && state.numHeavyAtoms > 0 && !!state.jobId);
+
+    btn.disabled = !(standardReady || denovoReady);
     _updateSidebarVisibility();
 }
 
@@ -1635,8 +2374,52 @@ function updateGenerateBtn() {
  * Task 2: Show/hide sidebar sections that should only be visible
  * when both a protein and a ligand have been uploaded.
  */
+/**
+ * Apply SBDD/LBDD mode: show/hide elements tagged with .sbdd-only / .lbdd-only.
+ * Also updates subtitle and viewer overlay text.
+ */
+function _applyWorkflowMode(wf) {
+    const isLBDD = wf === 'lbdd';
+
+    // Show/hide tagged elements
+    document.querySelectorAll('.sbdd-only').forEach(el => {
+        if (isLBDD) el.classList.add('hidden');
+        else el.classList.remove('hidden');
+    });
+    document.querySelectorAll('.lbdd-only').forEach(el => {
+        if (isLBDD) el.classList.remove('hidden');
+        else el.classList.add('hidden');
+    });
+
+    // Update topbar subtitle
+    const sub = document.getElementById('topbar-subtitle');
+    if (sub) sub.textContent = isLBDD ? 'Ligand-Based Molecule Generation' : 'Structure-Based Ligand Generation';
+
+    // Update viewer overlay instructions
+    const overlayTitle = document.getElementById('viewer-overlay-title');
+    const overlayDesc = document.getElementById('viewer-overlay-desc');
+    if (overlayTitle) overlayTitle.textContent = isLBDD ? 'Upload a Molecule' : 'Upload a Protein & Ligand';
+    if (overlayDesc) overlayDesc.textContent = isLBDD
+        ? 'Upload an SDF/MOL file, enter a SMILES string, or generate from scratch using the left panel.'
+        : 'Upload a protein structure (PDB/CIF) and optionally a ligand (SDF/MOL), or use pocket-only mode for de novo generation.';
+
+    // Update ligand upload label
+    const ligLabel = document.getElementById('ligand-upload-label');
+    if (ligLabel) ligLabel.textContent = isLBDD ? 'Reference Molecule' : 'Ligand';
+
+    // Update sidebar visibility rules
+    _updateSidebarVisibility();
+}
+
 function _updateSidebarVisibility() {
-    const ready = !!(state.proteinData && state.ligandData);
+    const isLBDD = state.workflowType === 'lbdd';
+    // SBDD needs both; LBDD only needs a ligand (molecule).
+    // De novo pocket-only / scratch modes also count as ready.
+    const standardReady = isLBDD ? !!state.ligandData : !!(state.proteinData && state.ligandData);
+    const denovoReady = isLBDD
+        ? (state.lbddScratchMode && state.numHeavyAtoms > 0 && !!state.jobId)
+        : (state.pocketOnlyMode && !!state.proteinData && state.numHeavyAtoms > 0 && !!state.jobId);
+    const ready = standardReady || denovoReady;
     const sections = document.querySelectorAll('.panel-left .panel-section.needs-inputs');
     sections.forEach(s => {
         if (ready) {
@@ -1645,10 +2428,26 @@ function _updateSidebarVisibility() {
             s.classList.add('hidden');
         }
     });
+    // Re-hide workflow-specific sections that shouldn't be visible
+    // (avoids infinite recursion with _applyWorkflowMode)
+    if (ready) {
+        document.querySelectorAll('.panel-left .panel-section.needs-inputs.sbdd-only').forEach(el => {
+            if (isLBDD) el.classList.add('hidden');
+        });
+        document.querySelectorAll('.panel-left .panel-section.needs-inputs.lbdd-only').forEach(el => {
+            if (!isLBDD) el.classList.add('hidden');
+        });
+    }
 }
 
 async function startGeneration() {
-    if (!state.jobId || !state.ligandData) return;
+    // Standard path requires ligandData; de novo pocket-only / scratch path
+    // only needs numHeavyAtoms (and protein for SBDD).
+    const hasDenovoInputs = state.pocketOnlyMode || state.lbddScratchMode;
+    if (!state.jobId) return;
+    if (!state.ligandData && !hasDenovoInputs) return;
+    // SBDD also requires protein
+    if (state.workflowType !== 'lbdd' && !state.proteinData) return;
     if (state._generating) return;
     state._generating = true;
 
@@ -1679,15 +2478,17 @@ async function startGeneration() {
     const batchSize = parseInt(document.getElementById('batch-size').value);
     const steps = parseInt(document.getElementById('integration-steps').value);
     const cutoff = parseFloat(document.getElementById('pocket-cutoff').value);
+    const isLBDD = state.workflowType === 'lbdd';
 
-    // Build mode-specific payload
+    // Build mode-specific payload — LBDD supports all the same gen modes as SBDD
     const mode = state.genMode;
     const payload = {
         job_id: state.jobId,
-        protein_path: state.proteinData.filename,
-        ligand_path: state.ligandData.filename,
+        workflow_type: state.workflowType,
+        protein_path: isLBDD ? null : (state.proteinData?.filename || null),
+        ligand_path: state.ligandData ? state.ligandData.filename : null,
         gen_mode: mode,
-        fixed_atoms: mode === 'substructure_inpainting'
+        fixed_atoms: (mode === 'substructure_inpainting')
             ? Array.from(state.fixedAtoms).map(
                 idx => state.heavyAtomMap.get(idx)
             ).filter(idx => idx !== undefined)
@@ -1695,7 +2496,10 @@ async function startGeneration() {
         n_samples: nSamples,
         batch_size: batchSize,
         integration_steps: steps,
-        pocket_cutoff: cutoff,
+        pocket_cutoff: isLBDD ? 6.0 : cutoff,
+
+        // De novo: num_heavy_atoms for placeholder ligand generation
+        num_heavy_atoms: state.numHeavyAtoms || null,
 
         // Noise
         coord_noise_scale: document.getElementById('add-noise')?.checked
@@ -1708,18 +2512,28 @@ async function startGeneration() {
         filter_cond_substructure: document.getElementById('filter-cond-substructure')?.checked || false,
         filter_diversity: document.getElementById('filter-diversity')?.checked || false,
         diversity_threshold: parseFloat(document.getElementById('diversity-threshold')?.value || '0.9'),
-        optimize_gen_ligs: document.getElementById('optimize-gen-ligs')?.checked || false,
-        optimize_gen_ligs_hs: document.getElementById('optimize-gen-ligs-hs')?.checked || false,
-        calculate_pb_valid: document.getElementById('calculate-pb-valid')?.checked || false,
-        filter_pb_valid: document.getElementById('filter-pb-valid')?.checked || false,
+        optimize_gen_ligs: (!isLBDD && document.getElementById('optimize-gen-ligs')?.checked) || false,
+        optimize_gen_ligs_hs: (!isLBDD && document.getElementById('optimize-gen-ligs-hs')?.checked) || false,
+        calculate_pb_valid: (!isLBDD && document.getElementById('calculate-pb-valid')?.checked) || false,
+        filter_pb_valid: (!isLBDD && document.getElementById('filter-pb-valid')?.checked) || false,
         calculate_strain_energies: document.getElementById('calculate-strain')?.checked || false,
 
         // Anisotropic prior (applicable for conditional modes)
         anisotropic_prior: state.anisotropicPrior,
+        ref_ligand_com_prior: state.refLigandComPrior,
 
         // Core growing ring system selection
         ring_system_index: state._ringSystemIndex || 0,
+
+        // Property & ADMET filters
+        property_filter: buildPropertyFilterPayload(),
+        adme_filter: buildAdmeFilterPayload(),
     };
+
+    // LBDD-specific fields
+    if (isLBDD) {
+        payload.optimize_method = document.getElementById('lbdd-optimize-method')?.value || 'none';
+    }
 
     // Fragment growing extras
     if (mode === 'fragment_growing') {
@@ -1781,7 +2595,7 @@ async function startGeneration() {
         progressText.textContent = `Done! ${data.n_generated} ligands in ${data.elapsed_time}s`;
 
         state.generatedResults = data.results;
-        renderResults(data);
+        await renderResults(data);
 
         const modeLabel = data.mode === 'flowr' ? 'FLOWR' : (data.mode || 'Mock');
         setBadge('success', `${data.n_generated} generated`);
@@ -1795,10 +2609,10 @@ async function startGeneration() {
             MODE_LABELS[mode] || mode;
         const fixedRow = document.getElementById('summary-fixed-row');
         if (mode === 'substructure_inpainting') {
-            fixedRow.style.display = '';
+            fixedRow.classList.remove('hidden');
             document.getElementById('summary-fixed').textContent = state.fixedAtoms.size;
         } else {
-            fixedRow.style.display = 'none';
+            fixedRow.classList.add('hidden');
         }
 
         if (data.error) {
@@ -1963,7 +2777,7 @@ function pollGeneration(jobId, progressFill, progressText) {
 // Results
 // =========================================================================
 
-function renderResults(data) {
+async function renderResults(data) {
     const placeholder = document.getElementById('results-placeholder');
     const list = document.getElementById('results-list');
 
@@ -2020,28 +2834,30 @@ function renderResults(data) {
     // Render metrics if available
     renderMetrics(data.metrics);
 
-    // Render prior cloud if available (all conditional modes).
-    // For de novo: the worker does not return a prior cloud, so re-fetch
-    // the preview from the server to keep it visible.
-    // For substructure_inpainting: re-derive from the selected atoms so the
-    // cloud matches the selection rather than the worker's default pocket-COM.
-    // For anisotropic prior: re-fetch from the server (worker only sends
-    // isotropic clouds).
-    if (state.genMode === 'denovo') {
-        _fetchAndRenderPriorCloudPreview();
-    } else if (state.genMode === 'substructure_inpainting' && state.fixedAtoms.size > 0) {
-        _updateSubstructurePriorCloud();
-    } else if (state.anisotropicPrior && state.genMode !== 'denovo') {
-        _fetchAndRenderPriorCloudPreview();
+    // ── Restore prior cloud (awaited so it finishes before we dim the
+    //    reference ligand — avoids race conditions with viewer.render()). ──
+    // Substructure_inpainting: derive from selected atoms.
+    // All other modes (incl. de novo): prefer worker-returned cloud, then
+    //   fall back to server re-fetch.
+    if (state.genMode === 'substructure_inpainting') {
+        if (state.fixedAtoms.size > 0) {
+            _updateSubstructurePriorCloud();
+        } else {
+            clearPriorCloud();
+        }
     } else if (data.prior_cloud) {
+        // Worker returned a cloud (all modes including de novo)
         renderPriorCloud(data.prior_cloud);
     } else {
-        clearPriorCloud();
+        // Fallback: worker didn't return a cloud — re-fetch from server.
+        // Await so the viewer.render() inside finishes before we dim the ref.
+        await _fetchAndRenderPriorCloudPreview();
     }
 
     // Update save section
     updateSaveSection();
 
+    // ── Show first generated ligand (this also dims the reference) ──
     if (data.results.length > 0) showGeneratedLigand(0);
 }
 
@@ -2103,8 +2919,12 @@ function showGeneratedLigand(idx) {
         state.viewer.render();
     }
 
-    // Show 2D structure overlay
+    // Show 2D structure overlay (hide Interactions tab for LBDD)
     showMol2D(result.smiles, `Ligand #${idx + 1}`, result.properties);
+    const tabInteractionsBtn = document.getElementById('tab-interactions');
+    if (tabInteractionsBtn) {
+        tabInteractionsBtn.classList.toggle('hidden', state.workflowType === 'lbdd');
+    }
 
     // Reset interaction diagram cache so it reloads for new ligand
     const intCanvas = document.getElementById('mol-2d-interaction');
@@ -2115,10 +2935,14 @@ function showGeneratedLigand(idx) {
     if (propsCanvas) propsCanvas.dataset.loaded = '';
 
     // Clear 3D interactions if showing (will re-show for new ligand if toggled)
-    if (state.showingInteractions) {
+    // Only for SBDD — LBDD has no protein so no protein-ligand interactions.
+    if (state.showingInteractions && state.workflowType !== 'lbdd') {
         clearInteractions3D();
         // Re-show interactions for the newly selected ligand
         showInteractions3D('both');
+    } else if (state.showingInteractions && state.workflowType === 'lbdd') {
+        clearInteractions3D();
+        state.showingInteractions = false;
     }
 }
 
@@ -2221,9 +3045,246 @@ function initFilterDiversityToggle() {
     const group = document.getElementById('diversity-threshold-group');
     if (cb && group) {
         cb.addEventListener('change', () => {
-            group.style.display = cb.checked ? '' : 'none';
+            group.classList.toggle('hidden', !cb.checked);
         });
     }
+}
+
+// =========================================================================
+// Property filter panel toggle & population
+// =========================================================================
+
+/** All properties available for filtering, grouped by type. */
+const PROPERTY_DEFS = [
+    // Continuous
+    { name: 'MolWt', label: 'Mol. Weight', type: 'cont', step: 1 },
+    { name: 'LogP', label: 'LogP', type: 'cont', step: 0.1 },
+    { name: 'TPSA', label: 'TPSA', type: 'cont', step: 1 },
+    { name: 'FractionCSP3', label: 'Frac. CSP3', type: 'cont', step: 0.01 },
+    // Discrete
+    { name: 'NumHAcceptors', label: 'H Acceptors', type: 'disc', step: 1 },
+    { name: 'NumHDonors', label: 'H Donors', type: 'disc', step: 1 },
+    { name: 'NumRotatableBonds', label: 'Rot. Bonds', type: 'disc', step: 1 },
+    { name: 'NumHeavyAtoms', label: 'Heavy Atoms', type: 'disc', step: 1 },
+    { name: 'RingCount', label: 'Ring Count', type: 'disc', step: 1 },
+    { name: 'NumAromaticRings', label: 'Arom. Rings', type: 'disc', step: 1 },
+    { name: 'NumChiralCenters', label: 'Chiral Ctrs', type: 'disc', step: 1 },
+    { name: 'NumHeteroatoms', label: 'Heteroatoms', type: 'disc', step: 1 },
+    { name: 'NumAliphaticRings', label: 'Aliph. Rings', type: 'disc', step: 1 },
+    { name: 'NumAromaticCarbocycles', label: 'Arom. Carbo.', type: 'disc', step: 1 },
+    { name: 'NumAromaticHeterocycles', label: 'Arom. Hetero.', type: 'disc', step: 1 },
+    { name: 'NumSaturatedCarbocycles', label: 'Sat. Carbo.', type: 'disc', step: 1 },
+    { name: 'NumSaturatedHeterocycles', label: 'Sat. Hetero.', type: 'disc', step: 1 },
+    { name: 'NumAliphaticCarbocycles', label: 'Aliph. Carbo.', type: 'disc', step: 1 },
+    { name: 'NumAliphaticHeterocycles', label: 'Aliph. Hetero.', type: 'disc', step: 1 },
+];
+
+function initPropertyFilterToggle() {
+    const cb = document.getElementById('filter-properties');
+    const panel = document.getElementById('property-filter-panel');
+    if (cb && panel) {
+        cb.addEventListener('change', () => {
+            panel.classList.toggle('hidden', !cb.checked);
+        });
+    }
+}
+
+/**
+ * Populate the property filter panel with reference-based default ranges.
+ * Called after ligand upload when ref_properties are available.
+ */
+function populatePropertyFilterPanel(refProps) {
+    state.refProperties = refProps || {};
+    const list = document.getElementById('property-filter-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    for (const def of PROPERTY_DEFS) {
+        const refVal = refProps[def.name];
+        // Compute default ±20% range
+        let defaultMin, defaultMax;
+        if (refVal == null) {
+            defaultMin = 0;
+            defaultMax = 1;
+        } else if (def.type === 'disc') {
+            const delta = Math.max(1, Math.round(Math.abs(refVal) * 0.2));
+            defaultMin = Math.max(0, refVal - delta);
+            defaultMax = refVal + delta;
+        } else {
+            // continuous
+            const delta = Math.abs(refVal) * 0.2;
+            const minDelta = def.step * 2; // ensure minimum range
+            const effectiveDelta = Math.max(delta, minDelta);
+            defaultMin = Math.round((refVal - effectiveDelta) / def.step) * def.step;
+            defaultMax = Math.round((refVal + effectiveDelta) / def.step) * def.step;
+            // Round to reasonable precision
+            defaultMin = parseFloat(defaultMin.toFixed(3));
+            defaultMax = parseFloat(defaultMax.toFixed(3));
+        }
+
+        const row = document.createElement('div');
+        row.className = 'prop-filter-row';
+        row.dataset.propName = def.name;
+        row.innerHTML = `
+            <input type="checkbox" class="prop-cb" title="Enable ${def.label} filter">
+            <span class="prop-name" title="${def.name} (ref: ${refVal != null ? refVal : 'N/A'})">${def.label}</span>
+            <div class="prop-range-inputs">
+                <input type="number" class="input-number prop-min" step="${def.step}" value="${defaultMin}" title="Minimum">
+                <span class="prop-range-sep">–</span>
+                <input type="number" class="input-number prop-max" step="${def.step}" value="${defaultMax}" title="Maximum">
+            </div>
+        `;
+
+        // Toggle active state for visual feedback
+        const cb = row.querySelector('.prop-cb');
+        cb.addEventListener('change', () => {
+            row.classList.toggle('active', cb.checked);
+        });
+
+        // Clicking the label toggles the checkbox
+        const nameSpan = row.querySelector('.prop-name');
+        nameSpan.addEventListener('click', () => {
+            cb.checked = !cb.checked;
+            cb.dispatchEvent(new Event('change'));
+        });
+
+        list.appendChild(row);
+    }
+}
+
+/**
+ * Build the property_filter payload array from active property filter rows.
+ * Returns null if no properties are selected, otherwise array of {name, min, max}.
+ */
+function buildPropertyFilterPayload() {
+    const cb = document.getElementById('filter-properties');
+    if (!cb || !cb.checked) return null;
+
+    const rows = document.querySelectorAll('#property-filter-list .prop-filter-row');
+    const filters = [];
+    for (const row of rows) {
+        const propCb = row.querySelector('.prop-cb');
+        if (!propCb || !propCb.checked) continue;
+        const name = row.dataset.propName;
+        const minVal = row.querySelector('.prop-min')?.value;
+        const maxVal = row.querySelector('.prop-max')?.value;
+        filters.push({
+            name,
+            min: minVal !== '' ? parseFloat(minVal) : null,
+            max: maxVal !== '' ? parseFloat(maxVal) : null,
+        });
+    }
+    return filters.length > 0 ? filters : null;
+}
+
+// =========================================================================
+// ADMET filter panel toggle & management
+// =========================================================================
+
+let _admeEntryCounter = 1;
+
+function initAdmeFilterToggle() {
+    const cb = document.getElementById('filter-adme');
+    const panel = document.getElementById('adme-filter-panel');
+    if (cb && panel) {
+        cb.addEventListener('change', () => {
+            panel.classList.toggle('hidden', !cb.checked);
+        });
+    }
+    // Wire up model file input on the initial entry
+    _wireAdmeFileInput(document.getElementById('adme-entry-0'));
+}
+
+function addAdmeEntry() {
+    const container = document.getElementById('adme-filter-entries');
+    if (!container) return;
+    const idx = _admeEntryCounter++;
+    const entry = document.createElement('div');
+    entry.className = 'adme-entry';
+    entry.id = `adme-entry-${idx}`;
+    entry.innerHTML = `
+        <div class="adme-entry-row">
+            <input type="text" class="input-text adme-name" placeholder="Property name"
+                title="Name for this ADMET property (e.g. clearance, hERG)">
+            <label class="btn btn-sm btn-outline adme-upload-btn">
+                <span>📁 Model</span>
+                <input type="file" class="adme-model-file" accept=".pt,.pth,.pkl,.joblib,.ckpt,.onnx,.bin" hidden>
+            </label>
+            <button type="button" class="btn btn-sm btn-outline" onclick="this.closest('.adme-entry').remove()"
+                title="Remove this filter">✕</button>
+        </div>
+        <div class="adme-entry-row">
+            <label class="adme-range-label">Min</label>
+            <input type="number" class="input-number adme-min" step="any" placeholder="—">
+            <label class="adme-range-label">Max</label>
+            <input type="number" class="input-number adme-max" step="any" placeholder="—">
+        </div>
+        <span class="adme-model-name" title="">No model selected</span>
+    `;
+    container.appendChild(entry);
+    _wireAdmeFileInput(entry);
+}
+
+function _wireAdmeFileInput(entry) {
+    if (!entry) return;
+    const fileInput = entry.querySelector('.adme-model-file');
+    const nameSpan = entry.querySelector('.adme-model-name');
+    if (!fileInput) return;
+    fileInput.addEventListener('change', async () => {
+        const file = fileInput.files[0];
+        if (!file) return;
+        if (!state.jobId) {
+            showToast('Upload a ligand first to create a job', 'error');
+            return;
+        }
+        nameSpan.textContent = 'Uploading…';
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const resp = await fetch(`${API_BASE}/upload/adme-model/${state.jobId}`, {
+                method: 'POST',
+                body: formData,
+            });
+            if (!resp.ok) throw new Error(await resp.text());
+            const data = await resp.json();
+            // Store the model URL on the entry element for payload construction
+            entry.dataset.modelUrl = data.model_url || '';
+            entry.dataset.modelFilename = data.filename || file.name;
+            nameSpan.textContent = data.filename || file.name;
+            nameSpan.title = data.model_url || '';
+        } catch (err) {
+            nameSpan.textContent = 'Upload failed';
+            console.error('ADMET model upload failed:', err);
+            showToast('ADMET model upload failed', 'error');
+        }
+    });
+}
+
+/**
+ * Build the adme_filter payload array from ADMET filter entries.
+ * Returns null if ADMET filtering is disabled or no entries configured.
+ */
+function buildAdmeFilterPayload() {
+    const cb = document.getElementById('filter-adme');
+    if (!cb || !cb.checked) return null;
+
+    const entries = document.querySelectorAll('#adme-filter-entries .adme-entry');
+    const filters = [];
+    for (const entry of entries) {
+        const name = entry.querySelector('.adme-name')?.value?.trim();
+        if (!name) continue;
+        const minVal = entry.querySelector('.adme-min')?.value;
+        const maxVal = entry.querySelector('.adme-max')?.value;
+        const modelFile = entry.dataset.modelFilename || null;
+        filters.push({
+            name,
+            min: minVal !== '' ? parseFloat(minVal) : null,
+            max: maxVal !== '' ? parseFloat(maxVal) : null,
+            model_file: modelFile,
+            model_url: entry.dataset.modelUrl || null,
+        });
+    }
+    return filters.length > 0 ? filters : null;
 }
 
 // =========================================================================
@@ -2235,7 +3296,7 @@ function initAddNoiseToggle() {
     const group = document.getElementById('noise-scale-group');
     if (cb && group) {
         cb.addEventListener('change', () => {
-            group.style.display = cb.checked ? '' : 'none';
+            group.classList.toggle('hidden', !cb.checked);
         });
     }
 }
@@ -2267,7 +3328,7 @@ async function onPriorCenterFileChange(input) {
                 state._priorPlacedCenter = null;
                 _updatePriorCoordsDisplay(null);
                 const resetBtn = document.getElementById('reset-prior-pos-btn');
-                if (resetBtn) resetBtn.style.display = 'none';
+                if (resetBtn) resetBtn.classList.add('hidden');
                 if (data.prior_cloud) {
                     renderPriorCloud(data.prior_cloud);
                 }
@@ -2361,7 +3422,9 @@ function onRingSystemIndexChange(value) {
  * at the user's chosen position.
  */
 async function _fetchAndRenderPriorCloudPreview() {
-    if (!state.jobId || !state.ligandData) return;
+    // Allow preview when we have a ligand OR are in pocket-only / scratch mode
+    if (!state.jobId) return;
+    if (!state.ligandData && !state.pocketOnlyMode && !state.lbddScratchMode) return;
     let cloudSize;
     if (state.genMode === 'fragment_growing') {
         cloudSize = parseInt(document.getElementById('grow-size')?.value) || 5;
@@ -2369,9 +3432,10 @@ async function _fetchAndRenderPriorCloudPreview() {
         // For substructure mode: cloud size = number of atoms being replaced
         cloudSize = Math.max(1, state.fixedAtoms.size);
     } else {
-        // For other conditional modes, the server computes the correct size
-        // from the inpainting mask. Pass a fallback value.
-        cloudSize = state.ligandData?.num_heavy_atoms
+        // For de novo / other modes use state.numHeavyAtoms (may come from
+        // reference ligand or manual entry) or fall back to ligandData.
+        cloudSize = state.numHeavyAtoms
+            || state.ligandData?.num_heavy_atoms
             || parseInt(document.getElementById('grow-size')?.value) || 20;
     }
     const pocketCutoff = parseFloat(document.getElementById('pocket-cutoff')?.value) || 6;
@@ -2379,7 +3443,7 @@ async function _fetchAndRenderPriorCloudPreview() {
     const ringIdx = state._ringSystemIndex || 0;
     const placedCenter = state._priorPlacedCenter;
     try {
-        const resp = await fetch(`${API_BASE}/prior-cloud-preview/${state.jobId}?grow_size=${cloudSize}&pocket_cutoff=${pocketCutoff}&anisotropic=${state.anisotropicPrior}&gen_mode=${genMode}&ring_system_index=${ringIdx}`);
+        const resp = await fetch(`${API_BASE}/prior-cloud-preview/${state.jobId}?grow_size=${cloudSize}&pocket_cutoff=${pocketCutoff}&anisotropic=${state.anisotropicPrior}&gen_mode=${genMode}&ring_system_index=${ringIdx}&ref_ligand_com_prior=${state.refLigandComPrior}`);
         if (resp.ok) {
             const cloud = await resp.json();
 
@@ -2402,8 +3466,9 @@ async function _fetchAndRenderPriorCloudPreview() {
             if (placedCenter) {
                 _updatePriorCoordsDisplay(placedCenter);
                 const resetBtn = document.getElementById('reset-prior-pos-btn');
-                if (resetBtn) resetBtn.style.display = '';
+                if (resetBtn) resetBtn.classList.remove('hidden');
             }
+
         } else {
             clearPriorCloud();
         }
@@ -2748,13 +3813,16 @@ async function showInteractions3D(target) {
     state.showingInteractions = 'both';
 
     const hasGenSelected = state.activeResultIdx >= 0;
+    const hasRefLigand = !!state.ligandData && !state.pocketOnlyMode && !state.lbddScratchMode;
+    let totalInteractions = 0;
 
-    // Show interactions for reference ligand (only if it is visible)
-    if (state.refLigandVisible) {
+    // Show interactions for reference ligand (only if it exists and is visible)
+    if (hasRefLigand && state.refLigandVisible) {
         try {
             const refResp = await fetch(`${API_BASE}/compute-interactions/${state.jobId}?ligand_idx=-1`);
             if (refResp.ok) {
                 const refData = await refResp.json();
+                totalInteractions += (refData.interactions || []).length;
                 // Only dim ref interactions if a generated ligand is also selected
                 renderInteractions3D(refData.interactions, 'ref', hasGenSelected);
             }
@@ -2769,6 +3837,7 @@ async function showInteractions3D(target) {
             const genResp = await fetch(`${API_BASE}/compute-interactions/${state.jobId}?ligand_idx=${state.activeResultIdx}`);
             if (genResp.ok) {
                 const genData = await genResp.json();
+                totalInteractions += (genData.interactions || []).length;
                 renderInteractions3D(genData.interactions, 'gen', false);
             }
         } catch (e) {
@@ -2776,8 +3845,19 @@ async function showInteractions3D(target) {
         }
     }
 
+    // Provide user feedback
+    if (!hasRefLigand && !hasGenSelected) {
+        showToast('Select a generated ligand first to show interactions', 'warning');
+        clearInteractions3D();
+        return;
+    }
+
     if (btnRef) btnRef.classList.add('active');
-    showToast('Showing interactions', 'success');
+    if (totalInteractions > 0) {
+        showToast(`Showing ${totalInteractions} interaction(s)`, 'success');
+    } else {
+        showToast('No interactions found for the selected ligand(s)', 'info');
+    }
 }
 
 function renderInteractions3D(interactions, source, dimmed) {
@@ -2912,7 +3992,7 @@ function clearPriorCloud() {
         btn.classList.remove('active');
     }
     const resetBtn = document.getElementById('reset-prior-pos-btn');
-    if (resetBtn) resetBtn.style.display = 'none';
+    if (resetBtn) resetBtn.classList.add('hidden');
 }
 
 /** Remove only the visual spheres (preserves placement state). */
@@ -2921,6 +4001,7 @@ function _clearPriorCloudSpheres() {
         try { state.viewer.removeShape(s); } catch (_) { }
     });
     state.priorCloudSpheres = [];
+    if (state.viewer) state.viewer.render();
 }
 
 /** Toggle prior-cloud visibility. */
@@ -3022,7 +4103,7 @@ function _exitPriorPlacement() {
 function resetPriorPosition() {
     state._priorPlacedCenter = null;
     _updatePriorCoordsDisplay(null);
-    document.getElementById('reset-prior-pos-btn').style.display = 'none';
+    document.getElementById('reset-prior-pos-btn').classList.add('hidden');
     // Re-fetch from server (default position)
     _fetchAndRenderPriorCloudPreview();
     showToast('Prior cloud position reset to default', 'success');
@@ -3406,7 +4487,7 @@ function _commitPriorPlacement() {
     _updatePriorCoordsDisplay(center);
 
     const resetBtn = document.getElementById('reset-prior-pos-btn');
-    if (resetBtn) resetBtn.style.display = '';
+    if (resetBtn) resetBtn.classList.remove('hidden');
 }
 
 // =========================================================================
@@ -3470,7 +4551,7 @@ async function fetchAndHighlightInpaintingMask(mode) {
         // Draw fixed atoms (blue) – only for modes that keep atoms fixed
         if (isFixedMode) {
             fixedIndices.forEach(idx => {
-                const atom = state.ligandData.atoms.find(a => a.idx === idx);
+                const atom = state.ligandData._atomByIdx.get(idx);
                 if (!atom || atom.atomicNum === 1) return;
                 const blob = state.viewer.addSphere({
                     center: { x: atom.x, y: atom.y, z: atom.z },
@@ -3482,7 +4563,7 @@ async function fetchAndHighlightInpaintingMask(mode) {
             });
             // Also draw replaced atoms (red) so the user sees the full picture
             replacedIndices.forEach(idx => {
-                const atom = state.ligandData.atoms.find(a => a.idx === idx);
+                const atom = state.ligandData._atomByIdx.get(idx);
                 if (!atom || atom.atomicNum === 1) return;
                 const blob = state.viewer.addSphere({
                     center: { x: atom.x, y: atom.y, z: atom.z },
@@ -3495,7 +4576,7 @@ async function fetchAndHighlightInpaintingMask(mode) {
         } else {
             // For scaffold_hopping/scaffold_elaboration/linker_inpainting: show replaced atoms in red
             replacedIndices.forEach(idx => {
-                const atom = state.ligandData.atoms.find(a => a.idx === idx);
+                const atom = state.ligandData._atomByIdx.get(idx);
                 if (!atom || atom.atomicNum === 1) return;
                 const blob = state.viewer.addSphere({
                     center: { x: atom.x, y: atom.y, z: atom.z },
@@ -3511,11 +4592,11 @@ async function fetchAndHighlightInpaintingMask(mode) {
 
         // Count only heavy atoms (skip H) for accurate legend labels
         const nFixedHeavy = fixedIndices.filter(idx => {
-            const a = state.ligandData.atoms.find(at => at.idx === idx);
+            const a = state.ligandData._atomByIdx.get(idx);
             return a && a.atomicNum !== 1;
         }).length;
         const nReplacedHeavy = replacedIndices.filter(idx => {
-            const a = state.ligandData.atoms.find(at => at.idx === idx);
+            const a = state.ligandData._atomByIdx.get(idx);
             return a && a.atomicNum !== 1;
         }).length;
 
@@ -4309,6 +5390,7 @@ async function removeRefHydrogens() {
 
         // Update ligand data
         state.ligandData.atoms = data.atoms;
+        state.ligandData._atomByIdx = new Map(data.atoms.map(a => [a.idx, a]));
         state.ligandData.bonds = data.bonds;
         state.ligandData.smiles = data.smiles;
         state.ligandData.sdf_data = data.sdf_data;
@@ -4367,6 +5449,7 @@ async function addRefHydrogens() {
 
         // Update ligand data
         state.ligandData.atoms = data.atoms;
+        state.ligandData._atomByIdx = new Map(data.atoms.map(a => [a.idx, a]));
         state.ligandData.bonds = data.bonds;
         state.ligandData.smiles = data.smiles;
         state.ligandData.sdf_data = data.sdf_data;

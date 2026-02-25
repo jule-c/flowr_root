@@ -15,7 +15,7 @@ from flowr.gen.generate import generate_molecules
 from flowr.scriptutil import (
     load_mol_model,
 )
-from flowr.util.device import get_device, clear_cache
+from flowr.util.device import clear_cache, get_device
 from flowr.util.metrics import evaluate_pb_validity_mol, evaluate_strain
 from flowr.util.molrepr import GeometricMolBatch
 from flowr.util.rdkit import write_sdf_file
@@ -420,6 +420,18 @@ def get_args():
     parser.add_argument("--core_growing", action="store_true")
     parser.add_argument("--fragment_inpainting", action="store_true")
     parser.add_argument("--fragment_growing", action="store_true")
+    parser.add_argument(
+        "--grow_size", 
+        type=int, 
+        default=None,
+        help="Number of heavy atoms to add when growing a fragment. Use with --fragment_growing."
+    )
+    parser.add_argument(
+        "--prior_center_file",
+        type=str,
+        default=None,
+        help="XYZ file specifying the center for the random prior. The center of mass of all coordinates in the file will be used. Use with --fragment_growing."
+    )
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument(
         "--substructure", 
