@@ -185,6 +185,37 @@ def sample_anisotropic_coords(
     return z @ L.T
 
 
+def _sanitize_or_fix_aromaticity(mol: Chem.Mol) -> bool:
+    """Try to sanitize *mol* in-place.
+
+    When molecules are reconstructed via ``to_rdkit(sanitise=False)``, bonds
+    may carry the ``AROMATIC`` type while their atoms lack the corresponding
+    aromatic flag.  ``SanitizeMol`` then fails during kekulization because it
+    cannot resolve the aromatic system.
+
+    If the first sanitization attempt fails, this helper propagates aromaticity
+    flags from bonds to atoms and retries.  Returns ``True`` on success.
+    """
+    try:
+        Chem.SanitizeMol(mol)
+        return True
+    except Exception:
+        pass
+
+    # Fix aromatic inconsistency: bonds may have AROMATIC type but atoms lack
+    # the aromatic flag.  Propagate the flag so kekulization can succeed.
+    try:
+        for bond in mol.GetBonds():
+            if bond.GetBondType() == Chem.BondType.AROMATIC:
+                bond.GetBeginAtom().SetIsAromatic(True)
+                bond.GetEndAtom().SetIsAromatic(True)
+                bond.SetIsAromatic(True)
+        Chem.SanitizeMol(mol)
+        return True
+    except Exception:
+        return False
+
+
 def extract_fragments(
     to_mols: list[Chem.Mol],
     maxCuts: int = 3,
@@ -311,9 +342,7 @@ def extract_fragments(
         prefer_rings: bool = False,
     ):
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
-        try:
-            Chem.SanitizeMol(mol)
-        except Exception:
+        if not _sanitize_or_fix_aromaticity(mol):
             print(
                 "Fragments could not be extracted as molecule could not be sanitized. Skipping!"
             )
@@ -379,9 +408,7 @@ def extract_fragments(
         Returns:
             List of masks, one per selected fragment. Empty list if not enough fragments found.
         """
-        try:
-            Chem.SanitizeMol(mol)
-        except Exception:
+        if not _sanitize_or_fix_aromaticity(mol):
             print(
                 "Fragments could not be extracted as molecule could not be sanitized. Skipping!"
             )
@@ -464,9 +491,7 @@ def extract_fragments(
     ):
         """Original fragment extraction - selects any fragment (may not be connected)."""
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
-        try:
-            Chem.SanitizeMol(mol)
-        except Exception:
+        if not _sanitize_or_fix_aromaticity(mol):
             print(
                 "Fragments could not be extracted as molecule could not be sanitized. Skipping!"
             )
@@ -552,9 +577,7 @@ def extract_substructure(
     def substructure_per_mol(mol, substructure_query):
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
         _mol = Chem.Mol(mol)
-        try:
-            Chem.SanitizeMol(_mol)
-        except Exception:
+        if not _sanitize_or_fix_aromaticity(_mol):
             print(
                 "Substructure could not be extracted as reference molecule could not be sanitized. Skipping."
             )
@@ -582,14 +605,12 @@ def extract_substructure(
 
     def substructure_per_mol_list(mol, substructure_atoms):
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
+        # For the atom-index list case, sanitization is not required:
+        # we only need to mark the given atom indices in the mask.
+        # Still attempt it so downstream code sees a valid molecule,
+        # but do not abort if it fails.
         _mol = Chem.Mol(mol)
-        try:
-            Chem.SanitizeMol(_mol)
-        except Exception:
-            print(
-                "Substructure could not be extracted as reference molecule could not be sanitized. Skipping."
-            )
-            return mask
+        _sanitize_or_fix_aromaticity(_mol)
         mask[torch.tensor(substructure_atoms)] = 1
         return mask
 
@@ -612,9 +633,7 @@ def extract_func_groups(to_mols: list[Chem.Mol], invert_mask=False, includeHs=Fa
     def func_groups_per_mol(mol, invert_mask=False, includeHs=True):
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
         _mol = Chem.Mol(mol)
-        try:
-            Chem.SanitizeMol(_mol)
-        except Exception:
+        if not _sanitize_or_fix_aromaticity(_mol):
             print(
                 "Functional groups could not be extracted as reference molecule could not be sanitized. Skipping."
             )
@@ -672,9 +691,7 @@ def extract_scaffold_elaboration(
     def elaboration_per_mol(mol, invert_mask=False, includeHs=True):
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
         _mol = Chem.Mol(mol)
-        try:
-            Chem.SanitizeMol(_mol)
-        except Exception:
+        if not _sanitize_or_fix_aromaticity(_mol):
             print(
                 "Scaffold elaboration atoms could not be extracted as molecule "
                 "could not be sanitized. Skipping."
@@ -767,9 +784,7 @@ def get_ring_systems(mol) -> List[set]:
 def get_num_ring_systems(mol) -> int:
     """Get the number of separate ring systems in a molecule."""
     _mol = Chem.Mol(mol)
-    try:
-        Chem.SanitizeMol(_mol)
-    except Exception:
+    if not _sanitize_or_fix_aromaticity(_mol):
         return 0
     return len(get_ring_systems(_mol))
 
@@ -802,9 +817,7 @@ def extract_cores(
             Boolean tensor mask where True indicates core atoms.
         """
         _mol = Chem.Mol(mol)
-        try:
-            Chem.SanitizeMol(_mol)
-        except Exception:
+        if not _sanitize_or_fix_aromaticity(_mol):
             print(
                 "Cores could not be extracted as molecule could not be sanitized. Skipping."
             )
@@ -876,9 +889,7 @@ def extract_cores(
 def extract_linkers(to_mols: list[Chem.Mol], invert_mask=False):
     def linker_per_mol(mol, invert_mask=False):
         _mol = Chem.Mol(mol)
-        try:
-            Chem.SanitizeMol(_mol)
-        except Exception:
+        if not _sanitize_or_fix_aromaticity(_mol):
             print(
                 "Linker could not be extracted as molecule could not be sanitized. Skipping."
             )
@@ -922,9 +933,7 @@ def extract_scaffolds(to_mols: list[Chem.Mol], invert_mask=False):
     def scaffold_per_mol(mol, invert_mask=False):
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
         _mol = Chem.Mol(mol)
-        try:
-            Chem.SanitizeMol(_mol)
-        except Exception:
+        if not _sanitize_or_fix_aromaticity(_mol):
             print(
                 "Scaffold could not be extracted as reference molecule could not be sanitized. Skipping."
             )

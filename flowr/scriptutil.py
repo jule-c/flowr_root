@@ -793,7 +793,8 @@ def build_model(
     )
     if args.load_pretrained_ckpt:
         gen.load_state_dict(
-            torch.load(args.load_pretrained_ckpt)["state_dict"], strict=False
+            torch.load(args.load_pretrained_ckpt, map_location="cpu")["state_dict"],
+            strict=False,
         )
 
     # Coordinate scaling
@@ -941,7 +942,9 @@ def load_model(
     return_info: bool = True,
     dataset_info: Optional[dict] = None,
 ):
-    checkpoint = torch.load(args.ckpt_path if ckpt_path is None else ckpt_path)
+    checkpoint = torch.load(
+        args.ckpt_path if ckpt_path is None else ckpt_path, map_location="cpu"
+    )
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
     # Set sampling hyperparameters
@@ -1219,7 +1222,7 @@ def load_model(
         _hparams["lora_alpha"] = args.lora_alpha
 
         # Load the pretrained weights
-        state_dict = torch.load(args.ckpt_path)["state_dict"]
+        state_dict = torch.load(args.ckpt_path, map_location="cpu")["state_dict"]
         state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
         egnn = copy.deepcopy(egnn_gen)
         egnn.load_state_dict(state_dict, strict=True)
@@ -1271,7 +1274,7 @@ def load_model(
 
     elif getattr(args, "freeze_layers", None):
         print("Applying freeze_layers finetuning...")
-        state_dict = torch.load(args.ckpt_path)["state_dict"]
+        state_dict = torch.load(args.ckpt_path, map_location="cpu")["state_dict"]
         state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
         egnn = copy.deepcopy(egnn_gen)
         egnn.load_state_dict(state_dict, strict=True)
@@ -1383,7 +1386,7 @@ def load_model(
 
     elif getattr(args, "affinity_finetuning", None):
         print("Applying affinity_finetuning...")
-        state_dict = torch.load(args.ckpt_path)["state_dict"]
+        state_dict = torch.load(args.ckpt_path, map_location="cpu")["state_dict"]
         state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
         egnn = copy.deepcopy(egnn_gen)
         egnn.load_state_dict(state_dict, strict=True)
@@ -1449,7 +1452,9 @@ def load_mol_model(
     return_info: bool = True,
     dataset_info: Optional[dict] = None,
 ):
-    checkpoint = torch.load(args.ckpt_path if ckpt_path is None else ckpt_path)
+    checkpoint = torch.load(
+        args.ckpt_path if ckpt_path is None else ckpt_path, map_location="cpu"
+    )
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
     # Set dataset and save paths
@@ -1634,7 +1639,7 @@ def load_mol_model(
         _hparams["lora_alpha"] = args.lora_alpha
 
         # Load the pretrained weights
-        state_dict = torch.load(args.ckpt_path)["state_dict"]
+        state_dict = torch.load(args.ckpt_path, map_location="cpu")["state_dict"]
         state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
         egnn = copy.deepcopy(gen)
         egnn.load_state_dict(state_dict, strict=True)
