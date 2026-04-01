@@ -1,0 +1,1361 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FLOWR — Ligand Generation</title>
+    <!-- Note: inline onclick handlers are present for historical reasons; consider migrating to addEventListener. -->
+
+    <!-- 3Dmol.js for molecular visualization -->
+    <script src="/static/lib/3Dmol-min.js"></script>
+
+    <!-- RDKit.js for 2D molecular rendering -->
+    <script src="/static/lib/RDKit_minimal.js"></script>
+
+    <!-- Plotly.js for chemical/property space visualizations -->
+    <script src="/static/lib/plotly-2.35.0.min.js"></script>
+
+    <!-- Google Fonts (with fallback to system fonts via CSS) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+
+    <link rel="stylesheet" href="/static/style.css?v=20260326e">
+</head>
+
+<body>
+
+    <!-- SVG sprite sheet for reused logos -->
+    <svg style="display:none" aria-hidden="true">
+        <defs>
+            <linearGradient id="flowr-grad" x1="0" y1="0" x2="28" y2="28">
+                <stop offset="0%" stop-color="#DFC6F6" />
+                <stop offset="100%" stop-color="#D5D653" />
+            </linearGradient>
+        </defs>
+        <symbol id="flowr-logo" viewBox="0 0 28 28">
+            <circle cx="14" cy="14" r="13" stroke="url(#flowr-grad)" stroke-width="2" fill="none" />
+            <circle cx="14" cy="14" r="6" fill="url(#flowr-grad)" />
+            <circle cx="8" cy="8" r="2.5" fill="#DFC6F6" />
+            <circle cx="20" cy="8" r="2.5" fill="#c8b2dd" />
+            <circle cx="8" cy="20" r="2.5" fill="#D5D653" />
+            <circle cx="20" cy="20" r="2.5" fill="#ae9e66" />
+            <line x1="8" y1="8" x2="14" y2="14" stroke="#DFC6F6" stroke-width="1" opacity="0.5" />
+            <line x1="20" y1="8" x2="14" y2="14" stroke="#c8b2dd" stroke-width="1" opacity="0.5" />
+            <line x1="8" y1="20" x2="14" y2="14" stroke="#D5D653" stroke-width="1" opacity="0.5" />
+            <line x1="20" y1="20" x2="14" y2="14" stroke="#ae9e66" stroke-width="1" opacity="0.5" />
+        </symbol>
+    </svg>
+
+    <!-- ===== ENTRY / LANDING PAGE ===== -->
+    <div id="landing-page" class="landing-page hidden">
+        <div class="landing-card">
+            <div class="landing-logo">
+                <svg width="56" height="56" viewBox="0 0 28 28" fill="none">
+                    <use href="#flowr-logo"></use>
+                </svg>
+                <h1 class="landing-title">FLOWR</h1>
+            </div>
+            <p class="landing-subtitle"><strong>Flow Matching for Structure-Aware Ligand Generation</strong></p>
+
+            <div class="landing-divider"></div>
+
+            <!-- Workflow selection -->
+            <h2 class="landing-section-title">Workflow</h2>
+            <div class="workflow-selector">
+                <button type="button" class="workflow-card selected" id="wf-sbdd" onclick="onWorkflowSelect('sbdd')">
+                    <div class="workflow-card-icon">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5" fill="none"
+                                opacity="0.5" />
+                            <circle cx="10" cy="10" r="3" fill="currentColor" opacity="0.6" />
+                            <circle cx="6" cy="6" r="1.5" fill="currentColor" opacity="0.4" />
+                            <circle cx="14" cy="6" r="1.5" fill="currentColor" opacity="0.4" />
+                            <circle cx="6" cy="14" r="1.5" fill="currentColor" opacity="0.4" />
+                            <circle cx="14" cy="14" r="1.5" fill="currentColor" opacity="0.4" />
+                        </svg>
+                    </div>
+                    <div class="workflow-card-body">
+                        <span class="workflow-card-title">Structure-Based</span>
+                        <span class="workflow-card-desc">Generate ligands conditioned on a protein pocket</span>
+                    </div>
+                </button>
+                <button type="button" class="workflow-card" id="wf-lbdd" onclick="onWorkflowSelect('lbdd')">
+                    <div class="workflow-card-icon">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <rect x="4" y="7" width="12" height="6" rx="3" stroke="currentColor" stroke-width="1.5"
+                                fill="none" opacity="0.5" />
+                            <circle cx="10" cy="10" r="2" fill="currentColor" opacity="0.5" />
+                        </svg>
+                    </div>
+                    <div class="workflow-card-body">
+                        <span class="workflow-card-title">Ligand-Based</span>
+                        <span class="workflow-card-desc">Generate novel molecules from a reference ligand or from
+                            scratch</span>
+                    </div>
+                </button>
+            </div>
+
+            <div class="landing-divider"></div>
+
+            <!-- Checkpoint selection -->
+            <h2 class="landing-section-title">Select Model Checkpoint</h2>
+
+            <div class="landing-options">
+                <label class="landing-option" id="opt-base">
+                    <input type="radio" name="ckpt-type" value="base" checked onchange="onCkptTypeChange('base')">
+                    <div class="landing-option-content">
+                        <span class="landing-option-label">Base Model</span>
+                        <span class="landing-option-desc">Pre-trained FLOWR checkpoint</span>
+                    </div>
+                </label>
+                <label class="landing-option" id="opt-project">
+                    <input type="radio" name="ckpt-type" value="project" onchange="onCkptTypeChange('project')">
+                    <div class="landing-option-content">
+                        <span class="landing-option-label">Project-specific Model</span>
+                        <span class="landing-option-desc">Fine-tuned checkpoint for a specific project</span>
+                    </div>
+                </label>
+            </div>
+
+            <!-- Base model dropdown -->
+            <div id="base-select-group" class="landing-select-group">
+                <label class="landing-select-label" for="base-ckpt-select">Checkpoint</label>
+                <select id="base-ckpt-select" class="landing-select">
+                    <option value="">Loading…</option>
+                </select>
+            </div>
+
+            <!-- Project model dropdown -->
+            <div id="project-select-group" class="landing-select-group hidden">
+                <label class="landing-select-label" for="project-ckpt-select">Project</label>
+                <select id="project-ckpt-select" class="landing-select">
+                    <option value="">Loading…</option>
+                </select>
+            </div>
+
+            <!-- Status message -->
+            <div id="landing-status" class="landing-status hidden"></div>
+
+            <!-- Launch button -->
+            <button id="launch-btn" class="btn btn-primary btn-block landing-launch" onclick="launchApp()" disabled>
+                Launch
+            </button>
+
+            <p class="landing-footer-text" id="ckpt-dir-text">
+                Checkpoint files are loaded from the <code>ckpts/sbdd</code> directory.
+            </p>
+        </div>
+    </div>
+
+    <!-- ===== MAIN APP (hidden until launch) ===== -->
+    <div id="main-app" class="main-app hidden">
+
+        <!-- ===== TOP NAV BAR ===== -->
+        <header class="topbar">
+            <div class="topbar-left">
+                <div class="logo" role="button" tabindex="0" onclick="returnToLanding()"
+                    title="Back to checkpoint selection" aria-label="Back to checkpoint selection">
+                    <div class="logo-icon">
+                        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                            <use href="#flowr-logo"></use>
+                        </svg>
+                    </div>
+                    <span class="logo-text">FLOWR</span>
+                </div>
+                <span class="topbar-subtitle" id="topbar-subtitle">Structure-Based Ligand Generation</span>
+            </div>
+            <div class="topbar-right">
+                <button class="btn-reset-session" id="reset-session-btn" onclick="resetCurrentSession()"
+                    title="Clear uploads and reset current session">
+                    &#x21BB; RESET
+                </button>
+                <span id="status-badge" class="badge badge-idle">Ready</span>
+                <span class="topbar-info" id="backend-status">●</span>
+            </div>
+        </header>
+
+        <!-- ===== MAIN LAYOUT ===== -->
+        <div class="main-container">
+            <!-- ===== LEFT PANEL: CONTROLS ===== -->
+            <aside class="panel panel-left" aria-label="Configuration">
+                <!-- Overlay shown when sidebar is locked post-generation -->
+                <div id="sidebar-lock-overlay" class="sidebar-lock-overlay hidden">
+                    <span>Select reference ligand to unlock controls</span>
+                </div>
+                <div class="panel-section">
+                    <h3 class="section-title">
+                        <span class="section-icon"></span> Input Files
+                    </h3>
+
+                    <!-- SBDD guidance banner -->
+                    <div class="input-guidance sbdd-only" id="sbdd-guidance">
+                        <p style="margin:0 0 4px 0;"><strong>Two options for structure-based generation:</strong></p>
+                        <ol style="margin:0; padding-left:18px; font-size:14px; color:#6f637b; line-height:1.5;">
+                            <li><strong>Protein + Ligand</strong> — upload both to identify the binding site</li>
+                            <li><strong>Protein Pocket only</strong> — upload a pre-cut pocket PDB and specify the
+                                number of heavy atoms to generate</li>
+                        </ol>
+                    </div>
+
+                    <!-- LBDD guidance banner -->
+                    <div class="input-guidance lbdd-only hidden" id="lbdd-guidance">
+                        <p style="margin:0 0 4px 0;"><strong>Three options for ligand-based generation:</strong></p>
+                        <ol style="margin:0; padding-left:18px; font-size:14px; color:#6f637b; line-height:1.5;">
+                            <li><strong>Reference molecule</strong> — upload an SDF/MOL file</li>
+                            <li><strong>SMILES string</strong> — enter a SMILES and generate a 3D conformer</li>
+                            <li><strong>From scratch</strong> — specify only the number of heavy atoms (no reference
+                                needed)</li>
+                        </ol>
+                    </div>
+
+                    <!-- RCSB PDB fetch (SBDD only) -->
+                    <div class="rcsb-section sbdd-only" id="rcsb-section">
+                        <span class="rcsb-title">Load from RCSB</span>
+                        <div class="rcsb-search-row">
+                            <input type="text" class="input-text" id="rcsb-pdb-input" placeholder="PDB ID (e.g. 5YEA)"
+                                maxlength="4"
+                                onkeydown="if(event.key==='Enter')document.getElementById('rcsb-fetch-btn').click()">
+                            <button class="btn-rcsb-search" id="rcsb-fetch-btn" onclick="fetchFromRCSB()">
+                                Search PDB
+                            </button>
+                        </div>
+                        <div class="rcsb-success hidden" id="rcsb-success">
+                            <span class="check-icon">✓</span>
+                            <span id="rcsb-loaded-label"></span>
+                        </div>
+                    </div>
+                    <hr class="rcsb-divider sbdd-only" id="rcsb-divider">
+
+                    <!-- Protein upload (SBDD only) -->
+                    <div class="upload-group sbdd-only" id="protein-upload-group">
+                        <span class="upload-label">Protein Structure</span>
+                        <div class="upload-area" id="protein-upload-area">
+                            <input type="file" id="protein-file" accept=".pdb,.cif,.mmcif"
+                                onchange="uploadProtein(this)" hidden>
+                            <div class="upload-placeholder" id="protein-placeholder">
+                                <span class="upload-icon"></span>
+                                <span>Drop PDB / CIF file or <a class="browse-link"
+                                        onclick="document.getElementById('protein-file').click()">browse</a></span>
+                            </div>
+                            <div class="upload-success hidden" id="protein-success">
+                                <span class="check-icon">✓</span>
+                                <span id="protein-filename"></span>
+                            </div>
+                        </div>
+                        <!-- Pocket-only mode button (shown after protein upload, SBDD) -->
+                        <div id="pocket-only-toggle" class="pocket-only-toggle hidden">
+                            <button class="btn btn-sm btn-outline btn-pocket-only" id="pocket-only-btn"
+                                onclick="enablePocketOnlyMode()">
+                                Continue without ligand (pocket-only de novo)
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Ligand upload (both SBDD and LBDD) -->
+                    <div class="upload-group" id="ligand-upload-group">
+                        <span class="upload-label" id="ligand-upload-label">Ligand</span>
+                        <div class="upload-area" id="ligand-upload-area">
+                            <input type="file" id="ligand-file" accept=".sdf,.mol,.mol2,.pdb"
+                                onchange="uploadLigand(this)" hidden>
+                            <div class="upload-placeholder" id="ligand-placeholder">
+                                <span class="upload-icon"></span>
+                                <span>Drop SDF / MOL file or <a class="browse-link"
+                                        onclick="document.getElementById('ligand-file').click()">browse</a></span>
+                            </div>
+                            <div class="upload-success hidden" id="ligand-success">
+                                <span class="check-icon">✓</span>
+                                <span id="ligand-filename"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Ligand info -->
+                    <div id="ligand-info" class="info-card hidden">
+                        <div class="info-row">
+                            <span class="info-label">SMILES</span>
+                            <code class="info-value info-value-smiles" id="ligand-smiles" title="Click to expand"
+                                onclick="this.classList.toggle('expanded')"></code>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Heavy atoms</span>
+                            <span class="info-value" id="ligand-heavy-atoms"></span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Total atoms</span>
+                            <span class="info-value" id="ligand-total-atoms"></span>
+                        </div>
+                        <div class="info-row hidden">
+                            <span class="info-label">Ref. Affinity</span>
+                            <span class="info-value affinity-ref-badge" id="ligand-ref-affinity"></span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Hydrogens</span>
+                            <span class="info-value">
+                                <button class="btn btn-xs btn-outline" id="btn-remove-hs" onclick="removeRefHydrogens()"
+                                    title="Remove hydrogens from reference ligand">Remove Hs</button>
+                                <button class="btn btn-xs btn-outline" id="btn-add-hs" onclick="addRefHydrogens()"
+                                    title="Add hydrogens to reference ligand">Add Hs</button>
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- SMILES input (LBDD only) -->
+                    <div class="upload-group lbdd-only hidden" id="smiles-input-group">
+                        <label class="upload-label" for="smiles-input">Or enter a SMILES string</label>
+                        <div class="smiles-input-row">
+                            <input type="text" id="smiles-input" class="input-text"
+                                placeholder="e.g. CC(=O)Oc1ccccc1C(=O)O">
+                            <button class="btn btn-sm btn-primary" onclick="submitSmiles()" id="smiles-submit-btn">
+                                Generate 3D
+                            </button>
+                        </div>
+                        <div class="smiles-file-row" style="margin-top:4px;">
+                            <input type="file" id="smiles-file" accept=".smi,.txt" hidden
+                                onchange="uploadSmilesFile(this)">
+                            <button class="btn btn-xs btn-outline"
+                                onclick="document.getElementById('smiles-file').click()">
+                                Upload .smi / .txt
+                            </button>
+                            <span class="muted-text" id="smiles-file-name"></span>
+                        </div>
+                    </div>
+
+                    <!-- LBDD: Generate from scratch button (no reference) -->
+                    <div class="upload-group lbdd-only hidden" id="lbdd-scratch-group">
+                        <span class="upload-label">Or generate from scratch</span>
+                        <button class="btn btn-sm btn-outline btn-pocket-only" id="lbdd-scratch-btn"
+                            onclick="enableLbddScratchMode()">
+                            Generate without reference
+                        </button>
+                    </div>
+
+                    <!-- Conformer picker (LBDD, shown after SMILES → 3D) -->
+                    <div id="conformer-picker" class="conformer-picker hidden">
+                        <span class="upload-label">Select Conformer</span>
+                        <div id="conformer-grid" class="conformer-grid"></div>
+                    </div>
+                </div>
+
+                <!-- Generation Mode -->
+                <div class="panel-section needs-inputs hidden" id="gen-mode-section">
+                    <h3 class="section-title">
+                        <span class="section-icon"></span> Generation Mode
+                    </h3>
+
+                    <div class="mode-selector">
+                        <label class="mode-option">
+                            <input type="radio" name="gen-mode" value="denovo" checked
+                                onchange="onModeChange(this.value)">
+                            <span class="mode-label">De Novo</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Generate a completely new ligand from scratch, without any substructure constraints.">?</span>
+                        </label>
+                        <label class="mode-option">
+                            <input type="radio" name="gen-mode" value="substructure_inpainting"
+                                onchange="onModeChange(this.value)">
+                            <span class="mode-label">Substructure Inpainting</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Select specific atoms to be replaced while keeping the remaining substructure fixed.">?</span>
+                        </label>
+                        <label class="mode-option">
+                            <input type="radio" name="gen-mode" value="scaffold_hopping"
+                                onchange="onModeChange(this.value)">
+                            <span class="mode-label">Scaffold Hopping</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Automatically detect and regenerate the molecular scaffold while preserving functional groups.">?</span>
+                        </label>
+                        <label class="mode-option">
+                            <input type="radio" name="gen-mode" value="scaffold_elaboration"
+                                onchange="onModeChange(this.value)">
+                            <span class="mode-label">Scaffold Elaboration</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Regenerate functional groups while keeping the scaffold fixed.">?</span>
+                        </label>
+                        <label class="mode-option">
+                            <input type="radio" name="gen-mode" value="linker_inpainting"
+                                onchange="onModeChange(this.value)">
+                            <span class="mode-label">Linker Inpainting</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Regenerate linker regions that connect molecular fragments.">?</span>
+                        </label>
+                        <label class="mode-option">
+                            <input type="radio" name="gen-mode" value="core_growing"
+                                onchange="onModeChange(this.value)">
+                            <span class="mode-label">Core Growing</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Select a core substructure from the reference ligand and grow new atoms around it.">?</span>
+                        </label>
+                        <label class="mode-option">
+                            <input type="radio" name="gen-mode" value="fragment_growing"
+                                onchange="onModeChange(this.value)">
+                            <span class="mode-label">Fragment Growing</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Grow additional atoms onto a provided molecular fragment.">?</span>
+                        </label>
+                    </div>
+
+                    <!-- Number of heavy atoms (de novo mode, both SBDD and LBDD) -->
+                    <div class="sub-options hidden" id="num-heavy-atoms-group" style="margin-top:6px;">
+                        <label class="setting-label" for="num-heavy-atoms">Number of Heavy Atoms
+                            <span class="help-tooltip"
+                                data-tooltip="Specify the number of heavy atoms for de novo generation.">?</span>
+                        </label>
+                        <div class="num-heavy-atoms-row">
+                            <input type="number" id="num-heavy-atoms" class="input-number" min="1" max="200" value=""
+                                placeholder="e.g. 25" oninput="onNumHeavyAtomsChange()">
+                            <span class="muted-text" id="num-heavy-atoms-hint" style="font-size:13px;"></span>
+                        </div>
+                    </div>
+
+                    <!-- Anisotropic prior (shown for applicable conditional modes) -->
+                    <div id="anisotropic-prior-opt" class="sub-options hidden" style="margin-top:6px;">
+                        <label class="mode-option" style="gap:8px;">
+                            <input type="checkbox" id="anisotropic-prior-cb"
+                                onchange="onAnisotropicPriorChange(this.checked)">
+                            <span class="mode-label">Anisotropic prior</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Use a directional (anisotropic) Gaussian prior instead of a spherical one. The prior cloud is elongated along the growth direction, which can improve generation quality for conditional modes. Requires a reference point cloud.">?</span>
+                        </label>
+                    </div>
+
+                    <!-- Ref-ligand CoM prior shift (shown for scaffold_hopping, scaffold_elaboration, linker_inpainting, core_growing) -->
+                    <div id="ref-ligand-com-prior-opt" class="sub-options hidden" style="margin-top:6px;">
+                        <label class="mode-option" style="gap:8px;">
+                            <input type="checkbox" id="ref-ligand-com-prior-cb"
+                                onchange="onRefLigandComPriorChange(this.checked)">
+                            <span class="mode-label">Ref-ligand CoM prior</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Shift the prior cloud center to the center of mass of the variable (to-be-generated) fragment of the reference ligand. Useful for conditional modes where the generated part should roughly align with the original variable region.">?</span>
+                        </label>
+                    </div>
+
+                    <!-- Fragment Growing extra options (hidden by default) -->
+                    <div id="fragment-growing-opts" class="sub-options hidden">
+                        <div class="setting-group">
+                            <label class="setting-label" for="grow-size">Grow size
+                                <span class="help-tooltip"
+                                    data-tooltip="Number of heavy atoms to generate additionally on top of the input fragment. Required for fragment growing.">?</span>
+                            </label>
+                            <input type="number" id="grow-size" min="1" max="50" value="5" class="input-number"
+                                oninput="onGrowSizeChange()">
+                        </div>
+                        <div class="setting-group">
+                            <label class="setting-label" for="prior-center-file">Prior center file
+                                <span class="help-tooltip"
+                                    data-tooltip="Optional XYZ file specifying the center of the growing region. The center of mass of all coordinates in the file will be used to bias where new atoms are placed.">?</span>
+                            </label>
+                            <div class="file-pick-wrapper">
+                                <input type="file" id="prior-center-file" accept=".xyz" hidden
+                                    onchange="onPriorCenterFileChange(this)">
+                                <button class="btn btn-sm btn-outline"
+                                    onclick="document.getElementById('prior-center-file').click()">Choose file</button>
+                                <span class="file-pick-name" id="prior-center-filename"></span>
+                            </div>
+                        </div>
+                        <div class="setting-group">
+                            <span class="setting-label">Place prior cloud
+                                <span class="help-tooltip"
+                                    data-tooltip="Visually position the prior point cloud in the 3D viewer. Click to place the center, then drag to adjust. Hold Shift and drag to reposition. Normal rotation/zoom works when not holding Shift.">?</span>
+                            </span>
+                            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                                <button class="btn btn-sm btn-outline" id="place-prior-btn"
+                                    onclick="togglePriorPlacement()">
+                                    <span id="place-prior-icon"></span> Place
+                                </button>
+                                <button class="btn btn-sm btn-outline hidden" id="reset-prior-pos-btn"
+                                    onclick="resetPriorPosition()"
+                                    title="Reset to default position (ligand center of mass)">↺ Reset</button>
+                                <span class="muted-text" id="prior-coords-display" style="font-size:13px;"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Core Growing extra options (hidden by default) -->
+                    <div id="core-growing-opts" class="sub-options hidden">
+                        <div class="setting-group">
+                            <label class="setting-label" for="ring-system-index">Ring system
+                                <span class="help-tooltip"
+                                    data-tooltip="Which ring system to use as the core. The molecule may contain multiple separate ring systems. Index 0 is the first (largest) ring system.">?</span>
+                            </label>
+                            <select id="ring-system-index" class="select-input"
+                                onchange="onRingSystemIndexChange(this.value)">
+                                <option value="0">Ring system 0</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Atom Selection (only for substructure_inpainting) -->
+                <div class="panel-section hidden" id="atom-selection-section">
+                    <h3 class="section-title">
+                        <span class="section-icon"></span> Atom Selection
+                    </h3>
+                    <p class="section-desc"><b>Shift+click</b> atoms in the 3D viewer to select/deselect, or
+                        <b>Shift+drag</b> to lasso-select multiple atoms for
+                        <b>replacement</b>. Selected
+                        atoms (shown in <b style="color:#CE93D8">purple</b>) will be regenerated; all other atoms are
+                        kept
+                        fixed.
+                    </p>
+
+                    <div class="atom-selection-controls">
+                        <button class="btn btn-sm btn-outline" onclick="clearSelection()"
+                            title="Deselect all atoms (no inpainting)">
+                            Clear All
+                        </button>
+                        <button class="btn btn-sm btn-outline" onclick="selectAllAtoms()"
+                            title="Mark all atoms for replacement">
+                            Select All
+                        </button>
+                        <button class="btn btn-sm btn-outline" onclick="selectHeavyAtoms()"
+                            title="Select heavy atoms only">
+                            Heavy Atoms
+                        </button>
+                    </div>
+
+                    <div id="selected-atoms-list" class="selected-atoms-container">
+                        <span class="muted-text">No atoms marked for replacement</span>
+                    </div>
+
+                </div>
+
+                <!-- Generation Settings -->
+                <div class="panel-section needs-inputs hidden">
+                    <h3 class="section-title">
+                        <span class="section-icon"></span> Generation Settings
+                    </h3>
+
+                    <div class="setting-group">
+                        <label class="setting-label" for="n-samples">Number of samples</label>
+                        <input type="range" id="n-samples" min="10" max="1000" step="10" value="100" class="slider"
+                            oninput="document.getElementById('n-samples-val').textContent = this.value">
+                        <span class="setting-value" id="n-samples-val">100</span>
+                    </div>
+
+                    <div class="setting-group">
+                        <label class="setting-label" for="batch-size">Batch size</label>
+                        <input type="range" id="batch-size" min="1" max="100" value="25" class="slider"
+                            oninput="document.getElementById('batch-size-val').textContent = this.value">
+                        <span class="setting-value" id="batch-size-val">25</span>
+                    </div>
+
+                    <div class="setting-group">
+                        <label class="setting-label" for="integration-steps">Integration steps</label>
+                        <input type="range" id="integration-steps" min="20" max="200" step="10" value="100"
+                            class="slider" oninput="document.getElementById('steps-val').textContent = this.value">
+                        <span class="setting-value" id="steps-val">100</span>
+                    </div>
+
+                    <div class="setting-group sbdd-only" id="pocket-cutoff-group">
+                        <label class="setting-label" for="pocket-cutoff">Pocket cutoff (Å)</label>
+                        <input type="range" id="pocket-cutoff" min="3" max="12" step="0.5" value="6" class="slider"
+                            oninput="document.getElementById('cutoff-val').textContent = this.value">
+                        <span class="setting-value" id="cutoff-val">6.0</span>
+                    </div>
+
+
+
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="sample-mol-sizes">
+                            <span>Sample mol sizes</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Sample molecule sizes within ±10% of the reference ligand size (or grow_size if fragment growing is enabled).">?</span>
+                        </label>
+                    </div>
+
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-noise" checked>
+                            <span>Add noise</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Add Gaussian noise to initial coordinates during sampling. Higher values increase diversity but may reduce quality.">?</span>
+                        </label>
+                    </div>
+
+                    <div class="setting-group sub-option-inline" id="noise-scale-group">
+                        <label class="setting-label" style="min-width:80px;" for="noise-scale">Scale</label>
+                        <input type="range" id="noise-scale" min="0" max="1" step="0.05" value="0.1" class="slider"
+                            oninput="document.getElementById('noise-scale-val').textContent = this.value">
+                        <span class="setting-value" id="noise-scale-val">0.1</span>
+                    </div>
+                </div>
+
+                <!-- Filtering & Post-Processing -->
+                <div class="panel-section needs-inputs hidden">
+                    <h3 class="section-title">
+                        <span class="section-icon"></span> Filtering & Post-Processing
+                    </h3>
+
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="filter-valid-unique" checked>
+                            <span>Filter valid & unique</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Remove invalid molecules and duplicates from the generated set.">?</span>
+                        </label>
+                    </div>
+
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="filter-cond-substructure">
+                            <span>Filter substructure</span>
+                            <span class="help-tooltip"
+                                data-tooltip="In inpainting/conditional modes, enforce that fixed substructures are preserved exactly (no modifications to the fixed part). Recommended for scaffold, functional group, linker, and core modes.">?</span>
+                        </label>
+                    </div>
+
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="filter-diversity" checked>
+                            <span>Filter diversity</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Remove molecules that are too similar to each other (Tanimoto fingerprint threshold).">?</span>
+                        </label>
+                    </div>
+
+                    <div class="setting-group sub-option-inline" id="diversity-threshold-group">
+                        <label class="setting-label" style="min-width:80px;" for="diversity-threshold">Threshold</label>
+                        <input type="range" id="diversity-threshold" min="0.1" max="1.0" step="0.05" value="0.8"
+                            class="slider" oninput="document.getElementById('div-thresh-val').textContent = this.value">
+                        <span class="setting-value" id="div-thresh-val">0.8</span>
+                    </div>
+
+                    <div class="setting-group sbdd-only" id="opt-full-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="optimize-gen-ligs">
+                            <span>Optimize ligands (full)</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Protonate and optimize all generated ligands in-pocket using force-field minimization. Reports RMSD and strain.">?</span>
+                        </label>
+                    </div>
+
+                    <div class="setting-group sbdd-only" id="opt-hs-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="optimize-gen-ligs-hs">
+                            <span>Optimize ligand Hs only</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Protonate generated ligands and only optimize hydrogen positions in-pocket.">?</span>
+                        </label>
+                    </div>
+
+                    <div class="setting-group sbdd-only" id="pb-valid-calc-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="calculate-pb-valid">
+                            <span>Calculate PB validity</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Calculate PoseBusters validity for all generated molecules. Reports mean and std.">?</span>
+                        </label>
+                    </div>
+
+                    <div class="setting-group sbdd-only" id="pb-valid-filter-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="filter-pb-valid">
+                            <span>Filter PB-valid only</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Keep only PoseBusters-valid molecules (implies calculating PB validity).">?</span>
+                        </label>
+                    </div>
+
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="calculate-strain">
+                            <span>Calculate strain energies</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Calculate internal strain energies for all generated molecules.">?</span>
+                        </label>
+                    </div>
+
+                    <!-- LBDD optimization method -->
+                    <div class="setting-group lbdd-only hidden" id="lbdd-opt-group">
+                        <label class="setting-label" for="lbdd-optimize-method">Optimization
+                            <span class="help-tooltip"
+                                data-tooltip="Post-generation optimization method. RDKit uses MMFF force-field; xTB uses semi-empirical quantum mechanics.">?</span>
+                        </label>
+                        <select id="lbdd-optimize-method" class="select-input">
+                            <option value="none">None</option>
+                            <option value="rdkit">RDKit (MMFF)</option>
+                            <option value="xtb">xTB</option>
+                        </select>
+                    </div>
+
+                    <!-- Property Filter (collapsible) -->
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="filter-properties">
+                            <span>Filter by properties</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Filter generated molecules by RDKit molecular properties. When enabled, only molecules within the specified property ranges will be kept. Defaults are ±20% of the reference ligand.">?</span>
+                        </label>
+                    </div>
+
+                    <div id="property-filter-panel" class="prop-filter-panel hidden">
+                        <div id="property-filter-list" class="prop-filter-list">
+                            <!-- Dynamically populated by JS when ref properties are available -->
+                            <div class="prop-filter-placeholder">
+                                Upload a reference ligand to configure property ranges.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ADMET Model Filter -->
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="filter-adme">
+                            <span>ADMET model filter</span>
+                            <span class="help-tooltip"
+                                data-tooltip="Upload a pre-trained ADMET model to filter generated molecules by predicted ADMET properties (e.g., clearance, hERG liability).">?</span>
+                        </label>
+                    </div>
+
+                    <div id="adme-filter-panel" class="prop-filter-panel hidden">
+                        <div id="adme-filter-entries" class="adme-filter-entries">
+                            <div class="adme-entry" id="adme-entry-0">
+                                <div class="adme-entry-row">
+                                    <input type="text" class="input-text adme-name" placeholder="Property name"
+                                        title="Name for this ADMET property (e.g. clearance, hERG)">
+                                    <label class="btn btn-sm btn-outline adme-upload-btn">
+                                        <span>Upload Model</span>
+                                        <input type="file" class="adme-model-file"
+                                            accept=".pt,.pth,.pkl,.joblib,.ckpt,.onnx,.bin" hidden>
+                                    </label>
+                                    <button type="button" class="btn btn-sm btn-outline"
+                                        onclick="this.closest('.adme-entry').remove()"
+                                        title="Remove this filter">✕</button>
+                                </div>
+                                <div class="adme-entry-row">
+                                    <label class="adme-range-label" for="adme-min-0">Min</label>
+                                    <input type="number" class="input-number adme-min" id="adme-min-0" step="any"
+                                        placeholder="—">
+                                    <label class="adme-range-label" for="adme-max-0">Max</label>
+                                    <input type="number" class="input-number adme-max" id="adme-max-0" step="any"
+                                        placeholder="—">
+                                </div>
+                                <span class="adme-model-name" title="">No model selected</span>
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline" id="adme-add-entry"
+                            onclick="addAdmeEntry()">+ Add ADMET filter</button>
+                    </div>
+                </div>
+
+                <!-- Generate button -->
+                <div class="panel-section needs-inputs hidden">
+                    <button id="generate-btn" class="btn btn-primary btn-block" onclick="startGeneration()" disabled>
+                        <span class="btn-icon"></span> Generate Ligands
+                    </button>
+                    <div id="progress-container" class="hidden">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill"></div>
+                        </div>
+                        <span class="progress-text" id="progress-text">Generating...</span>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Left-panel resize handle -->
+            <div class="panel-resize-handle panel-resize-handle-left" id="panel-resize-handle-left"></div>
+
+            <!-- ===== CENTER: 3D VIEWER ===== -->
+            <main class="viewer-container">
+                <div class="viewer-toolbar">
+                    <div class="toolbar-group">
+                        <button class="toolbar-btn active sbdd-only" onclick="setViewMode('complex')" id="view-complex"
+                            title="Show complex">
+                            <svg width="18" height="15" viewBox="0 0 18 15" fill="none" stroke="currentColor"
+                                stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px">
+                                <path d="M2.5 13C6 11.5 6 9.5 2.5 8C-1 6.5 -1 4.5 2.5 3C4.5 2 6 1.5 7 2"
+                                    stroke-width="1.4" />
+                                <polygon points="13,3 15.5,4.8 15.5,8.2 13,10 10.5,8.2 10.5,4.8" fill="none"
+                                    stroke-width="1.2" />
+                                <line x1="13" y1="5.5" x2="13" y2="7" stroke-width="1" opacity="0.5" />
+                                <line x1="11.5" y1="8.5" x2="12.7" y2="7.3" stroke-width="1" opacity="0.5" />
+                                <line x1="14.5" y1="8.5" x2="13.3" y2="7.3" stroke-width="1" opacity="0.5" />
+                            </svg> Complex
+                        </button>
+                        <button class="toolbar-btn sbdd-only" onclick="setViewMode('protein')" id="view-protein"
+                            title="Show protein only">
+                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
+                                stroke-width="1.5" stroke-linecap="round" style="vertical-align:-3px">
+                                <path d="M4 13C9 11 9 9 4 7.5C-1 6 -1 4 4 2.5C7 1.5 9 1 11 1.5" />
+                            </svg> Protein
+                        </button>
+                        <button class="toolbar-btn sbdd-only" onclick="setViewMode('ligand')" id="view-ligand"
+                            title="Show ligand only">
+                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
+                                stroke-width="1.3" stroke-linejoin="round" style="vertical-align:-3px">
+                                <polygon points="7.5,1.5 12.5,4.2 12.5,9.8 7.5,12.5 2.5,9.8 2.5,4.2" />
+                                <line x1="7.5" y1="4" x2="7.5" y2="7" opacity="0.5" />
+                                <line x1="4.5" y1="9" x2="7" y2="7.5" opacity="0.5" />
+                                <line x1="10.5" y1="9" x2="8" y2="7.5" opacity="0.5" />
+                            </svg> Ligand
+                        </button>
+                    </div>
+                    <div class="toolbar-sep"></div>
+                    <div class="toolbar-group">
+                        <button class="toolbar-btn sbdd-only" onclick="toggleSurface()" id="btn-surface"
+                            title="Toggle protein surface">
+                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
+                                stroke-width="1.3" stroke-linecap="round" style="vertical-align:-3px">
+                                <path d="M1.5 11C3 6 5 9 7.5 5.5C10 2 12 7 13.5 4" />
+                                <path d="M1.5 11C3 8 5 11 7.5 8C10 5 12 9 13.5 6" opacity="0.3" />
+                            </svg> Surface
+                        </button>
+                        <button class="toolbar-btn sbdd-only" onclick="toggleFullAtom()" id="btn-full-atom"
+                            title="Show all protein atoms as sticks">
+                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
+                                stroke-width="1.2" style="vertical-align:-3px">
+                                <circle cx="4" cy="4" r="1.8" fill="currentColor" opacity="0.35" />
+                                <circle cx="11" cy="4" r="1.8" fill="currentColor" opacity="0.35" />
+                                <circle cx="7.5" cy="11" r="1.8" fill="currentColor" opacity="0.35" />
+                                <line x1="5.5" y1="4.5" x2="9.5" y2="4.5" />
+                                <line x1="4.5" y1="5.5" x2="7" y2="9.5" />
+                                <line x1="10.5" y1="5.5" x2="8" y2="9.5" />
+                            </svg> Full Atom
+                        </button>
+                        <button class="toolbar-btn sbdd-only" onclick="toggleBindingSite()" id="btn-binding-site"
+                            title="Show protein binding site residues within 3.5Å of the ligand">
+                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
+                                stroke-width="1.3" stroke-linecap="round" style="vertical-align:-3px">
+                                <path d="M2 3.5L2 9C2 12 5.5 13.5 7.5 13.5C9.5 13.5 13 12 13 9L13 3.5" />
+                                <circle cx="7.5" cy="8" r="2" fill="currentColor" opacity="0.3" stroke="currentColor" />
+                            </svg> Binding Site
+                        </button>
+                        <button class="toolbar-btn sbdd-only" onclick="showInteractions3D('ref')" id="btn-int-ref"
+                            title="Show interactions for reference ligand">
+                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
+                                stroke-width="1.3" style="vertical-align:-3px">
+                                <circle cx="3" cy="7.5" r="2.2" fill="currentColor" opacity="0.25" />
+                                <circle cx="12" cy="7.5" r="2.2" fill="currentColor" opacity="0.25" />
+                                <line x1="5.2" y1="7.5" x2="9.8" y2="7.5" stroke-dasharray="1.5 1.2" />
+                            </svg> Interactions
+                        </button>
+                    </div>
+                    <div class="toolbar-sep"></div>
+                    <div class="toolbar-group">
+                        <button class="toolbar-btn" onclick="centerOnLigand()" title="Zoom to ligand">
+                            &#x2299; Focus Ligand
+                        </button>
+                        <button class="toolbar-btn" onclick="toggleRefLigandVisibility()" id="btn-hide-ligand"
+                            title="Hide/show reference ligand">
+                            &#x25CB; Hide Ligand
+                        </button>
+                        <button class="toolbar-btn" onclick="resetView()" title="Reset camera to default orientation">
+                            &#x21BB; Reset
+                        </button>
+                    </div>
+                    <div class="toolbar-sep hidden" id="prior-cloud-sep"></div>
+                    <div class="toolbar-group hidden" id="prior-cloud-group">
+                        <button class="toolbar-btn" onclick="togglePriorCloud()" id="toggle-prior-cloud"
+                            title="Toggle the prior point cloud showing where new atoms were sampled from">
+                            <svg width="15" height="15" viewBox="0 0 15 15" fill="currentColor"
+                                style="vertical-align:-3px">
+                                <circle cx="3.5" cy="4" r="1.5" opacity="0.7" />
+                                <circle cx="9" cy="2.5" r="1.3" opacity="0.5" />
+                                <circle cx="12" cy="5.5" r="1.4" opacity="0.6" />
+                                <circle cx="5" cy="8" r="1.6" opacity="0.8" />
+                                <circle cx="10.5" cy="9.5" r="1.5" opacity="0.6" />
+                                <circle cx="7.5" cy="12" r="1.3" opacity="0.5" />
+                                <circle cx="2.5" cy="11.5" r="1.2" opacity="0.4" />
+                            </svg> Prior Cloud
+                        </button>
+                    </div>
+                </div>
+                <div id="viewer3d" class="viewer3d-canvas"></div>
+                <div id="viewer-overlay" class="viewer-overlay">
+                    <div class="overlay-content">
+                        <div class="overlay-icon">
+                            <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+                                <circle cx="32" cy="32" r="28" stroke="#c8b2dd" stroke-width="2" stroke-dasharray="6 4"
+                                    fill="none" />
+                                <text x="32" y="38" text-anchor="middle" fill="#9c8aac" font-size="22"
+                                    font-family="Inter, sans-serif" font-weight="300">3D</text>
+                            </svg>
+                        </div>
+                        <h3 id="viewer-overlay-title">Upload a Protein & Ligand</h3>
+                        <p id="viewer-overlay-desc">Start by uploading a protein structure (PDB/CIF) and a ligand
+                            molecule (SDF/MOL) using the
+                            left
+                            panel.</p>
+                    </div>
+                </div>
+
+                <!-- Floating 2D structure overlay -->
+                <div id="mol-2d-overlay" class="mol-2d-overlay hidden">
+                    <div class="mol-2d-header">
+                        <span class="mol-2d-title" id="mol-2d-name">2D Structure</span>
+                        <div class="mol-2d-tabs">
+                            <button class="mol-2d-tab active" id="tab-structure"
+                                onclick="switchMol2DTab('structure')">Structure</button>
+                            <button class="mol-2d-tab" id="tab-interactions"
+                                onclick="switchMol2DTab('interactions')">Interactions</button>
+                            <button class="mol-2d-tab" id="tab-properties"
+                                onclick="switchMol2DTab('properties')">Properties</button>
+                        </div>
+                        <button class="mol-2d-close" onclick="closeMol2DOverlay()" title="Close">✕</button>
+                    </div>
+                    <div id="mol-2d-canvas" class="mol-2d-canvas"></div>
+                    <div id="mol-2d-interaction" class="mol-2d-canvas hidden"></div>
+                    <div id="mol-2d-properties" class="mol-2d-canvas hidden"></div>
+                    <div class="mol-2d-info">
+                        <div id="mol-2d-smiles" class="mol-2d-smiles"></div>
+                        <div id="mol-2d-props" class="mol-2d-props"></div>
+                    </div>
+                </div>
+            </main>
+
+            <!-- ===== RIGHT PANEL: RESULTS ===== -->
+            <div class="panel-resize-handle" id="panel-resize-handle"></div>
+            <aside class="panel panel-right" id="results-panel" aria-label="Results">
+
+                <!-- Section 0a: Original Ligand (shown after reference swap) -->
+                <div id="original-ligand-card-section" class="panel-section hidden">
+                    <h3 class="section-title">
+                        <span class="section-icon"></span> Original Ligand
+                    </h3>
+                    <div id="original-ligand-card" class="result-card original-ligand-card" role="button" tabindex="0"
+                        onclick="showOriginalLigand2D()">
+                        <div class="result-card-content">
+                            <div class="result-header">
+                                <span class="result-title" id="orig-card-title">Original</span>
+                                <span class="result-badge badge badge-idle" id="orig-card-badge"></span>
+                            </div>
+                            <div id="orig-card-2d" class="ref-card-2d"></div>
+                            <div class="result-smiles" id="orig-card-smiles"></div>
+                            <div class="result-props" id="orig-card-props"></div>
+                            <button class="set-ref-btn" onclick="event.stopPropagation(); setOriginalAsReference()"
+                                title="Restore this ligand as the reference">Set as Reference</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 0b: Reference Ligand (shown once ligand loaded) -->
+                <div id="ref-ligand-card-section" class="panel-section hidden">
+                    <h3 class="section-title">
+                        <span class="section-icon"></span> Reference Ligand
+                    </h3>
+                    <div id="ref-ligand-card" class="result-card ref-ligand-card" role="button" tabindex="0"
+                        onclick="showReferenceLigandView()">
+                        <div class="result-card-content">
+                            <div class="result-header">
+                                <span class="result-title" id="ref-card-title">Reference</span>
+                                <span class="result-badge badge badge-idle" id="ref-card-badge"></span>
+                            </div>
+                            <div id="ref-card-2d" class="ref-card-2d"></div>
+                            <div class="result-smiles" id="ref-card-smiles"></div>
+                            <div class="result-props" id="ref-card-props"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 0c: Generation Failure (shown only on failure) -->
+                <div id="generation-failure-card" class="panel-section hidden">
+                    <h3 class="section-title">
+                        <span class="section-icon">⚠</span> Generation Failed
+                    </h3>
+                    <div class="failure-card-body">
+                        <p class="failure-card-message" id="failure-card-message" title=""></p>
+                        <button class="btn btn-secondary failure-card-retry-btn"
+                            id="failure-card-retry-btn">Retry</button>
+                    </div>
+                </div>
+
+                <!-- Section 1: Generated Ligands -->
+                <div class="panel-section">
+                    <h3 class="section-title">
+                        <span class="section-icon"></span> Generated Ligands
+                    </h3>
+                    <div id="results-placeholder" class="results-placeholder">
+                        <span class="muted-text">Generated ligands will appear here after running generation.</span>
+                    </div>
+                    <div id="results-list" class="results-list hidden"></div>
+                </div>
+
+                <!-- Section 1b: Bulk Actions (Select / Save / Clear) -->
+                <div id="bulk-actions" class="panel-section hidden">
+                    <h3 class="section-title">Manage</h3>
+                    <div class="bulk-actions-row">
+                        <button id="select-all-toggle-btn" class="btn btn-xs btn-outline"
+                            onclick="toggleAllSaveCheckboxes()">&#x2611; Select
+                            All</button>
+                        <span class="muted-text" id="bulk-actions-count">0 selected</span>
+                    </div>
+                    <div class="bulk-actions-row">
+                        <button class="btn btn-sm btn-outline" onclick="saveSelectedLigands()"
+                            id="save-selected-btn">&#x2913; Save Selected</button>
+                        <button class="btn btn-sm btn-outline" onclick="saveAllLigands()">&#x2913; Save All</button>
+                    </div>
+                    <button id="clear-gen-btn" class="btn btn-sm btn-danger btn-block"
+                        onclick="clearGeneratedLigands()">
+                        Clear All
+                    </button>
+                </div>
+
+                <!-- Section 2: Hydrogen Controls -->
+                <div id="gen-hs-controls" class="panel-section gen-hs-controls hidden">
+                    <h3 class="section-title">Hydrogens</h3>
+                    <div class="gen-hs-buttons">
+                        <button class="btn btn-sm btn-outline" id="btn-gen-remove-hs" onclick="removeGenHydrogens()"
+                            title="Remove hydrogens from generated ligand">Remove Hs</button>
+                        <button class="btn btn-sm btn-outline" id="btn-gen-add-hs" onclick="addGenHydrogens()"
+                            title="Add hydrogens to generated ligand">Add Hs</button>
+                    </div>
+                </div>
+
+                <!-- Section 3: Analysis (Affinity + Viz) -->
+                <div id="analysis-section" class="panel-section hidden">
+                    <h3 class="section-title">Analysis</h3>
+
+                    <div id="rank-select-controls" class="rank-select-controls hidden">
+                        <button class="affinity-panel-toggle" id="affinity-panel-toggle"
+                            onclick="toggleAffinityPanel()">
+                            <span class="affinity-panel-toggle-icon"></span>
+                            <span>Predicted Affinity</span>
+                            <span class="affinity-panel-chevron" id="affinity-panel-chevron">▸</span>
+                        </button>
+                        <div class="affinity-panel-body hidden" id="affinity-panel-body">
+                            <div class="rank-select-row">
+                                <label class="info-label" for="rank-affinity-type">Type</label>
+                                <select id="rank-affinity-type" class="select-sm" onchange="onAffinityTypeChange()">
+                                    <option value="pic50">pIC50</option>
+                                    <option value="pki">pKi</option>
+                                    <option value="pkd">pKd</option>
+                                    <option value="pec50">pEC50</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-sm btn-outline btn-block affinity-dist-btn"
+                                onclick="showAffinityDistribution()">
+                                Show Distribution
+                            </button>
+                            <div class="affinity-rank-section">
+                                <div class="rank-select-row">
+                                    <label class="info-label" for="rank-top-n">Top N</label>
+                                    <input type="number" id="rank-top-n" class="input-sm" min="1" placeholder="All">
+                                    <button class="btn btn-xs btn-primary" id="rank-apply-btn"
+                                        onclick="applyRankSelect()" title="Rank and filter ligands">
+                                        Rank
+                                    </button>
+                                    <button class="btn btn-xs btn-outline hidden" id="rank-reset-btn"
+                                        onclick="resetRankSelect()" title="Reset to original order">
+                                        ↩
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="viz-controls" class="viz-controls">
+                        <button class="btn btn-sm btn-primary btn-block" onclick="showChemicalSpace()">
+                            Chemical Space
+                        </button>
+                        <button class="btn btn-sm btn-primary btn-block" onclick="showPropertySpace()">
+                            Property Space
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Section 4: Active Learning -->
+                <div id="save-section" class="panel-section hidden">
+                    <h3 class="section-title">Active Learning</h3>
+                    <button class="btn btn-sm btn-primary btn-block" onclick="showActiveLearningModal()" id="al-btn"
+                        title="LoRA finetuning on selected ligands">
+                        Finetuning
+                    </button>
+                    <div id="save-status" class="save-status hidden"></div>
+                </div>
+
+                <!-- Section 5: Generation Summary -->
+                <div id="gen-summary" class="panel-section hidden">
+                    <h3 class="section-title">
+                        <span class="section-icon"></span> Summary
+                    </h3>
+                    <div class="info-card">
+                        <div class="info-row">
+                            <span class="info-label">Generated</span>
+                            <span class="info-value" id="summary-count">–</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Time</span>
+                            <span class="info-value" id="summary-time">–</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Mode</span>
+                            <span class="info-value" id="summary-mode">–</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Generation mode</span>
+                            <span class="info-value" id="summary-gen-mode">–</span>
+                        </div>
+                        <div class="info-row" id="summary-fixed-row">
+                            <span class="info-label">Atoms replaced</span>
+                            <span class="info-value" id="summary-fixed">–</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 6: Metrics Log -->
+                <div id="metrics-panel" class="panel-section hidden">
+                    <h3 class="section-title">
+                        <span class="section-icon"></span> Metrics
+                    </h3>
+                    <div id="metrics-log" class="metrics-log"></div>
+                </div>
+            </aside>
+        </div>
+
+        <!-- ===== FOOTER ===== -->
+        <footer class="footer">
+            <span>© FLOWR — Flow Matching for Structure-Aware Ligand Generation</span>
+        </footer>
+
+    </div><!-- end #main-app -->
+
+    <!-- ===== CLEAR ALL CONFIRMATION MODAL ===== -->
+    <div id="clear-confirm-modal" class="al-overlay hidden">
+        <div class="al-card" style="max-width: 380px;">
+            <h2 class="landing-section-title" style="margin-bottom: 8px;">Delete All Ligands</h2>
+            <p id="clear-confirm-msg" class="al-card-desc" style="margin-bottom: 20px;">
+                All generated ligands from all rounds will be permanently deleted.
+            </p>
+            <div style="display: flex; gap: 10px;">
+                <button class="btn btn-sm btn-outline" onclick="closeModal('clear-confirm-modal')"
+                    style="flex: 1; padding: 10px;">Cancel</button>
+                <button class="btn btn-sm btn-danger" onclick="_executeClearAll()"
+                    style="flex: 1; padding: 10px;">Delete All</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== ACTIVE LEARNING EXPLANATION MODAL ===== -->
+    <div id="al-explain-modal" class="al-overlay hidden">
+        <div class="al-card">
+            <h2 class="landing-section-title" style="margin-bottom: 8px;">Active Learning</h2>
+            <p class="al-card-desc">Short LoRA finetuning on your selection. Subsequent generations will
+                produce ligands closer to this chemical space.</p>
+
+            <div class="al-card-divider"></div>
+
+            <div class="info-card" style="margin-bottom: 20px;">
+                <div class="info-row">
+                    <span class="info-label">Selected ligands</span>
+                    <span class="info-value" id="al-n-selected">0</span>
+                </div>
+                <div class="info-row">
+                    <label class="info-label" for="al-epochs-input">Epochs</label>
+                    <input type="number" id="al-epochs-input" class="info-value" min="1" max="100" step="1" value="2"
+                        style="width: 52px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: 2px 4px; font-size: 0.92rem;">
+                </div>
+                <div class="info-row">
+                    <label class="info-label" for="al-lr-input">Learning Rate</label>
+                    <input type="text" id="al-lr-input" class="info-value" value="5e-4"
+                        style="width: 64px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: 2px 4px; font-size: 0.92rem;">
+                </div>
+                <div class="info-row">
+                    <label class="info-label" for="al-batch-cost-input">Batch Size</label>
+                    <input type="number" id="al-batch-cost-input" class="info-value" min="1" max="32" step="1" value="4"
+                        style="width: 52px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: 2px 4px; font-size: 0.92rem;">
+                </div>
+                <div class="info-row">
+                    <label class="info-label" for="al-acc-batches-input">Grad. Accum. Steps</label>
+                    <input type="number" id="al-acc-batches-input" class="info-value" min="1" max="32" step="1"
+                        value="2"
+                        style="width: 52px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: 2px 4px; font-size: 0.92rem;">
+                </div>
+            </div>
+
+            <!-- Round selection for including previous rounds in finetuning -->
+            <div id="al-round-selection" class="hidden" style="margin-bottom: 16px;"></div>
+
+            <button class="btn btn-sm btn-primary btn-block" onclick="startActiveLearning()" id="al-start-btn"
+                style="width: 100%; padding: 10px;">
+                Start LoRA Finetuning
+            </button>
+
+            <button class="al-card-close" onclick="closeModal('al-explain-modal')">Cancel</button>
+        </div>
+    </div>
+
+    <!-- ===== ACTIVE LEARNING PROGRESS MODAL ===== -->
+    <div id="al-progress-modal" class="al-overlay hidden" style="z-index: 10000;">
+        <div class="al-card">
+            <div id="al-progress-training" style="display: block;">
+                <h2 class="landing-section-title" style="margin-bottom: 4px;">Finetuning</h2>
+
+                <!-- Rotating molecule animation -->
+                <div class="al-molecule-spinner">
+                    <svg viewBox="0 0 80 80" width="72" height="72" class="al-molecule-svg">
+                        <!-- Bonds -->
+                        <line x1="40" y1="40" x2="40" y2="14" stroke="var(--lavender-dark)" stroke-width="2"
+                            opacity="0.5" />
+                        <line x1="40" y1="40" x2="62" y2="27" stroke="var(--lavender-dark)" stroke-width="2"
+                            opacity="0.5" />
+                        <line x1="40" y1="40" x2="62" y2="53" stroke="var(--lavender-dark)" stroke-width="2"
+                            opacity="0.5" />
+                        <line x1="40" y1="40" x2="40" y2="66" stroke="var(--lavender-dark)" stroke-width="2"
+                            opacity="0.5" />
+                        <line x1="40" y1="40" x2="18" y2="53" stroke="var(--lavender-dark)" stroke-width="2"
+                            opacity="0.5" />
+                        <line x1="40" y1="40" x2="18" y2="27" stroke="var(--lavender-dark)" stroke-width="2"
+                            opacity="0.5" />
+                        <!-- Outer atoms -->
+                        <circle cx="40" cy="14" r="5" fill="var(--lavender)" opacity="0.7" />
+                        <circle cx="62" cy="27" r="4" fill="var(--chartreuse)" opacity="0.7" />
+                        <circle cx="62" cy="53" r="5" fill="var(--lavender)" opacity="0.7" />
+                        <circle cx="40" cy="66" r="4" fill="var(--chartreuse)" opacity="0.7" />
+                        <circle cx="18" cy="53" r="5" fill="var(--lavender)" opacity="0.7" />
+                        <circle cx="18" cy="27" r="4" fill="var(--chartreuse)" opacity="0.7" />
+                        <!-- Center atom -->
+                        <circle cx="40" cy="40" r="7" fill="var(--lavender-deeper)" opacity="0.8" />
+                    </svg>
+                </div>
+
+                <p id="al-progress-message" class="al-card-subtitle" style="margin-bottom: 16px;">
+                    Starting LoRA finetuning…
+                </p>
+
+                <!-- Phase 1: Preparing -->
+                <div id="al-phase1-section" class="al-phase-section">
+                    <div class="al-phase-header">
+                        <span class="al-phase-label">Preparing data &amp; model</span>
+                        <span id="al-phase1-pct" class="al-phase-pct">0%</span>
+                    </div>
+                    <div class="al-progress-track">
+                        <div id="al-phase1-fill" class="al-progress-fill"></div>
+                    </div>
+                </div>
+
+                <!-- Phase 2: Training (hidden until training starts) -->
+                <div id="al-phase2-section" class="al-phase-section" style="display: none; margin-top: 14px;">
+                    <div class="al-phase-header">
+                        <span class="al-phase-label">LoRA Training</span>
+                        <span id="al-phase2-pct" class="al-phase-pct">0%</span>
+                    </div>
+                    <div class="al-progress-track">
+                        <div id="al-phase2-fill" class="al-progress-fill"></div>
+                    </div>
+                </div>
+
+                <button id="al-cancel-btn" class="btn btn-sm btn-outline" onclick="cancelActiveLearning()"
+                    style="margin-top: 18px; width: 100%; padding: 8px;">
+                    Cancel Finetuning
+                </button>
+            </div>
+
+            <div id="al-progress-cancelled" style="display: none; text-align: center;">
+                <p class="al-card-subtitle" style="margin-bottom: 8px;"><strong>Finetuning Cancelled</strong></p>
+                <p style="color: var(--text-muted); font-size: 15px; margin-bottom: 20px;">
+                    LoRA finetuning was cancelled. No model changes were applied.
+                </p>
+                <button class="btn btn-sm btn-outline" onclick="closeActiveLearningDone()" style="padding: 8px 32px;">
+                    Close
+                </button>
+            </div>
+
+            <div id="al-progress-done" style="display: none; text-align: center;">
+                <p class="al-card-subtitle" style="margin-bottom: 8px;"><strong>LoRA Finetuning Complete</strong></p>
+                <p style="color: var(--text-muted); font-size: 15px; margin-bottom: 20px;">
+                    Finetuned model active for next generations.
+                </p>
+                <button class="btn btn-sm btn-primary" onclick="closeActiveLearningDone()" style="padding: 8px 32px;">
+                    OK
+                </button>
+            </div>
+
+            <div id="al-progress-error" style="display: none; text-align: center;">
+                <p class="al-card-subtitle" style="margin-bottom: 8px; color: #cc3333;"><strong>Finetuning
+                        Failed</strong></p>
+                <p id="al-error-message" style="color: var(--text-muted); font-size: 15px; margin-bottom: 20px;"></p>
+                <button class="btn btn-sm btn-outline" onclick="closeActiveLearningDone()" style="padding: 8px 32px;">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== CHEMICAL SPACE MODAL ===== -->
+    <div id="chemspace-modal" class="modal-overlay hidden">
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2 class="modal-title">Chemical Space</h2>
+                <div class="method-toggle" id="chemspace-method-toggle">
+                    <button class="method-btn active" data-method="pca"
+                        onclick="switchChemSpaceMethod('pca')">PCA</button>
+                    <button class="method-btn" data-method="tsne" onclick="switchChemSpaceMethod('tsne')">t-SNE</button>
+                    <button class="method-btn" data-method="umap" onclick="switchChemSpaceMethod('umap')">UMAP</button>
+                </div>
+                <button class="modal-close" onclick="closeModal('chemspace-modal')">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="chemspace-loading" class="modal-loading hidden">
+                    <div class="spinner"></div>
+                    <span>Computing projection…</span>
+                </div>
+                <div id="chemspace-plot" class="chemspace-plot"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== PROPERTY SPACE MODAL ===== -->
+    <div id="propspace-modal" class="modal-overlay hidden">
+        <div class="modal-content modal-xl">
+            <div class="modal-header">
+                <h2 class="modal-title">Property Space</h2>
+                <button class="modal-close" onclick="closeModal('propspace-modal')">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="propspace-loading" class="modal-loading hidden">
+                    <div class="spinner"></div>
+                    <span>Computing properties…</span>
+                </div>
+                <div id="propspace-grid" class="propspace-grid"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== AFFINITY DISTRIBUTION MODAL ===== -->
+    <div id="affinity-modal" class="modal-overlay hidden">
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2 class="modal-title">Predicted Affinity Distribution</h2>
+                <button class="modal-close" onclick="closeModal('affinity-modal')">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="affinity-loading" class="modal-loading hidden">
+                    <div class="spinner"></div>
+                    <span>Loading affinity data…</span>
+                </div>
+                <div id="affinity-ref-info" class="affinity-ref-info hidden"></div>
+                <div id="affinity-plot-container" class="affinity-plot-container"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== JAVASCRIPT ===== -->
+    <script src="/static/app.js?v=20260326b"></script>
+    <script>
+        (function () {
+            var protArea = document.getElementById('protein-upload-area');
+            if (protArea) {
+                protArea.addEventListener('drop', function (e) { handleProteinDrop(e); });
+                protArea.addEventListener('dragover', function (e) { e.preventDefault(); });
+                protArea.addEventListener('dragleave', function () { protArea.classList.remove('drag-over'); });
+            }
+            var ligArea = document.getElementById('ligand-upload-area');
+            if (ligArea) {
+                ligArea.addEventListener('drop', function (e) { handleLigandDrop(e); });
+                ligArea.addEventListener('dragover', function (e) { e.preventDefault(); });
+                ligArea.addEventListener('dragleave', function () { ligArea.classList.remove('drag-over'); });
+            }
+            ['clear-confirm-modal', 'al-explain-modal', 'chemspace-modal', 'propspace-modal', 'affinity-modal'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) el.addEventListener('click', function (e) { onModalOverlayClick(e, id); });
+            });
+        })();
+    </script>
+
+</body>
+
+</html>

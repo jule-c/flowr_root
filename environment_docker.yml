@@ -1,0 +1,93 @@
+# Docker-specific environment (derived from environment.yml)
+# Changes vs environment.yml:
+#   - Replaced schrodinger::pymol-bundle with conda-forge::pymol-open-source (no license needed)
+#   - Removed schrodinger and mx channels
+#   - Removed mx::reduce (only used for PDB preprocessing, not server runtime)
+#   - Kept all other dependencies as-is
+name: flowr_root
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - openeye
+dependencies:
+  # Core Python
+  - python=3.12.12
+  - pip
+  - setuptools=80.9.0
+  
+  # PyTorch ecosystem
+  - pytorch::pytorch=2.5.1
+  - pytorch::pytorch-cuda=12.4
+  - pytorch::torchtriton=3.1.0
+  
+  # CUDA toolkit
+  - conda-forge::cudatoolkit=11.8.0
+  
+  # Scientific computing
+  - conda-forge::numpy=1.26.4
+  - conda-forge::scipy=1.16.3
+  - conda-forge::pandas=2.3.3
+  - conda-forge::scikit-learn=1.8.0
+  
+  # Visualization
+  - conda-forge::matplotlib=3.10.8
+  - conda-forge::seaborn=0.13.2
+  
+  # Chemistry & Molecular modeling
+  - conda-forge::rdkit=2025.03.6
+  - conda-forge::openbabel=3.1.1
+  - conda-forge::openmm=8.2.0
+  - conda-forge::openff-toolkit=0.18.0
+  - conda-forge::openmmforcefields=0.15.0
+  - conda-forge::pdbfixer=1.12
+  - conda-forge::vina=1.2.6
+  - conda-forge::xtb=6.7.1
+  - conda-forge::ambertools=24.8
+  
+  # Bioinformatics
+  - conda-forge::biopython=1.86
+  - conda-forge::mdanalysis=2.10.0
+  - conda-forge::prody=2.6.1
+  - conda-forge::datamol=0.12.5
+  - conda-forge::pypdb=2.4
+  - openeye-toolkits
+  
+  # ML & Deep Learning utilities
+  - conda-forge::lightning=2.6.0
+  - conda-forge::torchmetrics=1.8.2
+  - conda-forge::umap-learn
+  
+  # PyMOL (open-source, no license required)
+  - conda-forge::pymol-open-source=3.1.0
+  
+  # Other utilities
+  - conda-forge::packaging=25.0
+  - conda-forge::pyyaml=6.0.3
+  - conda-forge::h5py=3.15.1
+  - conda-forge::lxml=6.0.2
+  - conda-forge::networkx=3.6.1
+  - conda-forge::tqdm=4.67.1
+  - conda-forge::joblib=1.5.3
+  - conda-forge::filelock=3.20.1
+  
+  # Pip packages
+  - pip:
+      - lmdb==1.7.5
+      - rmsd==1.6.4
+      - torch_ema==0.3
+      - meeko==0.7.1
+      - hydride==1.2.3
+      - biotite==1.5.0
+      - prolif==2.0.3
+      - pdbinf==0.0.4
+      - biopandas==0.5.1
+      - torch_geometric==2.7.0
+      - tensordict==0.10.0
+      - gemmi==0.7.4
+      # FLOWR Visualization web server
+      - fastapi>=0.104.0
+      - uvicorn[standard]>=0.24.0
+      - python-multipart>=0.0.6
+      - oracledb
+      - umap-learn

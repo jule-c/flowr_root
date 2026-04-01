@@ -1,0 +1,48 @@
+# Gitignore file
+
+# Editors
+.vscode/
+.virtual_documents/
+.github/
+.copilot/
+
+# Python cache files
+__pycache__/
+*/__pycache__/
+**/__pycache__/
+.DS_Store
+*/.DS_Store
+**/.DS_Store
+*.pyc
+
+# Log files
+molproc_logs/
+lightning_logs/
+notebooks/lightning_logs/
+wandb/
+nohup.out
+
+# Slurm submission scripts and logs
+subslurm/
+slurm-*
+scripts/test.sh
+scripts/tests/
+
+# Local data
+.data/
+
+# HPC user configuration (contains user-specific paths)
+flowr_vis/hpc/hpc.env
+flowr_vis/hpc/worker_gamma.sh
+flowr_vis/hpc/run_hpc_frontend_gamma.sh
+
+# OpenEye license files
+oe_license.txt
+**/oe_license.txt
+
+# checkpoint files
+**/*.ckpt
+
+# code2pdf
+code_to_pdf.py
+flowr_code.pdf
