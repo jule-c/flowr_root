@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mol* Viewer</title>
+    <link rel="stylesheet" href="/static/lib/molstar/molstar.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #1a1a2e;
+        }
+
+        #app {
+            position: absolute;
+            inset: 0;
+        }
+
+        .embed-message {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #c8b2dd;
+            font: 14px/1.5 Inter, sans-serif;
+            background: #1a1a2e;
+        }
+
+        .embed-message.embed-loading {
+            z-index: 2;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app"></div>
+    <script src="/static/lib/molstar/molstar.js"></script>
+    <script>
+        let viewer = null;
+
+        function showMessage(text, loading) {
+            let el = document.getElementById('embed-message');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'embed-message';
+                el.className = 'embed-message';
+                document.body.appendChild(el);
+            }
+            el.className = loading ? 'embed-message embed-loading' : 'embed-message';
+            el.textContent = text;
+        }
+
+        function clearMessage() {
+            const el = document.getElementById('embed-message');
+            if (el) el.remove();
+        }
+
+        async function initViewer() {
+            const app = document.getElementById('app');
+            showMessage('Initializing Mol* viewer...', true);
+            try {
+                viewer = await molstar.Viewer.create(app, {
+                    layoutIsExpanded: false,
+                    layoutShowControls: true,
+                    layoutShowRemoteState: false,
+                    layoutShowSequence: true,
+                    layoutShowLog: false,
+                    layoutShowLeftPanel: false,
+                    collapseLeftPanel: true,
+                    collapseRightPanel: true,
+                    viewportShowControls: true,
+                    viewportShowExpand: false,
+                    viewportShowSelectionMode: true,
+                    viewportShowAnimation: true,
+                    viewportShowTrajectoryControls: true,
+                    viewportShowSettings: true,
+                    viewportShowScreenshotControls: true,
+                    viewportShowReset: true
+                });
+                window.parent.postMessage({ source: 'molstar-embed', status: 'ready' }, window.location.origin);
+                clearMessage();
+            } catch (err) {
+                const msg = err?.message || 'Mol* viewer failed to initialize';
+                showMessage(msg, false);
+                window.parent.postMessage({ source: 'molstar-embed', status: 'error', message: msg }, window.location.origin);
+            }
+        }
+
+        window.addEventListener('message', async (event) => {
+            if (event.origin !== window.location.origin) return;
+            const data = event.data;
+            if (!data || !data.type) return;
+
+            if (data.type === 'load-structure') {
+                if (!viewer) return;
+                try {
+                    showMessage('Loading structure...', true);
+                    await viewer.plugin.clear();
+                    const fmt = (data.proteinFormat || 'pdb').replace(/^\./, '');
+                    if (data.pdb) {
+                        await viewer.loadStructureFromData(data.pdb, fmt, { dataLabel: data.label || 'Protein' });
+                    }
+                    if (data.sdf) {
+                        await viewer.loadStructureFromData(data.sdf, 'sdf', { dataLabel: data.ligandLabel || 'Ligand' });
+                    }
+                    clearMessage();
+                    window.parent.postMessage({ source: 'molstar-embed', status: 'loaded' }, window.location.origin);
+                } catch (err) {
+                    const msg = err?.message || 'Failed to load structure';
+                    showMessage(msg, false);
+                    window.parent.postMessage({ source: 'molstar-embed', status: 'error', message: msg }, window.location.origin);
+                }
+            }
+        });
+
+        window.addEventListener('unload', () => { if (viewer) viewer.dispose(); });
+        initViewer();
+    </script>
+</body>
+
+</html>

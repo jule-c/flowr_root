@@ -148,6 +148,28 @@
                 Checkpoint files are loaded from the <code>ckpts/sbdd</code> directory.
             </p>
         </div>
+
+        <!-- Session restore divider (between cards) -->
+        <div class="landing-or-divider">
+            <span>or</span>
+        </div>
+
+        <!-- Session restore card (separate card) -->
+        <div class="landing-card landing-restore-card">
+            <h2 class="landing-section-title">Restore Previous Session</h2>
+            <p class="landing-restore-desc">Load a previously saved session file to continue where you left off.</p>
+            <div class="landing-restore-dropzone" id="landing-restore-dropzone">
+                <svg class="landing-restore-icon" width="32" height="32" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="12" y1="18" x2="12" y2="12" />
+                    <polyline points="9 15 12 12 15 15" />
+                </svg>
+                <span class="landing-restore-text">Drop a session file here or click to browse</span>
+                <input type="file" id="landing-session-file" accept=".json" class="landing-restore-file-input">
+            </div>
+        </div>
     </div>
 
     <!-- ===== MAIN APP (hidden until launch) ===== -->
@@ -168,6 +190,25 @@
                 <span class="topbar-subtitle" id="topbar-subtitle">Structure-Based Ligand Generation</span>
             </div>
             <div class="topbar-right">
+                <button class="btn-reset-session" id="save-session-btn" onclick="saveSession()"
+                    title="Save current session to file">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="7 10 12 15 17 10" />
+                        <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                    SAVE
+                </button>
+                <button class="btn-reset-session" id="load-session-btn"
+                    onclick="document.getElementById('main-session-file').click()" title="Load a saved session file">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                    </svg>
+                    LOAD
+                </button>
+                <input type="file" id="main-session-file" accept=".json" class="hidden">
                 <button class="btn-reset-session" id="reset-session-btn" onclick="resetCurrentSession()"
                     title="Clear uploads and reset current session">
                     &#x21BB; RESET
@@ -211,6 +252,9 @@
                         </ol>
                     </div>
 
+                    <!-- Strong divider between guidance and database loaders -->
+                    <hr class="db-loaders-divider sbdd-only" id="db-loaders-divider">
+
                     <!-- RCSB PDB fetch (SBDD only) -->
                     <div class="rcsb-section sbdd-only" id="rcsb-section">
                         <span class="rcsb-title">Load from RCSB</span>
@@ -228,6 +272,7 @@
                         </div>
                     </div>
                     <hr class="rcsb-divider sbdd-only" id="rcsb-divider">
+
 
                     <!-- Protein upload (SBDD only) -->
                     <div class="upload-group sbdd-only" id="protein-upload-group">
@@ -556,7 +601,13 @@
                         <span class="setting-value" id="cutoff-val">6.0</span>
                     </div>
 
-
+                    <div class="setting-group">
+                        <label class="setting-label" for="gen-seed">Random seed</label>
+                        <input type="number" id="gen-seed" class="gen-input-small" value="42" min="0" max="999999"
+                            step="1">
+                        <span class="help-tooltip"
+                            data-tooltip="Random seed for reproducibility. Change this to get different generation results.">?</span>
+                    </div>
 
                     <div class="setting-group">
                         <label class="checkbox-label">
@@ -742,6 +793,52 @@
                     </div>
                 </div>
 
+                <!-- Model Card -->
+                <div class="panel-section" id="model-card-section">
+                    <h3 class="section-title">
+                        <span class="section-icon"></span> Model
+                    </h3>
+                    <div class="model-card-current">
+                        <span class="model-card-label">Current model:</span>
+                        <span class="model-card-name" id="model-card-name">—</span>
+                    </div>
+                    <div class="model-card-actions" id="model-card-actions">
+                        <button class="btn btn-sm btn-outline model-card-btn" id="model-load-btn"
+                            onclick="showLoadCheckpointList()">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                            </svg>
+                            Load
+                        </button>
+                        <button class="btn btn-sm btn-outline model-card-btn hidden" id="model-save-btn"
+                            onclick="expandSaveCheckpoint()">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                                <polyline points="17 21 17 13 7 13 7 21" />
+                                <polyline points="7 3 7 8 15 8" />
+                            </svg>
+                            Save
+                        </button>
+                    </div>
+                    <!-- Inline save expansion -->
+                    <div id="model-save-expand" class="model-save-expand hidden">
+                        <label class="setting-label" for="model-save-name">Checkpoint name</label>
+                        <div class="model-save-row">
+                            <input type="text" id="model-save-name" class="input-text" placeholder="my_model_v1"
+                                maxlength="64" autocomplete="off">
+                            <button class="btn btn-sm btn-primary" id="model-save-confirm"
+                                onclick="confirmSaveCheckpoint()">Save</button>
+                        </div>
+                        <div id="model-save-status" class="model-save-status hidden"></div>
+                    </div>
+                    <!-- Inline load expansion -->
+                    <div id="model-load-expand" class="model-load-expand hidden">
+                        <div id="model-load-list" class="model-load-list"></div>
+                    </div>
+                </div>
+
                 <!-- Generate button -->
                 <div class="panel-section needs-inputs hidden">
                     <button id="generate-btn" class="btn btn-primary btn-block" onclick="startGeneration()" disabled>
@@ -863,8 +960,43 @@
                             </svg> Prior Cloud
                         </button>
                     </div>
+                    <div class="toolbar-sep" id="molstar-sep"></div>
+                    <div class="toolbar-group" id="molstar-group">
+                        <button class="toolbar-btn sbdd-only" onclick="toggleMolstar()" id="btn-molstar"
+                            title="Open Molstar viewer">
+                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
+                                stroke-width="1.3" style="vertical-align:-3px">
+                                <circle cx="7.5" cy="7.5" r="5.5" />
+                                <circle cx="7.5" cy="7.5" r="2" fill="currentColor" opacity="0.3" />
+                                <line x1="7.5" y1="2" x2="7.5" y2="4" />
+                                <line x1="7.5" y1="11" x2="7.5" y2="13" />
+                                <line x1="2" y1="7.5" x2="4" y2="7.5" />
+                                <line x1="11" y1="7.5" x2="13" y2="7.5" />
+                            </svg> Explore
+                        </button>
+                    </div>
                 </div>
                 <div id="viewer3d" class="viewer3d-canvas"></div>
+                <!-- Molstar iframe overlay (hidden by default) -->
+                <div id="molstar-overlay" class="molstar-overlay" style="display:none;">
+                    <div class="molstar-overlay-header">
+                        <span class="molstar-overlay-title">Mol* Explorer</span>
+                        <button class="molstar-close-btn" onclick="closeMolstar()" title="Close Molstar viewer">
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round">
+                                <line x1="2" y1="2" x2="12" y2="12" />
+                                <line x1="12" y1="2" x2="2" y2="12" />
+                            </svg>
+                        </button>
+                    </div>
+                    <iframe id="molstar-frame" class="molstar-frame" sandbox="allow-scripts allow-same-origin"
+                        title="Molstar Viewer"></iframe>
+                </div>
+                <div id="residue-hover-card" class="residue-hover-card" style="display:none;">
+                    <span id="residue-hover-name" class="hover-res-name"></span>
+                    <span class="hover-sep">&middot;</span>
+                    <span id="residue-hover-chain" class="hover-chain-label"></span>
+                </div>
                 <div id="viewer-overlay" class="viewer-overlay">
                     <div class="overlay-content">
                         <div class="overlay-icon">
@@ -1140,6 +1272,13 @@
 
             <div class="info-card" style="margin-bottom: 20px;">
                 <div class="info-row">
+                    <label class="info-label" for="al-ckpt-select">Base Model</label>
+                    <select id="al-ckpt-select" class="info-value"
+                        style="width: 170px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: 2px 4px; font-size: 0.92rem; cursor: pointer;">
+                        <option value="">Loading…</option>
+                    </select>
+                </div>
+                <div class="info-row">
                     <span class="info-label">Selected ligands</span>
                     <span class="info-value" id="al-n-selected">0</span>
                 </div>
@@ -1257,7 +1396,9 @@
             <div id="al-progress-done" style="display: none; text-align: center;">
                 <p class="al-card-subtitle" style="margin-bottom: 8px;"><strong>LoRA Finetuning Complete</strong></p>
                 <p style="color: var(--text-muted); font-size: 15px; margin-bottom: 20px;">
-                    Finetuned model active for next generations.
+                    Finetuned model active for next generations.<br>
+                    <span style="font-size: 13px;">Use the <strong>Save</strong> button in the Model panel to persist
+                        this checkpoint.</span>
                 </p>
                 <button class="btn btn-sm btn-primary" onclick="closeActiveLearningDone()" style="padding: 8px 32px;">
                     OK
@@ -1332,6 +1473,8 @@
             </div>
         </div>
     </div>
+
+
 
     <!-- ===== JAVASCRIPT ===== -->
     <script src="/static/app.js?v=20260326b"></script>

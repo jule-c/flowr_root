@@ -27,6 +27,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
 import uuid
 from collections import deque, namedtuple
 from contextlib import asynccontextmanager
@@ -37,7 +38,7 @@ import numpy as np
 import requests as http_requests
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import (  # noqa: F811 – Response also from fastapi
+from fastapi.responses import (
     FileResponse,
     JSONResponse,
     Response,
@@ -124,7 +125,15 @@ OPENEYE_AVAILABLE = False
 try:
     from openeye import oechem, oedepict, oegrapheme, oeomega  # noqa: E402
 
-    OPENEYE_AVAILABLE = True
+    # Verify that a valid license is present (import can succeed without one)
+    if oechem.OEChemIsLicensed():
+        OPENEYE_AVAILABLE = True
+    else:
+        logging.warning(
+            "OpenEye is installed but no valid license was found. "
+            "Set the OE_LICENSE environment variable to enable "
+            "2D interaction diagrams."
+        )
 except ImportError:
     logging.warning("OpenEye not available – 2D interaction diagrams disabled.")
 
@@ -239,18 +248,35 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarletteRequest, call_next):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com; "
-            "img-src 'self' data:; "
-            "connect-src 'self'; "
-            "frame-ancestors 'none'"
-        )
+        # Mol* requires 'unsafe-eval' (uses new Function() for WASM/Emscripten
+        # bindings and template interpolation). Only relax CSP for the embed page
+        # and its assets; keep the main app locked down.
+        if request.url.path.startswith(
+            "/static/lib/molstar/"
+        ) or request.url.path.endswith("molstar-embed.html"):
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob:; "
+                "connect-src 'self'; "
+                "frame-ancestors 'self'"
+            )
+        else:
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src 'self' https://fonts.gstatic.com; "
+                "img-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-src 'self'; "
+                "frame-ancestors 'self'"
+            )
+        response.headers["Content-Security-Policy"] = csp
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
         )
@@ -346,10 +372,6 @@ def _check_rate_limit(user: str, action: str, max_per_minute: int = 10):
         dq.append(now)
 
 
-# Shared worker-to-server file token (for /files/ endpoint)
-_WORKER_FILE_TOKEN = os.environ.get("FLOWR_WORKER_FILE_TOKEN", secrets.token_hex(32))
-
-
 def _worker_file_url(job_id: str, filename: str) -> str:
     """Build a authenticated file URL that the worker can download."""
     server_base = os.environ.get("FLOWR_SERVER_URL", "http://localhost:8787")
@@ -424,6 +446,10 @@ _worker_state = {
 _worker_lock = threading.Lock()
 
 
+# Shared worker-to-server file token (for /files/ endpoint)
+_WORKER_FILE_TOKEN = os.environ.get("FLOWR_WORKER_FILE_TOKEN", secrets.token_hex(32))
+
+
 @app.get("/api/jobs")
 async def list_jobs(request: Request):
     """Return only the current user's jobs."""
@@ -437,13 +463,209 @@ async def list_jobs(request: Request):
     return user_jobs
 
 
-class DefaultUserMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: StarletteRequest, call_next):
-        request.state.user = "default"
+# ── Session restore ──
+
+_MAX_SESSION_BODY = 50 * 1024 * 1024  # 50 MB
+
+
+@app.post("/api/session/restore")
+async def restore_session(request: Request):
+    """Recreate server-side job state from a saved session JSON."""
+    user = request.state.user
+
+    # ── Size guard ──
+    cl = request.headers.get("content-length")
+    if cl and int(cl) > _MAX_SESSION_BODY:
+        raise HTTPException(413, _ERR_FILE_TOO_LARGE)
+
+    body = await request.body()
+    if len(body) > _MAX_SESSION_BODY:
+        raise HTTPException(413, _ERR_FILE_TOO_LARGE)
+
+    try:
+        session = json_module.loads(body)
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+
+    if not isinstance(session, dict) or session.get("version") != 1:
+        raise HTTPException(400, "Unsupported session version")
+
+    # ── Per-field size validation ──
+    protein = session.get("protein")
+    ligand = session.get("ligand")
+    if protein and isinstance(protein.get("pdbData"), str):
+        if len(protein["pdbData"]) > _MAX_SESSION_BODY:
+            raise HTTPException(413, "pdbData too large")
+    if ligand and isinstance(ligand.get("sdfData"), str):
+        if len(ligand["sdfData"]) > _MAX_SESSION_BODY:
+            raise HTTPException(413, "sdfData too large")
+
+    # ── New job ──
+    job_id = str(uuid.uuid4())[:8]
+    job_dir = _job_upload_dir(user, job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    protein_path = None
+    protein_filename = None
+    ligand_path = None
+    ligand_filename = None
+
+    # ── Write protein PDB ──
+    if protein and protein.get("pdbData"):
+        raw_name = protein.get("filename", "protein.pdb")
+        safe_name = _sanitize_filename(raw_name)
+        ext = Path(safe_name).suffix.lower()
+        if ext not in (".pdb", ".cif", ".mmcif"):
+            safe_name = safe_name + ".pdb"
+        p = job_dir / safe_name
+        p.write_text(protein["pdbData"], encoding="utf-8")
+        resolved = p.resolve()
+        if not str(resolved).startswith(str(UPLOAD_DIR.resolve())):
+            p.unlink(missing_ok=True)
+            raise HTTPException(400, _ERR_INVALID_FILE_PATH)
+        protein_path = str(p)
+        protein_filename = safe_name
+
+    # ── Write ligand SDF ──
+    if ligand and ligand.get("sdfData"):
+        raw_name = ligand.get("filename", "ligand.sdf")
+        safe_name = _sanitize_filename(raw_name)
+        ext = Path(safe_name).suffix.lower()
+        if ext not in (".sdf", ".mol", ".mol2", ".pdb"):
+            safe_name = safe_name + ".sdf"
+        p = job_dir / safe_name
+        p.write_text(ligand["sdfData"], encoding="utf-8")
+        resolved = p.resolve()
+        if not str(resolved).startswith(str(UPLOAD_DIR.resolve())):
+            p.unlink(missing_ok=True)
+            raise HTTPException(400, _ERR_INVALID_FILE_PATH)
+        ligand_path = str(p)
+        ligand_filename = safe_name
+
+    # ── Checkpoint / workflow from session ──
+    workflow = session.get("workflow", {})
+    ckpt_path = workflow.get("ckptPath")
+    base_ckpt_path = workflow.get("baseCkptPath")
+    workflow_type = workflow.get("type", "sbdd")
+
+    # Validate ckpt_path — fall back to baseCkptPath if file doesn't exist
+    if ckpt_path and not Path(ckpt_path).is_file():
+        logger.warning(
+            "[restore] ckpt_path does not exist: %s, falling back to baseCkptPath",
+            ckpt_path,
+        )
+        ckpt_path = base_ckpt_path
+    if ckpt_path and not Path(ckpt_path).is_file():
+        logger.warning(
+            "[restore] baseCkptPath also does not exist: %s, clearing ckpt_path",
+            ckpt_path,
+        )
+        ckpt_path = None
+
+    if ckpt_path:
+        _set_user_setting(user, "ckpt_path", ckpt_path)
+    if workflow_type:
+        _set_user_setting(user, "workflow_type", workflow_type)
+
+    # ── Restore generation state ──
+    gen = session.get("generation", {})
+    all_results = gen.get("allGeneratedResults", [])
+
+    # Populate "results" from latest round so endpoints like
+    # interaction-diagram, save-ligand, etc. work immediately.
+    latest_results = []
+    if all_results:
+        last_round = all_results[-1]
+        if isinstance(last_round, dict):
+            latest_results = last_round.get("results", [])
+
+    # ── Reconstruct generated_history for diversity dedup ──
+    generated_history = []
+    for round_data in all_results:
+        if isinstance(round_data, dict):
+            for r in round_data.get("results", []):
+                smi = r.get("smiles") if isinstance(r, dict) else None
+                if smi:
+                    generated_history.append(smi)
+
+    # ── Extract ref_affinity from restored ligand SDF ──
+    ref_affinity = None
+    if ligand_path:
+        try:
+            ref_affinity = _crawl_sdf_affinity(ligand_path)
+        except Exception:
+            pass
+
+    # ── Restore original ligand state (for undo-reference, chemical-space) ──
+    orig_lig = session.get("originalLigand")
+    original_ligand_keys = {}
+    if orig_lig and isinstance(orig_lig, dict) and orig_lig.get("sdf_data"):
+        orig_sdf_path = job_dir / "original_ligand.sdf"
+        orig_sdf_path.write_text(orig_lig["sdf_data"], encoding="utf-8")
+        original_ligand_keys = {
+            "original_ligand_path": str(orig_sdf_path),
+            "original_ligand_smiles": orig_lig.get("smiles", ""),
+            "original_ligand_smiles_noH": orig_lig.get("smiles_noH", ""),
+            "original_ligand_sdf": orig_lig.get("sdf_data", ""),
+            "original_ligand_properties": orig_lig.get("properties"),
+            "original_ligand_num_atoms": orig_lig.get("num_atoms", 0),
+            "original_ligand_num_heavy_atoms": orig_lig.get("num_heavy_atoms", 0),
+            "original_ligand_ref_affinity": orig_lig.get("ref_affinity"),
+            "original_ligand_filename": orig_lig.get("filename", ""),
+        }
+
+    # ── Settings for pocket-only mode ──
+    settings = session.get("settings", {})
+
+    job = {
+        "job_id": job_id,
+        "user": user,
+        "protein_path": protein_path,
+        "protein_filename": protein_filename,
+        "ligand_path": ligand_path,
+        "ligand_filename": ligand_filename,
+        "status": "restored",
+        "created_at": time.time(),
+        "ckpt_path": ckpt_path,
+        "workflow_type": workflow_type,
+        "iteration_idx": gen.get("iterationIdx", 0),
+        "all_results": all_results,
+        "results": latest_results,
+        "generated_history": generated_history,
+        "ref_affinity": ref_affinity,
+        "denovo_no_ligand": not ligand_path
+        and (
+            settings.get("pocketOnlyMode", False)
+            or settings.get("lbddScratchMode", False)
+        ),
+        **original_ligand_keys,
+    }
+
+    # ── Active learning finetuned checkpoint ──
+    al = session.get("activeLearning", {})
+    al_ckpt = al.get("ckptPath")
+    al_valid = False
+    if al_ckpt and Path(al_ckpt).is_file():
+        job["finetuned_ckpt_path"] = al_ckpt
+        al_valid = True
+    elif al_ckpt:
+        logger.warning("[restore] AL ckpt does not exist, skipping: %s", al_ckpt)
+
+    with _jobs_lock:
+        JOBS[job_id] = job
+
+    return {"job_id": job_id, "status": "restored", "al_valid": al_valid}
+
+
+class AnonymousUserMiddleware(BaseHTTPMiddleware):
+    """Set request.state.user for all requests (no authentication)."""
+
+    async def dispatch(self, request: Request, call_next):
+        request.state.user = "anonymous"
         return await call_next(request)
 
 
-app.add_middleware(DefaultUserMiddleware)
+app.add_middleware(AnonymousUserMiddleware)
 
 
 logger.info("Upload directory:  %s", UPLOAD_DIR)
@@ -503,6 +725,8 @@ class GenerationRequest(BaseModel):
     anisotropic_prior: bool = False
     ring_system_index: int = 0
     ref_ligand_com_prior: bool = False
+    # Random seed for reproducibility
+    seed: int = Field(default=42, ge=0, le=999999)
     # De novo: number of heavy atoms when no reference ligand
     num_heavy_atoms: Optional[int] = None
     # Property / ADMET filtering
@@ -533,6 +757,7 @@ class ActiveLearningRequest(BaseModel):
     epochs: Optional[int] = (
         None  # If None, epochs are computed dynamically based on n_ligands
     )
+    ckpt_path: Optional[str] = None  # User-selected base checkpoint for finetuning
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1571,6 +1796,14 @@ class RegisterCheckpointRequest(BaseModel):
     workflow_type: str = "sbdd"  # "sbdd" or "lbdd"
 
 
+class SaveCheckpointRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+
+
+class SwapCheckpointRequest(BaseModel):
+    ckpt_path: str
+
+
 @app.post("/register-checkpoint")
 async def register_checkpoint(body: RegisterCheckpointRequest, request: Request):
     """Store the user's checkpoint selection. Does NOT load the model.
@@ -1586,6 +1819,82 @@ async def register_checkpoint(body: RegisterCheckpointRequest, request: Request)
         "ckpt_path": body.ckpt_path,
         "workflow_type": body.workflow_type,
     }
+
+
+_CKPT_NAME_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")
+
+
+@app.post("/save-checkpoint/{job_id}")
+async def save_checkpoint(job_id: str, body: SaveCheckpointRequest, request: Request):
+    """Save a finetuned checkpoint to the permanent ckpts/ directory."""
+    job_id = _validate_job_id(job_id)
+    job = _get_user_job(job_id, request)
+    user = request.state.user
+    _check_rate_limit(user, "save-checkpoint")
+
+    name = body.name
+    if not _CKPT_NAME_PATTERN.fullmatch(name):
+        raise HTTPException(
+            400,
+            "Invalid name. Use 1-64 alphanumeric characters, hyphens, or underscores.",
+        )
+
+    src_path = job.get("finetuned_ckpt_path")
+    if not src_path or not Path(src_path).is_file():
+        raise HTTPException(400, "No finetuned checkpoint available")
+
+    workflow = (
+        job.get("workflow_type") or _get_user_setting(user, "workflow_type") or "sbdd"
+    )
+    dest_dir = CKPTS_DIR / workflow / "project_model" / name
+    dest = dest_dir / f"{name}.ckpt"
+
+    # Path traversal check
+    if not str(dest.resolve()).startswith(str(CKPTS_DIR.resolve())):
+        raise HTTPException(403, "Invalid checkpoint path")
+
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        raise HTTPException(409, "A project checkpoint with this name already exists")
+
+    shutil.copy2(src_path, dest)
+
+    # Update job to use permanent path
+    job["finetuned_ckpt_path"] = str(dest)
+    _set_user_setting(user, "ckpt_path", str(dest))
+
+    logger.info("[save-checkpoint] user=%s saved %s -> %s", user, src_path, dest)
+    return {"saved": True, "name": name, "path": str(dest)}
+
+
+@app.post("/swap-checkpoint/{job_id}")
+async def swap_checkpoint(job_id: str, body: SwapCheckpointRequest, request: Request):
+    """Swap the active checkpoint mid-session."""
+    job_id = _validate_job_id(job_id)
+    job = _get_user_job(job_id, request)
+    user = request.state.user
+    _check_rate_limit(user, "swap-checkpoint")
+
+    p = Path(body.ckpt_path)
+
+    # Path validation: must be under CKPTS_DIR
+    if not str(p.resolve()).startswith(str(CKPTS_DIR.resolve())):
+        raise HTTPException(403, "Invalid checkpoint path")
+
+    if not p.is_file():
+        raise HTTPException(400, "Checkpoint file not found")
+
+    if p.suffix != ".ckpt":
+        raise HTTPException(400, "File must have .ckpt extension")
+
+    job["ckpt_path"] = str(p)
+    job.pop("finetuned_ckpt_path", None)
+    job.pop("finetuned_ckpt_url", None)
+    _set_user_setting(user, "ckpt_path", str(p))
+
+    logger.info("[swap-checkpoint] user=%s swapped to %s", user, p)
+    return {"swapped": True, "ckpt_path": str(p), "name": p.stem}
 
 
 @app.post("/load-model")
@@ -2040,6 +2349,7 @@ async def set_reference(job_id: str, req: SetReferenceRequest, request: Request)
         if key.startswith("chemspace_"):
             del job[key]
     job.pop("propspace_cache", None)
+    job.pop("affinity_dist_cache", None)
 
     job.update(
         ligand_path=str(save_path),
@@ -2674,6 +2984,7 @@ def _compute_prior_cloud_preview(  # NOSONAR
     gen_mode: str = "fragment_growing",
     ring_system_index: int = 0,
     ref_ligand_com_prior: bool = False,
+    seed: int = 42,
 ) -> Dict[str, Any]:
     """Compute a preview prior cloud on the CPU (no torch).
 
@@ -2745,7 +3056,7 @@ def _compute_prior_cloud_preview(  # NOSONAR
             center = ref_com
             _ref_com_shifted = True
 
-    rng = np.random.default_rng(seed=42)
+    rng = np.random.default_rng(seed=seed)
 
     _aniso_applied = False
     if anisotropic and RDKIT_AVAILABLE:
@@ -3042,6 +3353,7 @@ async def generate(request: Request, gen_req: GenerationRequest):  # NOSONAR
         "workflow_type": workflow,
         "optimize_method": gen_req.optimize_method,
         "sample_n_molecules_per_mol": gen_req.sample_n_molecules_per_mol,
+        "seed": gen_req.seed,
         "num_heavy_atoms": gen_req.num_heavy_atoms,
         "property_filter": gen_req.property_filter,
         "adme_filter": gen_req.adme_filter,
@@ -3210,12 +3522,29 @@ def _proxy_active_learning(job_id: str, req: dict):  # NOSONAR
         if not ligand_sdf_strings:
             raise RuntimeError("No valid ligand SDF data found for selected indices.")
 
-        # Determine checkpoint (use finetuned if available, else base)
-        ckpt = (
-            job.get("finetuned_ckpt_path")
-            or job.get("ckpt_path")
-            or _get_user_setting(job.get("user", ""), "ckpt_path")
-        )
+        # Determine checkpoint (use explicit user selection, finetuned, or base)
+        explicit_ckpt = req.get("ckpt_path")
+        if explicit_ckpt:
+            # Validate: must be under CKPTS_DIR to prevent path traversal
+            ep = Path(explicit_ckpt).resolve()
+            if not ep.is_relative_to(CKPTS_DIR.resolve()):
+                raise RuntimeError("Invalid checkpoint path")
+            if not ep.is_file():
+                raise RuntimeError("Checkpoint file not found")
+            if ep.suffix != ".ckpt":
+                raise RuntimeError("File must have .ckpt extension")
+
+        if explicit_ckpt and explicit_ckpt != job.get("ckpt_path"):
+            # User selected a different base model — don't continue from previous finetune
+            ckpt = explicit_ckpt
+        else:
+            # Standard chain: continue from finetuned (round 2+), else base, else user setting
+            ckpt = (
+                job.get("finetuned_ckpt_path")
+                or explicit_ckpt
+                or job.get("ckpt_path")
+                or _get_user_setting(job.get("user", ""), "ckpt_path")
+            )
 
         worker_payload = {
             "job_id": f"al_{job_id}",
@@ -3226,6 +3555,7 @@ def _proxy_active_learning(job_id: str, req: dict):  # NOSONAR
             "finetuned_ckpt_url": (
                 _worker_file_url(job_id, "finetuned_last.ckpt")
                 if job.get("finetuned_ckpt_path")
+                and not (explicit_ckpt and explicit_ckpt != job.get("ckpt_path"))
                 else None
             ),
             "lora_rank": req.get("lora_rank", 16),
@@ -3368,6 +3698,7 @@ async def active_learning(
         "batch_cost": al_req.batch_cost,
         "acc_batches": al_req.acc_batches,
         "epochs": al_req.epochs,
+        "ckpt_path": al_req.ckpt_path,
     }
 
     job["status"] = "starting"
@@ -3442,7 +3773,10 @@ async def save_ligand(job_id: str, ligand_idx: int, request: Request):
     output_dir = ROOT_DIR / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    out_path = output_dir / f"{base_name}_{job_id}_ligand_{ligand_idx}.sdf"
+    # Include round number in filename to avoid overwrites across rounds
+    current_round = max(job.get("iteration_idx", 1), 1)
+    round_tag = f"_round{current_round}" if current_round > 1 else ""
+    out_path = output_dir / f"{base_name}_{job_id}{round_tag}_ligand_{ligand_idx}.sdf"
     out_path.write_text(sdf_data)
 
     return {"saved": True, "path": str(out_path), "filename": out_path.name}
@@ -3463,11 +3797,15 @@ async def save_all_ligands(job_id: str, request: Request):
     output_dir = ROOT_DIR / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Include round number in filename to avoid overwrites across rounds
+    current_round = max(job.get("iteration_idx", 1), 1)
+    round_tag = f"_round{current_round}" if current_round > 1 else ""
+
     saved = []
     for idx, r in enumerate(results):
         sdf_data = r.get("sdf", "")
         if sdf_data:
-            out_path = output_dir / f"{base_name}_{job_id}_ligand_{idx}.sdf"
+            out_path = output_dir / f"{base_name}_{job_id}{round_tag}_ligand_{idx}.sdf"
             out_path.write_text(sdf_data)
             saved.append({"path": str(out_path), "filename": out_path.name})
 
@@ -3495,12 +3833,18 @@ async def save_selected_ligands(
     output_dir = ROOT_DIR / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Include round number in filename to avoid overwrites across rounds
+    current_round = max(job.get("iteration_idx", 1), 1)
+    round_tag = f"_round{current_round}" if current_round > 1 else ""
+
     saved = []
     for idx in body.indices:
         if 0 <= idx < len(results):
             sdf_data = results[idx].get("sdf", "")
             if sdf_data:
-                out_path = output_dir / f"{base_name}_{job_id}_ligand_{idx}.sdf"
+                out_path = (
+                    output_dir / f"{base_name}_{job_id}{round_tag}_ligand_{idx}.sdf"
+                )
                 out_path.write_text(sdf_data)
                 saved.append({"path": str(out_path), "filename": out_path.name})
 
@@ -3652,7 +3996,9 @@ async def interaction_diagram(job_id: str, request: Request, ligand_idx: int = -
     if not OPENEYE_AVAILABLE:
         raise HTTPException(
             501,
-            "OpenEye not available. Install openeye-toolkits for 2D interaction diagrams.",
+            "OpenEye not available. Install openeye-toolkits and set the "
+            "OE_LICENSE environment variable to a valid license file for "
+            "2D interaction diagrams.",
         )
 
     _validate_job_id(job_id)
@@ -4060,12 +4406,13 @@ async def property_space(job_id: str, request: Request):  # NOSONAR
         global_idx = 0
         for round_entry in all_results:
             iteration = round_entry.get("iteration", 0)
-            for r in round_entry.get("results", []):
+            for local_idx, r in enumerate(round_entry.get("results", [])):
                 existing_props = r.get("properties")
                 if existing_props:
                     ligands.append(
                         {
                             "idx": global_idx,
+                            "local_idx": local_idx,
                             "iteration": iteration,
                             "smiles": r.get("smiles", ""),
                             "properties": existing_props,
@@ -4080,6 +4427,7 @@ async def property_space(job_id: str, request: Request):  # NOSONAR
                     ligands.append(
                         {
                             "idx": global_idx,
+                            "local_idx": local_idx,
                             "iteration": iteration,
                             "smiles": r.get("smiles", ""),
                             "properties": _compute_all_properties(mol),
@@ -4093,6 +4441,7 @@ async def property_space(job_id: str, request: Request):  # NOSONAR
                 ligands.append(
                     {
                         "idx": i,
+                        "local_idx": i,
                         "iteration": 0,
                         "smiles": r.get("smiles", ""),
                         "properties": existing_props,
@@ -4106,6 +4455,7 @@ async def property_space(job_id: str, request: Request):  # NOSONAR
                 ligands.append(
                     {
                         "idx": i,
+                        "local_idx": i,
                         "iteration": 0,
                         "smiles": r.get("smiles", ""),
                         "properties": _compute_all_properties(mol),
@@ -4197,6 +4547,12 @@ async def rank_select(job_id: str, body: RankSelectRequest, request: Request):
     sorted_results = sorted(job["results_full"], key=_sort_key, reverse=True)
     if body.top_n is not None and body.top_n > 0:
         sorted_results = sorted_results[: body.top_n]
+
+    # Include original index so the client can map back after reordering
+    results_full = job["results_full"]
+    id_to_orig_idx = {id(r): i for i, r in enumerate(results_full)}
+    for r in sorted_results:
+        r["_original_idx"] = id_to_orig_idx.get(id(r), 0)
 
     job["results"] = sorted_results
 

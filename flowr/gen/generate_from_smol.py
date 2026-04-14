@@ -23,6 +23,7 @@ from flowr.gen.generate import generate_ligands_per_target
 from flowr.models.fm_pocket import LigandPocketCFM
 from flowr.models.integrator import Integrator
 from flowr.models.pocket import LigandGenerator, PocketEncoder
+from flowr.util.device import get_map_location
 from flowr.util.pocket import PROLIF_INTERACTIONS, PocketComplexBatch
 from flowr.util.rdkit import ConformerGenerator
 
@@ -60,7 +61,7 @@ def split_list(data, num_chunks):
 
 
 def load_model(args):
-    checkpoint = torch.load(args.ckpt_path)
+    checkpoint = torch.load(args.ckpt_path, map_location=get_map_location())
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
     hparams["integration-steps"] = args.integration_steps

@@ -30,6 +30,12 @@ scripts/tests/
 
 # Local data
 .data/
+*/.data/
+**/.data/
+
+# Agent session memory
+memories/
+**/memories/
 
 # HPC user configuration (contains user-specific paths)
 flowr_vis/hpc/hpc.env
@@ -46,3 +52,4 @@ oe_license.txt
 # code2pdf
 code_to_pdf.py
 flowr_code.pdf
+flowr_code.html

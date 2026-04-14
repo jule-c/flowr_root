@@ -610,6 +610,7 @@ class GenerationRequest(BaseModel):
     anisotropic_prior: bool = False
     ref_ligand_com_prior: bool = False
     ring_system_index: int = 0
+    seed: int = 42
     # ── LBDD-specific fields ──
     workflow_type: str = "sbdd"  # "sbdd" or "lbdd"
     optimize_method: str = "none"  # "none", "rdkit", or "xtb"
@@ -1268,6 +1269,7 @@ def _compute_prior_cloud(  # NOSONAR
     ring_system_index: int = 0,
     ref_ligand_com_prior: bool = False,
     fixed_atoms: Optional[List[int]] = None,
+    seed: int = 42,
 ) -> Dict[str, Any]:
     """Compute a representative prior point cloud for visualisation.
 
@@ -1329,7 +1331,7 @@ def _compute_prior_cloud(  # NOSONAR
             _ref_com_shifted = True
 
     # Sample representative Gaussian cloud
-    rng = np.random.default_rng(seed=42)
+    rng = np.random.default_rng(seed=seed)
     _aniso_applied = False
 
     if anisotropic_prior:
@@ -1717,6 +1719,7 @@ class _GenerationConfig:
     anisotropic_prior: bool = False
     ref_ligand_com_prior: bool = False
     ring_system_index: int = 0
+    seed: int = 42
     num_heavy_atoms: Optional[int] = None
     property_filter: Optional[List[dict]] = None
     adme_filter: Optional[List[dict]] = None
@@ -1751,6 +1754,7 @@ def _run_flowr_generation(  # NOSONAR
     anisotropic_prior = config.anisotropic_prior
     ref_ligand_com_prior = config.ref_ligand_com_prior
     ring_system_index = config.ring_system_index
+    seed = config.seed
     num_heavy_atoms = config.num_heavy_atoms
     property_filter = config.property_filter
     adme_filter = config.adme_filter
@@ -1855,6 +1859,7 @@ def _run_flowr_generation(  # NOSONAR
         anisotropic_prior=anisotropic_prior,
         ref_ligand_com_prior=ref_ligand_com_prior,
         ring_system_index=ring_system_index,
+        seed=seed,
         save_dir=str(output_dir),
         # De novo placeholder ligand support
         add_placeholder_ligand=_is_placeholder,
@@ -2393,6 +2398,7 @@ def _run_flowr_generation(  # NOSONAR
                 ring_system_index=ring_system_index,
                 ref_ligand_com_prior=False,
                 fixed_atoms=fixed_atoms,
+                seed=seed,
             )
         except Exception as exc:
             logger.warning(
@@ -2411,6 +2417,7 @@ def _run_flowr_generation(  # NOSONAR
                 ring_system_index=ring_system_index,
                 ref_ligand_com_prior=ref_ligand_com_prior,
                 fixed_atoms=fixed_atoms,
+                seed=seed,
             )
         except Exception as exc:
             logger.warning(
@@ -2453,6 +2460,7 @@ class _GenerationMolConfig:
     anisotropic_prior: bool = False
     ref_ligand_com_prior: bool = False
     ring_system_index: int = 0
+    seed: int = 42
     sample_n_molecules_per_mol: int = 1
     num_heavy_atoms: Optional[int] = None
     property_filter: Optional[List[dict]] = None
@@ -2490,6 +2498,7 @@ def _run_flowr_generation_mol(  # NOSONAR
     anisotropic_prior = config.anisotropic_prior
     ref_ligand_com_prior = config.ref_ligand_com_prior
     ring_system_index = config.ring_system_index
+    seed = config.seed
     sample_n_molecules_per_mol = config.sample_n_molecules_per_mol
     num_heavy_atoms = config.num_heavy_atoms
     property_filter = config.property_filter
@@ -2584,6 +2593,7 @@ def _run_flowr_generation_mol(  # NOSONAR
         anisotropic_prior=anisotropic_prior,
         ref_ligand_com_prior=ref_ligand_com_prior,
         ring_system_index=ring_system_index,
+        seed=seed,
         save_dir=str(output_dir),
         # De novo placeholder ligand support
         add_placeholder_ligand=_is_scratch,
@@ -3122,6 +3132,7 @@ def _run_flowr_generation_mol(  # NOSONAR
                 ring_system_index=ring_system_index,
                 ref_ligand_com_prior=False,
                 fixed_atoms=fixed_atoms,
+                seed=seed,
             )
         except Exception as exc:
             logger.warning(
@@ -3141,6 +3152,7 @@ def _run_flowr_generation_mol(  # NOSONAR
                 ring_system_index=ring_system_index,
                 ref_ligand_com_prior=ref_ligand_com_prior,
                 fixed_atoms=fixed_atoms,
+                seed=seed,
             )
         except Exception as exc:
             logger.warning(
@@ -3350,6 +3362,7 @@ def _generation_worker(job_id: str, req: dict):  # NOSONAR
                     anisotropic_prior=req.get("anisotropic_prior", False),
                     ref_ligand_com_prior=req.get("ref_ligand_com_prior", False),
                     ring_system_index=req.get("ring_system_index", 0),
+                    seed=req.get("seed", 42),
                     sample_n_molecules_per_mol=req.get("sample_n_molecules_per_mol", 1),
                     num_heavy_atoms=num_heavy_atoms,
                     property_filter=req.get("property_filter"),
@@ -3385,6 +3398,7 @@ def _generation_worker(job_id: str, req: dict):  # NOSONAR
                     anisotropic_prior=req.get("anisotropic_prior", False),
                     ref_ligand_com_prior=req.get("ref_ligand_com_prior", False),
                     ring_system_index=req.get("ring_system_index", 0),
+                    seed=req.get("seed", 42),
                     num_heavy_atoms=num_heavy_atoms,
                     property_filter=req.get("property_filter"),
                     adme_filter=req.get("adme_filter"),

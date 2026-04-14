@@ -123,7 +123,9 @@ def generate_ligands_per_target(
     lig_prior["interactions"] = prior["interactions"]
     lig_prior["fragment_mask"] = prior["fragment_mask"]
     lig_prior["fragment_mode"] = prior["fragment_mode"]
-    lig_prior = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_prior.items()}
+    lig_prior = {
+        k: v.to(device) if torch.is_tensor(v) else v for k, v in lig_prior.items()
+    }
     if args.arch == "pocket_flex" and pocket_noise == "apo":
         pocket_prior = model.builder.extract_pocket_from_complex(prior)
     else:
@@ -131,7 +133,7 @@ def generate_ligands_per_target(
     pocket_prior["interactions"] = posterior["interactions"]
     pocket_prior["complex"] = posterior["complex"]
     pocket_prior = {
-        k: v.cuda() if torch.is_tensor(v) else v for k, v in pocket_prior.items()
+        k: v.to(device) if torch.is_tensor(v) else v for k, v in pocket_prior.items()
     }
 
     # Build starting times for the integrator
@@ -227,7 +229,7 @@ def generate_ligands_per_target(
     return gen_ligs
 
 
-def generate_n_ligands(args, hparams, model, batch, batch_idx=0):
+def generate_n_ligands(args, hparams, model, batch, batch_idx=0, device="cuda"):
     prior, data, interpolated, _ = batch
 
     assert (
@@ -238,7 +240,9 @@ def generate_n_ligands(args, hparams, model, batch, batch_idx=0):
     lig_prior = model.builder.extract_ligand_from_complex(prior)
     lig_prior["interactions"] = prior["interactions"]
     lig_prior["fragment_mask"] = prior["fragment_mask"]
-    lig_prior = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_prior.items()}
+    lig_prior = {
+        k: v.to(device) if torch.is_tensor(v) else v for k, v in lig_prior.items()
+    }
     if args.arch == "pocket_flex" and hparams["pocket_noise"] == "apo":
         pocket_prior = model.builder.extract_pocket_from_complex(prior)
     else:
@@ -246,13 +250,13 @@ def generate_n_ligands(args, hparams, model, batch, batch_idx=0):
     pocket_prior["interactions"] = data["interactions"]
     pocket_prior["complex"] = data["complex"]
     pocket_prior = {
-        k: v.cuda() if torch.is_tensor(v) else v for k, v in pocket_prior.items()
+        k: v.to(device) if torch.is_tensor(v) else v for k, v in pocket_prior.items()
     }
 
     # specify times
-    lig_times = torch.zeros(prior["coords"].size(0), device="cuda")
-    pocket_times = torch.zeros(pocket_prior["coords"].size(0), device="cuda")
-    interaction_times = torch.zeros(prior["coords"].size(0), device="cuda")
+    lig_times = torch.zeros(prior["coords"].size(0), device=device)
+    pocket_times = torch.zeros(pocket_prior["coords"].size(0), device=device)
+    interaction_times = torch.zeros(prior["coords"].size(0), device=device)
     prior_times = [lig_times, pocket_times, interaction_times]
 
     k = 0
@@ -382,7 +386,9 @@ def generate_ligands_per_target_selective(
     lig_prior["interactions"] = prior["interactions"]
     lig_prior["fragment_mask"] = prior["fragment_mask"]
     lig_prior["fragment_mode"] = prior["fragment_mode"]
-    lig_prior = {k: v.cuda() if torch.is_tensor(v) else v for k, v in lig_prior.items()}
+    lig_prior = {
+        k: v.to(device) if torch.is_tensor(v) else v for k, v in lig_prior.items()
+    }
 
     # Pocket data target
     if args.arch == "pocket_flex" and pocket_noise == "apo":
@@ -392,7 +398,8 @@ def generate_ligands_per_target_selective(
     pocket_data_target["interactions"] = posterior_target["interactions"]
     pocket_data_target["complex"] = posterior_target["complex"]
     pocket_data_target = {
-        k: v.cuda() if torch.is_tensor(v) else v for k, v in pocket_data_target.items()
+        k: v.to(device) if torch.is_tensor(v) else v
+        for k, v in pocket_data_target.items()
     }
 
     # Pocket data off-target
@@ -405,7 +412,7 @@ def generate_ligands_per_target_selective(
     pocket_data_untarget["interactions"] = posterior_untarget["interactions"]
     pocket_data_untarget["complex"] = posterior_untarget["complex"]
     pocket_data_untarget = {
-        k: v.cuda() if torch.is_tensor(v) else v
+        k: v.to(device) if torch.is_tensor(v) else v
         for k, v in pocket_data_untarget.items()
     }
 

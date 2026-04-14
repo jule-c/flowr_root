@@ -84,7 +84,7 @@ dependencies:
       - meeko==0.7.1
       - hydride==1.2.3
       - biotite==1.5.0
-      - prolif==2.0.3
+      - prolif==2.1.0
       - pdbinf==0.0.4
       - mlflow==3.7.0
       - biopandas==0.5.1

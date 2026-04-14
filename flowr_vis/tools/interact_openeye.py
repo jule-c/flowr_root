@@ -23,14 +23,28 @@ import subprocess
 import sys
 from pathlib import Path
 
-from openeye import oechem, oedepict, oegrapheme
-
 logger = logging.getLogger(__name__)
 
 # Set OpenEye license path - modify this to your license location
 OE_LICENSE_PATH = os.environ.get("OE_LICENSE", "./oe_license.txt")
 os.environ["OE_LICENSE"] = OE_LICENSE_PATH
 os.environ["SINGULARITYENV_OE_LICENSE"] = OE_LICENSE_PATH
+
+try:
+    from openeye import oechem, oedepict, oegrapheme
+
+    if not oechem.OEChemIsLicensed():
+        raise RuntimeError(
+            "OpenEye is installed but no valid license was found. "
+            "A valid OpenEye license is required for interaction plot generation. "
+            "Set the OE_LICENSE environment variable to the path of your license file."
+        )
+except ImportError:
+    raise RuntimeError(
+        "OpenEye toolkits are not installed. "
+        "A valid OpenEye license is required for interaction plot generation. "
+        "Install openeye-toolkits and set the OE_LICENSE environment variable."
+    )
 
 
 def parse_args():

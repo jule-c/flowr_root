@@ -68,7 +68,7 @@ dependencies:
       - torch_ema==0.3
       - hydride==1.2.3
       - biotite==1.5.0
-      - prolif==2.0.3
+      - prolif==2.1.0
       - wandb==0.23.1
       - pdbinf==0.0.4
       - mlflow==3.7.0

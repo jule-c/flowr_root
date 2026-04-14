@@ -4,8 +4,10 @@
 
 const API_BASE = '';
 
-// ── authFetch: thin wrapper kept for call-site compatibility ──
-function authFetch(url, options = {}) { return fetch(url, options); }
+async function authFetch(url, options = {}) {
+    options.credentials = 'include';
+    return fetch(url, options);
+}
 
 // ── Color constants matching CSS palette ──
 const COLORS = {
@@ -22,6 +24,7 @@ const COLORS = {
     replacedGlow: 'rgba(206, 147, 216, 0.22)',
     kept: '#9c8aac',           // lavender – atoms being KEPT/fixed
     keptGlow: 'rgba(156, 138, 172, 0.18)',
+    hoverResidue: '#c8a2e8',   // medium lavender – residue hover highlight
     // Legacy alias (fixedAtoms = atoms to replace, see naming note)
     fixed: '#CE93D8',
     fixedGlow: 'rgba(206, 147, 216, 0.22)',
@@ -67,6 +70,7 @@ function _buildKdeColorscale(hexColor) {
 
 // ===== State =====
 let state = {
+    _currentUser: 'anonymous',
     workflowType: 'sbdd',           // 'sbdd' or 'lbdd'
     jobId: null,
     proteinData: null,
@@ -109,10 +113,14 @@ let state = {
     refLigandComPrior: false,            // shift prior center to variable fragment CoM
     proteinFullAtom: false,              // toggle: show entire protein as sticks
     bindingSiteVisible: false,           // toggle: show pocket residues within 3.5Å as sticks
+    _hoveredResidue: null,               // {resi, chain} of hovered protein residue (or null)
+    _cachedBindingSiteSerials: null,     // cached result of _getBindingSiteSerials (invalidated on protein/ligand change)
     activeView: 'ref',                   // 'ref' | 'gen' — which ligand is shown full-atom
     selectedOverlayModels: [],           // 3Dmol models for transparent selected-ligand overlays
     refProperties: null,                 // reference ligand properties from upload
     originalLigand: null,                // original ligand data (before first set-as-reference swap)
+    molstarOpen: false,                  // whether the Molstar overlay is currently visible
+    molstarReady: false,                 // whether the Molstar iframe has signalled 'ready'
 };
 
 // ── RDKit.js module (loaded asynchronously) ──
@@ -140,7 +148,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Clear any session-level caches that might leak across reloads.
     try { sessionStorage.clear(); } catch (e) { console.debug('sessionStorage unavailable:', e.message); }
 
-    // Start with landing page – main app init happens after launch
+    // Start with landing page
     initLandingPage();
     initRDKitLib();
 });
@@ -154,8 +162,33 @@ function initMainApp() {
     initAddNoiseToggle();
     initPropertyFilterToggle();
     initAdmeFilterToggle();
+
+    // Molstar postMessage listener
+    window.addEventListener('message', function (event) {
+        if (event.origin !== window.location.origin) return;
+        const data = event.data;
+        if (!data || data.source !== 'molstar-embed') return;
+
+        if (data.status === 'ready') {
+            state.molstarReady = true;
+            sendStructureToMolstar();
+        } else if (data.status === 'error') {
+            console.warn('Molstar error:', data.message);
+        }
+    });
     // Task 2: Hide sidebar sections until both protein and ligand are uploaded
     _updateSidebarVisibility();
+
+    // ── Main-app session file input ──
+    const mainSessionFile = document.getElementById('main-session-file');
+    if (mainSessionFile) {
+        mainSessionFile.addEventListener('change', () => {
+            if (mainSessionFile.files.length) {
+                _handleSessionFileSelect(mainSessionFile.files[0], false);
+            }
+            mainSessionFile.value = '';
+        });
+    }
 }
 
 // =========================================================================
@@ -164,6 +197,7 @@ function initMainApp() {
 
 let _ckptData = { base: [], project: [] };
 let _selectedCkptPath = null;
+let _initialCkptPath = null;
 let _selectedWorkflow = 'sbdd';
 
 function onWorkflowSelect(wf) {
@@ -195,11 +229,39 @@ async function _fetchCheckpoints(workflow) {
 }
 
 async function initLandingPage() {
-    // Show the landing page
+    // Show the landing page (starts hidden to prevent flash before auth check)
     document.getElementById('landing-page')?.classList.remove('hidden');
     // Default workflow is sbdd
     _selectedWorkflow = 'sbdd';
     await _fetchCheckpoints('sbdd');
+
+    // ── Session restore dropzone ──
+    const dropzone = document.getElementById('landing-restore-dropzone');
+    const fileInput = document.getElementById('landing-session-file');
+    if (dropzone) {
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('drag-over');
+        });
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.classList.remove('drag-over');
+        });
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('drag-over');
+            if (e.dataTransfer.files.length) {
+                _handleSessionFileSelect(e.dataTransfer.files[0], true);
+            }
+        });
+    }
+    if (fileInput) {
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) {
+                _handleSessionFileSelect(fileInput.files[0], true);
+            }
+            fileInput.value = '';
+        });
+    }
 }
 
 function populateBaseSelect() {
@@ -304,6 +366,7 @@ async function launchApp() {
         await resp.json();
 
         state.workflowType = _selectedWorkflow;
+        _initialCkptPath = _selectedCkptPath;
 
         status.className = 'landing-status status-success';
         status.textContent = 'Checkpoint registered. Entering app…';
@@ -347,6 +410,7 @@ function transitionToApp() {
         mainApp.classList.remove('hidden');
         initMainApp();
         _applyWorkflowMode(state.workflowType);
+        _updateModelCard();
     }, 450);
 }
 
@@ -381,6 +445,8 @@ function _resetAppState(opts = {}) {
     clearAutoHighlight();
     clearPriorCloud();
     closeMol2DOverlay();
+    const hoverCard = document.getElementById('residue-hover-card');
+    if (hoverCard) hoverCard.style.display = 'none';
     state.atomLabels.forEach(l => state.viewer.removeLabel(l));
     state.atomLabels = [];
     state.selectionSpheres.forEach(s => state.viewer.removeShape(s));
@@ -429,6 +495,8 @@ function _resetAppState(opts = {}) {
     state.refLigandComPrior = false;
     state.proteinFullAtom = false;
     state.bindingSiteVisible = false;
+    state._hoveredResidue = null;
+    state._cachedBindingSiteSerials = null;
     state.interactionShapes = [];
     state.showingInteractions = null;
     state._conformerJobId = null;
@@ -438,8 +506,11 @@ function _resetAppState(opts = {}) {
     // Active learning state
     state._alFinetuned = false;
     state._alCkptPath = null;
+    state._alCheckpointSaved = false;
+    state._alRound = 0;
     state._alCancelling = false;
-
+    _selectedCkptPath = _initialCkptPath;
+    _updateModelCard();
 
     // Original ligand (clear stale cross-session data)
     state.originalLigand = null;
@@ -472,7 +543,6 @@ function _resetAppState(opts = {}) {
     document.getElementById('rcsb-success')?.classList.add('hidden');
     const rcsbBtn = document.getElementById('rcsb-fetch-btn');
     if (rcsbBtn) rcsbBtn.disabled = false;
-
     // Restore all upload options and guidance banners (hidden by dynamic UI logic)
     document.getElementById('sbdd-guidance')?.classList.remove('hidden');
     document.getElementById('lbdd-guidance')?.classList.remove('hidden');
@@ -597,19 +667,36 @@ function resetCurrentSession(silent = false) { // NOSONAR
 
 function initViewer() {
     const container = document.getElementById('viewer3d');
-    // Force synchronous surface computation — avoids blob-URL web worker
-    // failures in environments with CSP restrictions or proxy setups.
-    $3Dmol.setSyncSurface(true);
     state.viewer = $3Dmol.createViewer(container, {
         backgroundColor: COLORS.bgViewer,
         antialias: true,
         id: 'mol-viewer',
+        hoverDuration: 250,
     });
     // NOTE: Do NOT call setClickable here — no models exist yet.
     // setClickable is applied in renderLigand() and reapplied after every
     // setStyle call in reapplyClickable().
     state.viewer.render();
     _attachLassoListeners();
+
+    // Track whether mouse is inside the viewer canvas
+    state._mouseInViewer = false;
+    container.addEventListener('mouseenter', function () {
+        state._mouseInViewer = true;
+    });
+
+    // Clear residue hover when cursor leaves the viewer canvas
+    container.addEventListener('mouseleave', function () {
+        state._mouseInViewer = false;
+        // Cancel 3Dmol's pending hoverTimeout to prevent stale hover-in callbacks
+        if (state.viewer && state.viewer.hoverTimeout) {
+            clearTimeout(state.viewer.hoverTimeout);
+            state.viewer.hoverTimeout = null;
+        }
+        const card = document.getElementById('residue-hover-card');
+        if (card) card.style.display = 'none';
+        _clearHoverHighlight();
+    });
 }
 
 async function checkBackend() {
@@ -623,7 +710,6 @@ async function checkBackend() {
         const dot = document.getElementById('backend-status');
         dot.style.color = data.status === 'ok' ? COLORS.chartreuse : '#e05555';
         dot.title = `Server: ${data.status} | RDKit: ${data.rdkit}`;
-
         // Create the compute badge (starts idle — no GPU allocated yet)
         let deviceBadge = document.getElementById('device-badge');
         if (!deviceBadge) {
@@ -763,7 +849,6 @@ async function uploadProtein(input) { // NOSONAR
         document.getElementById('rcsb-success')?.classList.add('hidden');
         const rcsbIn = document.getElementById('rcsb-pdb-input');
         if (rcsbIn) rcsbIn.value = '';
-
         // Show the pocket-only toggle (SBDD)
         const pocketToggle = document.getElementById('pocket-only-toggle');
         if (pocketToggle) pocketToggle.classList.remove('hidden');
@@ -786,6 +871,7 @@ async function uploadProtein(input) { // NOSONAR
         showToast(errMsg, 'error');
     }
 }
+
 
 /**
  * Fetch a PDB structure from RCSB by PDB ID.
@@ -987,6 +1073,7 @@ async function fetchFromRCSB() {
         fetchBtn.disabled = false;
     }
 }
+
 
 async function uploadLigand(input) { // NOSONAR
     const file = input.files[0];
@@ -1545,8 +1632,10 @@ function renderProtein(pdbData, format) {
 
     const fmt = (format === '.cif' || format === '.mmcif') ? 'cif' : 'pdb';
     state.proteinModel = state.viewer.addModel(pdbData, fmt);
+    state._cachedBindingSiteSerials = null;
     applyProteinStyle();
-    state.viewer.zoomTo();
+    reapplyHoverable();
+    if (!state._restoringSession) state.viewer.zoomTo();
     state.viewer.render();
 }
 
@@ -1560,14 +1649,15 @@ function _getActiveLigandModel() {
 }
 
 function applyProteinStyle() {
-    // Base: always cartoon
+    // Base cartoon — use bolder style in protein-only view
+    const isProteinView = state.viewMode === 'protein';
     state.viewer.setStyle(
         { model: state.proteinModel },
         {
             cartoon: {
                 color: 'spectrum',
-                opacity: 0.85,
-                thickness: 0.2,
+                opacity: isProteinView ? 1 : 0.85,
+                thickness: isProteinView ? 0.3 : 0.2,
             }
         }
     );
@@ -1600,6 +1690,9 @@ function applyProteinStyle() {
  * all atoms of that residue are included).
  */
 function _getBindingSiteSerials(cutoff) {
+    // Return cached result if available
+    if (state._cachedBindingSiteSerials) return state._cachedBindingSiteSerials;
+
     const activeLigand = _getActiveLigandModel();
     if (!state.proteinModel || !activeLigand) return [];
     const ligAtoms = activeLigand.selectedAtoms({});
@@ -1628,6 +1721,7 @@ function _getBindingSiteSerials(cutoff) {
             serials.push(pAtom.serial);
         }
     }
+    state._cachedBindingSiteSerials = serials;
     return serials;
 }
 
@@ -1638,6 +1732,7 @@ function renderLigand(sdfData) {
         state.ligandModel = null;
     }
     state.ligandModel = state.viewer.addModel(sdfData, 'sdf');
+    state._cachedBindingSiteSerials = null;
 
     // 1. Apply visual style
     applyLigandStyleBase();
@@ -1645,7 +1740,7 @@ function renderLigand(sdfData) {
     // 2. Mark atoms clickable AFTER the model is added + styled
     reapplyClickable();
 
-    state.viewer.zoomTo({ model: state.ligandModel }, 300);
+    if (!state._restoringSession) state.viewer.zoomTo({ model: state.ligandModel }, 300);
     state.viewer.render();
     addAtomLabels();
 }
@@ -1696,6 +1791,75 @@ function reapplyClickable() {
                 if (atomInfo?.atomicNum === 1) return;
                 toggleAtom(idx);
             }
+        }
+    );
+}
+
+// ── RAF-batched render for hover — prevents multiple render() calls per frame ──
+let _hoverRafId = null;
+function _scheduleHoverRender() {
+    if (_hoverRafId) return;
+    _hoverRafId = requestAnimationFrame(() => {
+        _hoverRafId = null;
+        if (state.viewer) state.viewer.render();
+    });
+}
+
+function _setHoverHighlight(resi, chain) {
+    // Re-apply base protein styles (fast with binding-site caching)
+    applyProteinStyle();
+    // Add hover overlay on top (addStyle doesn't clear existing)
+    const sel = { model: state.proteinModel, resi: resi, chain: chain };
+    // Semi-transparent lavender cartoon highlight (visible but subtle)
+    state.viewer.addStyle(sel, {
+        cartoon: { color: COLORS.hoverResidue, opacity: 0.35 },
+    });
+    // Show full atom sticks with proper atom-type colors (Jmol scheme)
+    state.viewer.addStyle(sel, {
+        stick: { colorscheme: 'Jmol', radius: 0.15 },
+    });
+    _scheduleHoverRender();
+}
+
+function _clearHoverHighlight() {
+    state._hoveredResidue = null;
+    applyProteinStyle();  // resets to base styles (fast with cache)
+    _scheduleHoverRender();
+}
+
+function reapplyHoverable() {
+    if (!state.proteinModel) return;
+    const card = document.getElementById('residue-hover-card');
+    if (!card) return;
+    state.viewer.setHoverable(
+        { model: state.proteinModel },
+        true,
+        function (atom) {
+            if (!atom) return;
+            // Ignore stale hover callbacks fired after mouse left viewer
+            if (!state._mouseInViewer) return;
+            // Update structured card content
+            const nameEl = document.getElementById('residue-hover-name');
+            const chainEl = document.getElementById('residue-hover-chain');
+            if (nameEl) nameEl.textContent = atom.resn + ' ' + atom.resi;
+            if (chainEl) chainEl.textContent = 'Chain ' + atom.chain;
+            card.style.display = 'flex';
+
+            // Skip re-render if same residue is already highlighted
+            if (
+                state._hoveredResidue &&
+                state._hoveredResidue.resi === atom.resi &&
+                state._hoveredResidue.chain === atom.chain
+            ) return;
+
+            // Highlight new residue
+            state._hoveredResidue = { resi: atom.resi, chain: atom.chain };
+            _setHoverHighlight(atom.resi, atom.chain);
+        },
+        function () {
+            card.style.display = 'none';
+            if (!state._hoveredResidue) return;
+            _clearHoverHighlight();
         }
     );
 }
@@ -2308,6 +2472,10 @@ function _attachLassoListeners() {
         if (e.key === 'Escape' && _lassoState.active) _cancelLasso();
     });
 
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && state.molstarOpen) closeMolstar();
+    });
+
     container.addEventListener('click', function (e) {
         if (!e.shiftKey) return;
         if (state.priorCloudPlacing) return;
@@ -2408,6 +2576,9 @@ function updateSelectionUI() {
 
 function setViewMode(mode) { // NOSONAR
     state.viewMode = mode;
+    const hoverCard = document.getElementById('residue-hover-card');
+    if (hoverCard) hoverCard.style.display = 'none';
+    state._hoveredResidue = null;
     // Only toggle active class on view-mode buttons, not all toolbar buttons
     document.querySelectorAll('#view-complex, #view-protein, #view-ligand').forEach(
         b => b.classList.remove('active')
@@ -2415,7 +2586,7 @@ function setViewMode(mode) { // NOSONAR
     document.getElementById(`view-${mode}`).classList.add('active');
 
     if (mode === 'complex') {
-        if (state.proteinModel) applyProteinStyle();
+        if (state.proteinModel) { applyProteinStyle(); reapplyHoverable(); }
         if (state.ligandModel) {
             if (state.generatedModel !== null && state.refLigandVisible) {
                 // Keep reference ligand dimmed when a generated ligand is showing
@@ -2468,6 +2639,7 @@ function setViewMode(mode) { // NOSONAR
                     );
                 }
             }
+            reapplyHoverable();
         }
         if (state.ligandModel) state.viewer.setStyle({ model: state.ligandModel }, {});
         // Hide generated ligand in protein-only view
@@ -2539,17 +2711,95 @@ function toggleSurface() {
     const btn = document.getElementById('btn-surface');
 
     if (state.surfaceOn) {
+        btn.classList.add('active');
+        $3Dmol.setSyncSurface(true);
         state.viewer.addSurface(
             $3Dmol.SurfaceType.VDW,
-            { opacity: 0.6, color: 'white' },
+            { opacity: 0.65, color: COLORS.lavender },
             { model: state.proteinModel }
         );
-        btn.classList.add('active');
+        state.viewer.render();
     } else {
         state.viewer.removeAllSurfaces();
         btn.classList.remove('active');
+        state.viewer.render();
     }
-    state.viewer.render();
+}
+
+// ===== Molstar Explorer =====
+
+function toggleMolstar() {
+    if (state.molstarOpen) {
+        closeMolstar();
+    } else {
+        openMolstar();
+    }
+}
+
+function openMolstar() {
+    if (!state.proteinData?.pdb_data) {
+        showToast('Load a protein structure first', 'warning');
+        return;
+    }
+    const overlay = document.getElementById('molstar-overlay');
+    const iframe = document.getElementById('molstar-frame');
+    const btn = document.getElementById('btn-molstar');
+    state.molstarOpen = true;
+    state.molstarReady = false;
+    overlay.style.display = 'flex';
+    btn.classList.add('molstar-active');
+    document.querySelector('.viewer-container')?.classList.add('molstar-freeze');
+    iframe.src = '/static/molstar-embed.html';
+}
+
+function closeMolstar() {
+    const overlay = document.getElementById('molstar-overlay');
+    const iframe = document.getElementById('molstar-frame');
+    const btn = document.getElementById('btn-molstar');
+    state.molstarOpen = false;
+    state.molstarReady = false;
+    overlay.style.display = 'none';
+    btn.classList.remove('molstar-active');
+    document.querySelector('.viewer-container')?.classList.remove('molstar-freeze');
+    iframe.src = '';
+}
+
+function sendStructureToMolstar() {
+    const iframe = document.getElementById('molstar-frame');
+    if (!iframe?.contentWindow || !state.molstarReady) return;
+
+    let sdfData = null;
+    let ligandLabel = 'Ligand';
+
+    if (state.activeView === 'gen' && state.generatedResults?.length > 0) {
+        const activeResult = state.generatedResults[state.activeResultIdx];
+        sdfData = activeResult?.sdf_hs || activeResult?.sdf || null;
+        ligandLabel = `Generated Ligand ${state.activeResultIdx + 1}`;
+    }
+    if (!sdfData && state.ligandData?.sdf_data) {
+        sdfData = state.ligandData.sdf_data;
+        if (state.ligandData.filename) {
+            ligandLabel = state.ligandData.filename.replace(/\.(sdf|mol)$/i, '');
+        }
+    }
+
+    // Patch SDF first line with ligand name for Mol* entity labeling
+    if (sdfData) {
+        const lines = sdfData.split('\n');
+        if (lines.length > 0 && lines[0].trim() === '') {
+            lines[0] = ligandLabel;
+            sdfData = lines.join('\n');
+        }
+    }
+
+    iframe.contentWindow.postMessage({
+        type: 'load-structure',
+        pdb: state.proteinData.pdb_data,
+        sdf: sdfData,
+        proteinFormat: state.proteinData.format || 'pdb',
+        label: state.proteinData.pdb_id || 'Protein',
+        ligandLabel: ligandLabel
+    }, window.location.origin);
 }
 
 /**
@@ -2560,6 +2810,7 @@ function toggleFullAtom() {
     state.proteinFullAtom = !state.proteinFullAtom;
     document.getElementById('btn-full-atom')?.classList.toggle('active', state.proteinFullAtom);
     applyProteinStyle();
+    reapplyHoverable();
     state.viewer.render();
 }
 
@@ -2575,7 +2826,9 @@ function toggleBindingSite() {
     }
     state.bindingSiteVisible = !state.bindingSiteVisible;
     document.getElementById('btn-binding-site')?.classList.toggle('active', state.bindingSiteVisible);
+    state._cachedBindingSiteSerials = null;
     applyProteinStyle();
+    reapplyHoverable();
     state.viewer.render();
 }
 
@@ -3049,6 +3302,9 @@ async function startGeneration() { // NOSONAR
         batch_size: batchSize,
         integration_steps: steps,
         pocket_cutoff: isLBDD ? 6 : cutoff,
+
+        // Random seed for reproducibility
+        seed: (() => { const v = Number.parseInt(document.getElementById('gen-seed').value, 10); return Number.isNaN(v) ? 42 : v; })(),
 
         // De novo: num_heavy_atoms for placeholder ligand generation
         num_heavy_atoms: state.numHeavyAtoms || null,
@@ -3719,8 +3975,9 @@ async function renderResults(data) { // NOSONAR
         await _fetchAndRenderPriorCloudPreview();
     }
 
-    // Update save section
+    // Update save section + sync Select All toggle with fresh checkboxes
     updateSaveSection();
+    updateSaveSelectedCount();
 
     // ── Show first generated ligand (this also dims the reference) ──
     if (data.results.length > 0) showGeneratedLigand(0);
@@ -3783,7 +4040,10 @@ function showGeneratedLigand(idx) { // NOSONAR
 
         // Protein visibility
         if (state.proteinModel && state.viewMode !== 'ligand') {
+            // Invalidate binding-site cache when fallback ligand changes
+            if (!state.ligandModel) state._cachedBindingSiteSerials = null;
             applyProteinStyle();
+            reapplyHoverable();
         }
 
         // Clean up any overlay models from reference view
@@ -3791,7 +4051,7 @@ function showGeneratedLigand(idx) { // NOSONAR
 
         state.viewer.render();
 
-        if (state.generatedModel) {
+        if (state.generatedModel && !state._restoringSession) {
             state.viewer.zoomTo({ model: state.generatedModel }, 300);
             state.viewer.render();
         }
@@ -4079,6 +4339,7 @@ function showReferenceLigandView() {
     // Protein
     if (state.proteinModel && state.viewMode !== 'ligand') {
         applyProteinStyle();
+        reapplyHoverable();
     }
 
     state.viewer.zoomTo({ model: state.ligandModel }, 300);
@@ -4898,9 +5159,8 @@ function initResizeHandle() {
 
             const onMove = (ev) => {
                 const delta = startX - ev.clientX;
-                const newW = Math.max(280, Math.min(800, startWidth + delta));
+                const newW = Math.max(200, Math.min(800, startWidth + delta));
                 panel.style.width = newW + 'px';
-                panel.style.minWidth = newW + 'px';
             };
             const onUp = () => {
                 handle.classList.remove('active');
@@ -4925,9 +5185,8 @@ function initResizeHandle() {
 
             const onMove = (ev) => {
                 const delta = ev.clientX - startX;
-                const newW = Math.max(280, Math.min(700, startWidth + delta));
+                const newW = Math.max(200, Math.min(700, startWidth + delta));
                 panelLeft.style.width = newW + 'px';
-                panelLeft.style.minWidth = newW + 'px';
             };
             const onUp = () => {
                 handleLeft.classList.remove('active');
@@ -5146,6 +5405,419 @@ function _downloadTextFile(content, filename, mimeType = 'chemical/x-mdl-sdfile'
     URL.revokeObjectURL(url);
 }
 
+// =========================================================================
+// Session Save / Restore
+// =========================================================================
+
+function _deepCloneResults(allResults) {
+    return allResults.map(round => ({
+        iteration: round.iteration,
+        results: round.results.map(r => ({ ...r })),
+    }));
+}
+
+function saveSession() {
+    const session = {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        savedBy: state._currentUser || 'anonymous',
+        workflow: {
+            type: state.workflowType,
+            baseCkptPath: _initialCkptPath,
+            ckptPath: (state._alFinetuned && !state._alCheckpointSaved)
+                ? _initialCkptPath
+                : _selectedCkptPath,
+        },
+        protein: state.proteinData ? {
+            filename: state.proteinData.filename,
+            format: state.proteinData.format,
+            pdbData: state.proteinData.pdb_data,
+        } : null,
+        ligand: state.ligandData ? {
+            filename: state.ligandData.filename,
+            sdfData: state.ligandData.sdf_data,
+            smiles: state.ligandData.smiles,
+            smilesNoH: state.ligandData.smiles_noH,
+            hasExplicitHs: state.ligandData.has_explicit_hs,
+            numAtoms: state.ligandData.num_atoms,
+            numHeavyAtoms: state.ligandData.num_heavy_atoms,
+            atoms: state.ligandData.atoms,
+            bonds: state.ligandData.bonds,
+            refProperties: state.ligandData.ref_properties,
+        } : null,
+        generation: {
+            genMode: state.genMode,
+            genUsedOptimization: state.genUsedOptimization,
+            refHasExplicitHs: state.refHasExplicitHs,
+            iterationIdx: state.iterationIdx,
+            activeResultIdx: state.activeResultIdx,
+            allGeneratedResults: _deepCloneResults(state.allGeneratedResults),
+            generatedResults: state.generatedResults,
+        },
+        settings: {
+            fixedAtoms: Array.from(state.fixedAtoms),
+            numHeavyAtoms: state.numHeavyAtoms,
+            pocketOnlyMode: state.pocketOnlyMode,
+            lbddScratchMode: state.lbddScratchMode,
+            anisotropicPrior: state.anisotropicPrior,
+            refLigandComPrior: state.refLigandComPrior,
+            seed: (() => { const v = Number.parseInt(document.getElementById('gen-seed')?.value, 10); return Number.isNaN(v) ? 42 : v; })(),
+        },
+        viewState: {
+            viewMode: state.viewMode,
+            activeView: state.activeView,
+            surfaceOn: state.surfaceOn,
+            refLigandVisible: state.refLigandVisible,
+            genHsVisible: state.genHsVisible,
+            proteinFullAtom: state.proteinFullAtom,
+            bindingSiteVisible: state.bindingSiteVisible,
+            priorCloudVisible: state.priorCloudVisible,
+        },
+        generationParams: {
+            nSamples: Number(document.getElementById('n-samples')?.value) || 100,
+            batchSize: Number(document.getElementById('batch-size')?.value) || 25,
+            integrationSteps: Number(document.getElementById('integration-steps')?.value) || 100,
+            pocketCutoff: Number(document.getElementById('pocket-cutoff')?.value) || 6,
+            addNoise: document.getElementById('add-noise')?.checked ?? true,
+            noiseScale: Number(document.getElementById('noise-scale')?.value) || 0.1,
+            sampleMolSizes: document.getElementById('sample-mol-sizes')?.checked ?? false,
+            filterValidUnique: document.getElementById('filter-valid-unique')?.checked ?? true,
+            filterCondSubstructure: document.getElementById('filter-cond-substructure')?.checked ?? false,
+            filterDiversity: document.getElementById('filter-diversity')?.checked ?? true,
+            diversityThreshold: Number(document.getElementById('diversity-threshold')?.value) || 0.8,
+            optimizeGenLigs: document.getElementById('optimize-gen-ligs')?.checked ?? false,
+            optimizeGenLigsHs: document.getElementById('optimize-gen-ligs-hs')?.checked ?? false,
+            calculatePbValid: document.getElementById('calculate-pb-valid')?.checked ?? false,
+            filterPbValid: document.getElementById('filter-pb-valid')?.checked ?? false,
+            calculateStrain: document.getElementById('calculate-strain')?.checked ?? false,
+            growSize: Number(document.getElementById('grow-size')?.value) || 5,
+            lbddOptimizeMethod: document.getElementById('lbdd-optimize-method')?.value || 'uff',
+        },
+        originalLigand: state.originalLigand,
+        priorCloud: state.priorCloud,
+        priorPlacedCenter: state._priorPlacedCenter,
+        activeLearning: {
+            finetuned: state._alFinetuned && state._alCheckpointSaved,
+            ckptPath: (state._alFinetuned && state._alCheckpointSaved) ? state._alCkptPath : null,
+            round: state._alRound || 0,
+        },
+    };
+
+    const json = JSON.stringify(session);
+    const ts = new Date().toISOString().replaceAll(/[:.]/g, '-').slice(0, 19);
+    _downloadTextFile(json, `flowr-session-${ts}.json`, 'application/json');
+    showToast('Session saved', 'success');
+}
+
+function _restoreProteinUI(protein, jobId) {
+    state.proteinData = {
+        job_id: jobId,
+        filename: protein.filename,
+        format: protein.format,
+        pdb_data: protein.pdbData,
+    };
+    document.getElementById('protein-placeholder')?.classList.add('hidden');
+    document.getElementById('protein-success')?.classList.remove('hidden');
+    const nameEl = document.getElementById('protein-filename');
+    if (nameEl) nameEl.textContent = protein.filename;
+    document.getElementById('viewer-overlay')?.classList.add('hidden');
+    renderProtein(protein.pdbData, protein.format);
+}
+
+function _restoreLigandUI(ligand, jobId) {
+    state.ligandData = {
+        job_id: jobId,
+        filename: ligand.filename,
+        smiles: ligand.smiles,
+        smiles_noH: ligand.smilesNoH,
+        has_explicit_hs: ligand.hasExplicitHs,
+        sdf_data: ligand.sdfData,
+        atoms: ligand.atoms,
+        bonds: ligand.bonds,
+        num_atoms: ligand.numAtoms,
+        num_heavy_atoms: ligand.numHeavyAtoms,
+        ref_properties: ligand.refProperties,
+    };
+
+    // Rebuild _atomByIdx map
+    state.ligandData._atomByIdx = new Map();
+    state.ligandData.atoms.forEach(a => state.ligandData._atomByIdx.set(a.idx, a));
+
+    // Rebuild heavyAtomMap
+    state.heavyAtomMap = new Map();
+    let heavyIdx = 0;
+    state.ligandData.atoms.forEach(a => {
+        if (a.atomicNum !== 1) {
+            state.heavyAtomMap.set(a.idx, heavyIdx);
+            heavyIdx++;
+        }
+    });
+
+    state.refProperties = ligand.refProperties || null;
+
+    document.getElementById('ligand-placeholder')?.classList.add('hidden');
+    document.getElementById('ligand-success')?.classList.remove('hidden');
+    const lnameEl = document.getElementById('ligand-filename');
+    if (lnameEl) lnameEl.textContent = ligand.filename;
+    const infoCard = document.getElementById('ligand-info');
+    if (infoCard) infoCard.classList.remove('hidden');
+    const smilesEl = document.getElementById('ligand-smiles');
+    if (smilesEl) smilesEl.textContent = ligand.smilesNoH || ligand.smiles || 'N/A';
+    const haEl = document.getElementById('ligand-heavy-atoms');
+    if (haEl) haEl.textContent = ligand.numHeavyAtoms;
+    const taEl = document.getElementById('ligand-total-atoms');
+    if (taEl) taEl.textContent = ligand.numAtoms;
+
+    document.getElementById('viewer-overlay')?.classList.add('hidden');
+    renderLigand(ligand.sdfData);
+}
+
+function _restoreViewState(vs) {
+    if (vs.surfaceOn && state.proteinModel) toggleSurface();
+    if (vs.proteinFullAtom && state.proteinModel) toggleFullAtom();
+    if (vs.bindingSiteVisible && state.proteinModel && _getActiveLigandModel()) toggleBindingSite();
+    if (vs.refLigandVisible === false && state.ligandModel) {
+        state.refLigandVisible = false;
+        state.viewer.setStyle({ model: state.ligandModel }, { stick: { hidden: true }, sphere: { hidden: true } });
+        state.viewer.render();
+    }
+    if (vs.genHsVisible !== state.genHsVisible) {
+        state.genHsVisible = vs.genHsVisible;
+    }
+    state.viewMode = vs.viewMode || 'complex';
+    state.activeView = vs.activeView || 'ref';
+
+    // ── Prior cloud visibility ──
+    if (vs.priorCloudVisible === false && state.priorCloudSpheres?.length > 0) {
+        state.priorCloudVisible = false;
+        state.priorCloudSpheres.forEach(s => s.opacity = 0);
+        const btn = document.getElementById('toggle-prior-cloud');
+        if (btn) btn.classList.remove('active');
+        state.viewer.render();
+    }
+}
+
+async function restoreSession(session, fromLanding) {
+    // ── Register checkpoint ──
+    const baseCkpt = session.workflow.baseCkptPath || session.workflow.ckptPath;
+    _initialCkptPath = baseCkpt;
+    _selectedCkptPath = session.workflow.ckptPath || baseCkpt;
+    _selectedWorkflow = session.workflow.type;
+    state.workflowType = session.workflow.type;
+
+    try {
+        await authFetch(`${API_BASE}/register-checkpoint`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ckpt_path: baseCkpt,
+                workflow_type: session.workflow.type,
+            }),
+        });
+    } catch (e) {
+        console.warn('Checkpoint registration failed during restore:', e.message);
+    }
+
+    // ── Recreate server-side job FIRST (before UI transition) ──
+    const resp = await authFetch(`${API_BASE}/api/session/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(session),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.json().catch(() => ({}));
+        throw new Error(errBody.detail || 'Server failed to restore session');
+    }
+    const data = await resp.json();
+    state.jobId = data.job_id;
+
+    // ── Transition to main app if from landing ──
+    if (fromLanding) {
+        const landing = document.getElementById('landing-page');
+        const mainApp = document.getElementById('main-app');
+        landing.classList.add('fade-out');
+        await new Promise(resolve => {
+            setTimeout(() => {
+                landing.classList.add('hidden');
+                mainApp.classList.remove('hidden');
+                initMainApp();
+                resolve();
+            }, 450);
+        });
+    } else {
+        resetCurrentSession(true);
+    }
+
+    // ── Re-set jobId (resetCurrentSession clears it) ──
+    state.jobId = data.job_id;
+
+    // ── Restore state properties ──
+    state.genMode = session.generation?.genMode || 'denovo';
+    state.genUsedOptimization = session.generation?.genUsedOptimization || false;
+    state.refHasExplicitHs = session.generation?.refHasExplicitHs || false;
+    state.iterationIdx = session.generation?.iterationIdx || 0;
+    state.activeResultIdx = session.generation?.activeResultIdx ?? -1;
+
+    const rawAll = session.generation?.allGeneratedResults || [];
+    state.allGeneratedResults = rawAll.map(round => ({
+        iteration: round.iteration,
+        results: round.results,
+    }));
+    state.generatedResults = session.generation?.generatedResults || [];
+    // Sync generatedResults Set conversion if it belongs to last round
+    if (state.allGeneratedResults.length > 0) {
+        const lastRound = state.allGeneratedResults.at(-1);
+        state.generatedResults = lastRound.results;
+        state.iterationIdx = lastRound.iteration + 1;
+    }
+
+    // Settings
+    state.fixedAtoms = new Set(session.settings?.fixedAtoms || []);
+    state.numHeavyAtoms = session.settings?.numHeavyAtoms ?? null;
+    state.pocketOnlyMode = session.settings?.pocketOnlyMode || false;
+    state.lbddScratchMode = session.settings?.lbddScratchMode || false;
+    state.anisotropicPrior = session.settings?.anisotropicPrior || false;
+    state.refLigandComPrior = session.settings?.refLigandComPrior || false;
+
+    // Restore seed input
+    const seedInput = document.getElementById('gen-seed');
+    if (seedInput) seedInput.value = session.settings?.seed ?? 42;
+
+    // ── Restore generation parameters ──
+    const gp = session.generationParams;
+    if (gp) {
+        const _setVal = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };
+        const _setChk = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.checked = val; };
+        _setVal('n-samples', gp.nSamples);
+        _setVal('batch-size', gp.batchSize);
+        _setVal('integration-steps', gp.integrationSteps);
+        _setVal('pocket-cutoff', gp.pocketCutoff);
+        _setChk('add-noise', gp.addNoise);
+        _setVal('noise-scale', gp.noiseScale);
+        _setChk('sample-mol-sizes', gp.sampleMolSizes);
+        _setChk('filter-valid-unique', gp.filterValidUnique);
+        _setChk('filter-cond-substructure', gp.filterCondSubstructure);
+        _setChk('filter-diversity', gp.filterDiversity);
+        _setVal('diversity-threshold', gp.diversityThreshold);
+        _setChk('optimize-gen-ligs', gp.optimizeGenLigs);
+        _setChk('optimize-gen-ligs-hs', gp.optimizeGenLigsHs);
+        _setChk('calculate-pb-valid', gp.calculatePbValid);
+        _setChk('filter-pb-valid', gp.filterPbValid);
+        _setChk('calculate-strain', gp.calculateStrain);
+        _setVal('grow-size', gp.growSize);
+        _setVal('lbdd-optimize-method', gp.lbddOptimizeMethod);
+        // Fire input events for sliders so display labels update
+        ['n-samples', 'batch-size', 'integration-steps', 'pocket-cutoff', 'noise-scale', 'diversity-threshold'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.dispatchEvent(new Event('input'));
+        });
+    }
+
+    // Original ligand, prior cloud
+    state.originalLigand = session.originalLigand || null;
+    state.priorCloud = session.priorCloud || null;
+    state._priorPlacedCenter = session.priorPlacedCenter || null;
+
+    // Active learning
+    state._alFinetuned = session.activeLearning?.finetuned || false;
+    state._alCkptPath = session.activeLearning?.ckptPath || null;
+    state._alCheckpointSaved = !!state._alFinetuned;
+    state._alRound = session.activeLearning?.round || 0;
+
+    // Server-side validation: if AL ckpt didn't exist on server, clear frontend state
+    if (state._alFinetuned && data.al_valid === false) {
+        state._alFinetuned = false;
+        state._alCkptPath = null;
+        state._alCheckpointSaved = false;
+    }
+    _updateModelCard();
+
+    // Clear transient state
+    state._conformerJobId = null;
+    state.showingInteractions = null;
+
+    // ── Suppress intermediate zoomTo() during restore ──
+    state._restoringSession = true;
+
+    // ── Restore protein & ligand ──
+    if (session.protein) _restoreProteinUI(session.protein, data.job_id);
+    if (session.ligand) _restoreLigandUI(session.ligand, data.job_id);
+
+    // ── Apply workflow mode ──
+    _applyWorkflowMode(state.workflowType);
+    _updateSidebarVisibility();
+
+    // ── Render generated results ──
+    if (state.generatedResults.length > 0) {
+        await renderResults({
+            results: state.generatedResults,
+            used_optimization: state.genUsedOptimization,
+        });
+        if (state.activeResultIdx >= 0 && state.activeResultIdx < state.generatedResults.length) {
+            showGeneratedLigand(state.activeResultIdx);
+        }
+        // Sync Select All button with checkbox state
+        updateSaveSelectedCount();
+    }
+
+    // ── Re-render prior cloud ──
+    if (state.priorCloud) {
+        renderPriorCloud(state.priorCloud);
+    }
+
+    // ── Restore fixed-atom selection UI ──
+    if (session.ligand && state.fixedAtoms.size > 0) {
+        updateSelectionUI();
+    }
+
+    // ── Show num heavy atoms field in pocket-only mode ──
+    if (state.numHeavyAtoms != null && (state.pocketOnlyMode || state.lbddScratchMode)) {
+        _showNumHeavyAtomsField(state.numHeavyAtoms, '(restored)');
+    }
+
+    // ── Clear restore flag, then apply final view + zoom ──
+    state._restoringSession = false;
+    _restoreViewState(session.viewState || {});
+    state.viewer.zoomTo();
+    state.viewer.render();
+
+    showToast('Session restored', 'success');
+}
+
+async function _handleSessionFileSelect(file, fromLanding) {
+    if (!file) return;
+    if (!file.name.endsWith('.json')) {
+        showToast('Please select a .json session file', 'error');
+        return;
+    }
+
+    const status = fromLanding ? document.getElementById('landing-status') : null;
+    if (status) {
+        status.className = 'landing-status status-loading';
+        status.classList.remove('hidden');
+        status.textContent = 'Restoring session\u2026';
+    }
+
+    try {
+        const text = await file.text();
+        const session = JSON.parse(text);
+        _validateSessionSchema(session);
+        await restoreSession(session, fromLanding);
+    } catch (e) {
+        console.error('Session restore failed:', e);
+        showToast('Failed to restore session: ' + e.message, 'error');
+    } finally {
+        if (status) status.classList.add('hidden');
+    }
+}
+
+function _validateSessionSchema(session) {
+    if (session.version !== 1) throw new Error('Unsupported session version');
+    if (!session.workflow?.type || !session.workflow?.ckptPath) {
+        throw new Error('Invalid session file: missing workflow data');
+    }
+}
+
 /**
  * Build a combined multi-molecule SDF string from a results array.
  * Each molecule's SDF block ends with "$$$$\n" as per the standard format.
@@ -5191,10 +5863,9 @@ function toggleAllSaveCheckboxes() {
 
 function updateSaveSelectedCount() {
     const ligandCount = document.querySelectorAll('.save-ligand-cb:checked').length;
-    const count = ligandCount;
     const cbs = document.querySelectorAll('.save-ligand-cb');
     const el = document.getElementById('bulk-actions-count');
-    if (el) el.textContent = `${count} selected`;
+    if (el) el.textContent = `${ligandCount} selected`;
     // Sync toggle button visual with checkbox state
     const btn = document.getElementById('select-all-toggle-btn');
     if (btn) btn.classList.toggle('btn-toggled', cbs.length > 0 && ligandCount === cbs.length);
@@ -5209,6 +5880,74 @@ function getSelectedSaveIndices() {
     return indices;
 }
 
+/**
+ * Map checked checkbox positions to original (pre-rank-select) indices.
+ * After rank & select, state.generatedResults[i]._original_idx gives the
+ * original position in the generation results. Without rank & select,
+ * the checkbox index IS the original index.
+ */
+function _getSelectedOriginalIndices() {
+    const checkedPositions = getSelectedSaveIndices();
+    return checkedPositions.map(i => {
+        const r = state.generatedResults[i];
+        return (r?._original_idx != null) ? r._original_idx : i;
+    });
+}
+
+/**
+ * Filter server-returned ligand array by current checkbox selection.
+ * Previous rounds are always included (their ligands were "kept").
+ * Current round is filtered to only checked ligands.
+ * If nothing is selected in the current round, current-round ligands are excluded.
+ */
+function _filterLigandsBySelection(ligands) {
+    const currentIter = state.iterationIdx > 0 ? state.iterationIdx - 1 : 0;
+    const selectedOriginal = _getSelectedOriginalIndices();
+    const selectedSet = new Set(selectedOriginal);
+    return ligands.filter(l => {
+        if ((l.iteration ?? 0) !== currentIter) return true;
+        return selectedSet.has(l.local_idx ?? l.idx);
+    });
+}
+
+/**
+ * Filter affinity distribution data by current checkbox selection.
+ * Affinity data uses round-based parallel arrays {values[], labels[], indices[]}.
+ * Previous rounds are kept in full; current round is filtered to checked indices.
+ */
+function _filterAffinityBySelection(data) {
+    const currentIter = state.iterationIdx > 0 ? state.iterationIdx - 1 : 0;
+    const selectedOriginal = _getSelectedOriginalIndices();
+    const selectedSet = new Set(selectedOriginal);
+    const filteredDistributions = {};
+    const filteredTypes = [];
+    for (const affType of (data.affinity_types || [])) {
+        const rounds = data.distributions[affType];
+        if (!rounds) continue;
+        const filteredRounds = [];
+        for (const round of rounds) {
+            if ((round.iteration ?? 0) !== currentIter) {
+                filteredRounds.push(round);
+                continue;
+            }
+            const vals = [], labs = [], idxs = [];
+            for (let i = 0; i < round.indices.length; i++) {
+                if (selectedSet.has(round.indices[i])) {
+                    vals.push(round.values[i]);
+                    labs.push(round.labels[i]);
+                    idxs.push(round.indices[i]);
+                }
+            }
+            if (vals.length > 0) filteredRounds.push({ iteration: round.iteration, values: vals, labels: labs, indices: idxs });
+        }
+        if (filteredRounds.length > 0) {
+            filteredDistributions[affType] = filteredRounds;
+            filteredTypes.push(affType);
+        }
+    }
+    return { ...data, affinity_types: filteredTypes, distributions: filteredDistributions };
+}
+
 async function saveSelectedLigands() {
     const indices = getSelectedSaveIndices();
     if (indices.length === 0) {
@@ -5216,19 +5955,17 @@ async function saveSelectedLigands() {
         return;
     }
 
-    if (indices.length > 0) {
-        try {
-            const resp = await authFetch(`${API_BASE}/save-selected-ligands/${state.jobId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ indices }),
-            });
-            const data = await resp.json();
-            showToast(`Saved ${data.saved_count} ligands to output/`, 'success');
-            _showSaveStatus(`Saved ${data.saved_count} files to output/`);
-        } catch (e) {
-            showToast('Error saving ligands: ' + e.message, 'error');
-        }
+    try {
+        const resp = await authFetch(`${API_BASE}/save-selected-ligands/${state.jobId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ indices }),
+        });
+        const data = await resp.json();
+        showToast(`Saved ${data.saved_count} ligands to output/`, 'success');
+        _showSaveStatus(`Saved ${data.saved_count} files to output/`);
+    } catch (e) {
+        showToast('Error saving ligands: ' + e.message, 'error');
     }
 
     const jobTag = state.jobId ? `_${state.jobId.slice(0, 8)}` : '';
@@ -5329,7 +6066,7 @@ function _estimateAccBatches(n) {
     return 12;
 }
 
-function showActiveLearningModal() {
+async function showActiveLearningModal() {
     const indices = _getALSelectedIndices();
     if (indices.length === 0) {
         showToast('Select ligands first (use checkboxes on ligand cards)', 'warning');
@@ -5367,6 +6104,39 @@ function showActiveLearningModal() {
     document.getElementById('al-lr-input').value = '5e-4';
     document.getElementById('al-batch-cost-input').value = 4;
     document.getElementById('al-acc-batches-input').value = _estimateAccBatches(indices.length);
+
+    // Populate base model selector
+    const alCkptSelect = document.getElementById('al-ckpt-select');
+    if (alCkptSelect) {
+        alCkptSelect.innerHTML = '<option value="">Loading…</option>';
+        try {
+            const ckptResp = await authFetch(`${API_BASE}/checkpoints?workflow=sbdd`);
+            const ckptData = await ckptResp.json();
+            let options = '';
+            const currentPath = _selectedCkptPath || '';
+
+            if (ckptData.base) {
+                for (const ckpt of ckptData.base) {
+                    const sel = ckpt.path === currentPath ? ' selected' : '';
+                    options += `<option value="${escapeHtml(ckpt.path)}"${sel}>${escapeHtml(ckpt.name)}</option>`;
+                }
+            }
+            if (ckptData.project) {
+                for (const proj of ckptData.project) {
+                    for (const ckpt of proj.checkpoints) {
+                        const sel = ckpt.path === currentPath ? ' selected' : '';
+                        options += `<option value="${escapeHtml(ckpt.path)}"${sel}>${escapeHtml(proj.project_id)} / ${escapeHtml(ckpt.name)}</option>`;
+                    }
+                }
+            }
+
+            alCkptSelect.innerHTML = options || '<option value="">No checkpoints found</option>';
+        } catch (e) {
+            console.debug('Failed to load checkpoints for AL modal:', e.message);
+            alCkptSelect.innerHTML = '<option value="">Failed to load</option>';
+        }
+    }
+
     openModal('al-explain-modal');
 }
 
@@ -5412,6 +6182,7 @@ async function startActiveLearning() {
                 lr: Number.parseFloat(document.getElementById('al-lr-input').value) || 5e-4,
                 batch_cost: Number.parseInt(document.getElementById('al-batch-cost-input').value, 10) || 4,
                 acc_batches: Number.parseInt(document.getElementById('al-acc-batches-input').value, 10) || null,
+                ckpt_path: document.getElementById('al-ckpt-select')?.value || null,
             }),
         });
         if (!resp.ok) {
@@ -5469,6 +6240,10 @@ async function _pollActiveLearning() { // NOSONAR
                 // Store finetuned checkpoint info
                 state._alFinetuned = true;
                 state._alCkptPath = data.finetuned_ckpt_path;
+                state._alCheckpointSaved = false;
+                state._alRound = (state._alRound || 0) + 1;
+                _selectedCkptPath = data.finetuned_ckpt_path;
+                _updateModelCard();
 
                 document.getElementById('al-progress-training').style.display = 'none';
                 document.getElementById('al-progress-done').style.display = 'block';
@@ -5498,7 +6273,203 @@ async function _pollActiveLearning() { // NOSONAR
 function closeActiveLearningDone() {
     document.getElementById('al-progress-modal').classList.add('hidden');
     if (state._alFinetuned) {
+        _updateModelCard();
         showToast('Finetuned model active — next generation will use it', 'success');
+    }
+}
+
+// =========================================================================
+// Model Card – Save / Load
+// =========================================================================
+
+function _updateModelCard() {
+    // Show/hide save button based on whether AL has finetuned a model
+    const saveBtn = document.getElementById('model-save-btn');
+    if (saveBtn) saveBtn.classList.toggle('hidden', !state._alFinetuned);
+
+    // Update current model name display
+    const nameEl = document.getElementById('model-card-name');
+    if (nameEl) {
+        if (state._alFinetuned) {
+            const round = state._alRound || 1;
+            nameEl.textContent = `LoRA-finetuned (Round ${round})`;
+        } else {
+            const path = _selectedCkptPath || '';
+            const parts = path.replaceAll('\\', '/').split('/');
+            const fname = parts[parts.length - 1] || '\u2014';
+            nameEl.textContent = fname.replace(/\.ckpt$/, '');
+        }
+    }
+
+    // Collapse save/load expansions
+    document.getElementById('model-save-expand')?.classList.add('hidden');
+    document.getElementById('model-load-expand')?.classList.add('hidden');
+}
+
+function expandSaveCheckpoint() {
+    if (!state.jobId || !state._alFinetuned) return;
+
+    const expand = document.getElementById('model-save-expand');
+    const loadExpand = document.getElementById('model-load-expand');
+    if (loadExpand) loadExpand.classList.add('hidden');
+
+    expand.classList.toggle('hidden');
+    if (!expand.classList.contains('hidden')) {
+        const input = document.getElementById('model-save-name');
+        input.value = '';
+        input.focus();
+        document.getElementById('model-save-status').classList.add('hidden');
+    }
+}
+
+async function confirmSaveCheckpoint() {
+    if (!state.jobId || !state._alFinetuned) return;
+
+    const input = document.getElementById('model-save-name');
+    const statusEl = document.getElementById('model-save-status');
+    const name = (input.value || '').trim();
+
+    if (!name) {
+        statusEl.textContent = 'Please enter a name.';
+        statusEl.className = 'model-save-status error';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) {
+        statusEl.textContent = 'Use 1\u201364 alphanumeric characters, hyphens, or underscores.';
+        statusEl.className = 'model-save-status error';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    const confirmBtn = document.getElementById('model-save-confirm');
+    confirmBtn.disabled = true;
+
+    try {
+        const resp = await authFetch(`${API_BASE}/save-checkpoint/${state.jobId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            statusEl.textContent = err.detail || 'Failed to save checkpoint';
+            statusEl.className = 'model-save-status error';
+            statusEl.classList.remove('hidden');
+            return;
+        }
+        const data = await resp.json();
+        state._alCkptPath = data.path;
+        state._alCheckpointSaved = true;
+        _selectedCkptPath = data.path;
+
+        statusEl.textContent = '\u2713 Checkpoint saved to ckpts folder';
+        statusEl.className = 'model-save-status';
+        statusEl.classList.remove('hidden');
+        input.disabled = true;
+
+        // Update model name without collapsing the save section
+        const nameEl = document.getElementById('model-card-name');
+        if (nameEl) {
+            nameEl.textContent = data.name;
+        }
+        // Keep the status visible, then collapse
+        setTimeout(() => {
+            const expandEl = document.getElementById('model-save-expand');
+            if (expandEl) expandEl.classList.add('hidden');
+            input.disabled = false;
+            _updateModelCard();
+        }, 2500);
+    } catch (e) {
+        statusEl.textContent = 'Failed to save: ' + e.message;
+        statusEl.className = 'model-save-status error';
+        statusEl.classList.remove('hidden');
+    } finally {
+        confirmBtn.disabled = false;
+    }
+}
+
+async function showLoadCheckpointList() {
+    const expand = document.getElementById('model-load-expand');
+    const saveExpand = document.getElementById('model-save-expand');
+    if (saveExpand) saveExpand.classList.add('hidden');
+
+    // Toggle
+    if (!expand.classList.contains('hidden')) {
+        expand.classList.add('hidden');
+        return;
+    }
+
+    const list = document.getElementById('model-load-list');
+    list.innerHTML = '<div class="model-load-loading">Loading checkpoints\u2026</div>';
+    expand.classList.remove('hidden');
+
+    try {
+        const workflow = state.workflowType || 'sbdd';
+        const resp = await authFetch(`${API_BASE}/checkpoints?workflow=${workflow}`);
+        const data = await resp.json();
+
+        let html = '';
+        const currentPath = _selectedCkptPath || '';
+
+        if (data.base && data.base.length > 0) {
+            html += '<div class="model-load-group-title">Base Models</div>';
+            for (const ckpt of data.base) {
+                const isActive = ckpt.path === currentPath;
+                html += `<button class="model-load-item${isActive ? ' active-ckpt' : ''}" data-path="${escapeHtml(ckpt.path)}"${isActive ? ' disabled' : ''}>${escapeHtml(ckpt.name)}${isActive ? ' \u2713' : ''}</button>`;
+            }
+        }
+        if (data.project && data.project.length > 0) {
+            html += '<div class="model-load-group-title">Project Models</div>';
+            for (const proj of data.project) {
+                for (const ckpt of proj.checkpoints) {
+                    const isActive = ckpt.path === currentPath;
+                    html += `<button class="model-load-item${isActive ? ' active-ckpt' : ''}" data-path="${escapeHtml(ckpt.path)}"${isActive ? ' disabled' : ''}>${escapeHtml(proj.project_id)} / ${escapeHtml(ckpt.name)}${isActive ? ' \u2713' : ''}</button>`;
+                }
+            }
+        }
+
+        if (!html) html = '<div class="model-load-loading">No checkpoints found</div>';
+        list.innerHTML = html;
+
+        list.querySelectorAll('.model-load-item:not(.active-ckpt)').forEach(btn => {
+            btn.addEventListener('click', () => confirmLoadCheckpoint(btn.dataset.path));
+        });
+    } catch (e) {
+        console.debug('Failed to load checkpoints:', e.message);
+        list.innerHTML = '<div class="model-load-loading">Failed to load checkpoints</div>';
+    }
+}
+
+async function confirmLoadCheckpoint(ckptPath) {
+    if (!state.jobId) {
+        showToast('No active session', 'error');
+        return;
+    }
+
+    try {
+        const resp = await authFetch(`${API_BASE}/swap-checkpoint/${state.jobId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ckpt_path: ckptPath }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            showToast(err.detail || 'Failed to load checkpoint', 'error');
+            return;
+        }
+        const data = await resp.json();
+        _selectedCkptPath = ckptPath;
+        state._alFinetuned = false;
+        state._alCkptPath = null;
+        state._alCheckpointSaved = false;
+        state._alRound = 0;
+        _updateModelCard();
+        document.getElementById('model-load-expand')?.classList.add('hidden');
+        showToast(`Model switched to "${escapeHtml(data.name)}"`, 'success');
+    } catch (e) {
+        showToast('Failed to load checkpoint: ' + e.message, 'error');
     }
 }
 
@@ -5671,6 +6642,7 @@ function clearInteractions3D() {
     // Reset protein style to remove residue sticks
     if (state.proteinModel) {
         applyProteinStyle();
+        reapplyHoverable();
     }
 
     const btnRef = document.getElementById('btn-int-ref');
@@ -6542,6 +7514,11 @@ async function _fetchAndRenderChemSpace(method) {
         }
         const data = await resp.json();
         loading.classList.add('hidden');
+        data.ligands = _filterLigandsBySelection(data.ligands);
+        if (data.ligands.length === 0) {
+            plotDiv.innerHTML = '<div class="modal-error">No ligands selected. Use the checkboxes or Select All to choose ligands for visualization.</div>';
+            return;
+        }
         _renderChemSpacePlot(data);
     } catch (e) {
         loading.classList.add('hidden');
@@ -6621,7 +7598,7 @@ function _renderChemSpacePlot(data) {
             y: pts.map(p => p.y),
             mode: 'markers',
             type: useGl ? 'scattergl' : 'scatter',
-            name: sortedRounds.length > 1 ? `Round ${iter + 1}` : 'Generated',
+            name: `Round ${iter + 1}`,
             text: pts.map(p => p.text),
             hovertemplate: '%{text}<extra></extra>',
             customdata: pts.map(p => ({ localIdx: p.localIdx, iteration: p.iteration })),
@@ -6757,6 +7734,11 @@ async function showPropertySpace() {
         if (!resp.ok) throw new Error(await resp.text());
         const data = await resp.json();
         loading.classList.add('hidden');
+        data.ligands = _filterLigandsBySelection(data.ligands);
+        if (data.ligands.length === 0) {
+            grid.innerHTML = '<div class="modal-error">No ligands selected. Use the checkboxes or Select All to choose ligands for visualization.</div>';
+            return;
+        }
         _renderPropertySpacePlots(data);
     } catch (e) {
         loading.classList.add('hidden');
@@ -6821,7 +7803,7 @@ function _renderPropertySpacePlots(data) {
                 traces.push({
                     type: 'violin',
                     y: vals,
-                    name: multiRound ? `Round ${iter + 1}` : 'Generated',
+                    name: `Round ${iter + 1}`,
                     box: { visible: true },
                     meanline: { visible: true },
                     fillcolor: rc.fillAlpha,
@@ -6895,7 +7877,7 @@ function _renderPropertySpacePlots(data) {
                 traces.push({
                     type: 'histogram',
                     x: vals,
-                    name: multiRound ? `Round ${iter + 1}` : 'Generated',
+                    name: `Round ${iter + 1}`,
                     marker: {
                         color: rc.fillAlpha,
                         line: { color: rc.line, width: 1 },
@@ -6992,8 +7974,13 @@ async function showAffinityDistribution() {
             const errText = await resp.text();
             throw new Error(errText);
         }
-        const data = await resp.json();
+        let data = await resp.json();
         loading.classList.add('hidden');
+        data = _filterAffinityBySelection(data);
+        if (data.affinity_types.length === 0) {
+            container.innerHTML = '<div class="modal-error">No ligands selected. Use the checkboxes or Select All to choose ligands for visualization.</div>';
+            return;
+        }
         // Show only the selected affinity type
         const selectedType = document.getElementById('rank-affinity-type')?.value || 'pic50';
         if (data.affinity_types?.includes(selectedType)) {
@@ -7554,6 +8541,7 @@ function _rerenderResultsList() {
         const card = document.createElement('div');
         card.className = 'result-card';
         card.onclick = (e) => {
+            if (e.target.classList.contains('result-card-checkbox')) return;
             if (e.target.closest('.set-ref-btn')) return;
             showGeneratedLigand(i);
         };
@@ -7564,23 +8552,28 @@ function _rerenderResultsList() {
         const ha = result.properties?.num_heavy_atoms || '–';
 
         card.innerHTML = `
-            <div class="result-header">
-                <span class="result-title">Ligand #${i + 1}</span>
-                <span class="result-badge badge badge-idle">${escapeHtml(String(ha))} HA</span>
+            <input type="checkbox" class="result-card-checkbox save-ligand-cb" data-idx="${i}"
+                   onchange="event.stopPropagation(); updateSaveSelectedCount()">
+            <div class="result-card-content">
+                <div class="result-header">
+                    <span class="result-title">Ligand #${i + 1}</span>
+                    <span class="result-badge badge badge-idle">${escapeHtml(String(ha))} HA</span>
+                </div>
+                <div class="result-smiles">${escapeHtml(smilesWithoutH(result.smiles) || 'N/A')}</div>
+                <div class="result-props">
+                    <span>MW: ${escapeHtml(String(mw))}</span>
+                    <span>TPSA: ${escapeHtml(String(tpsa))}</span>
+                    <span>logP: ${escapeHtml(String(logp))}</span>
+                </div>
+                <button class="set-ref-btn" onclick="event.stopPropagation(); setAsReference(${i})" title="Use this ligand as the new reference">Set as Reference</button>
             </div>
-            <div class="result-smiles">${escapeHtml(smilesWithoutH(result.smiles) || 'N/A')}</div>
-            <div class="result-props">
-                <span>MW: ${escapeHtml(String(mw))}</span>
-                <span>TPSA: ${escapeHtml(String(tpsa))}</span>
-                <span>logP: ${escapeHtml(String(logp))}</span>
-            </div>
-            <button class="set-ref-btn" onclick="event.stopPropagation(); setAsReference(${i})" title="Use this ligand as the new reference">Set as Reference</button>
         `;
         body.appendChild(card);
     });
 
     section.appendChild(body);
     list.appendChild(section);
+    updateSaveSelectedCount();
 
     if (state.generatedResults.length > 0) showGeneratedLigand(0);
 }

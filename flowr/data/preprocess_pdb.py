@@ -103,9 +103,11 @@ def transform_pdb_biotite(
 
 
 _SOLVENT_IONS = {
+    # Water
     "HOH",
     "WAT",
     "H2O",
+    # Common ions
     "NA",
     "CL",
     "K",
@@ -117,10 +119,51 @@ _SOLVENT_IONS = {
     "CU",
     "NI",
     "CO",
+    # Common anions
     "SO4",
     "PO4",
+    "NO3",
+    "SCN",
+    "BR",
+    # Capping groups
     "ACE",
     "NME",
+    # Cryoprotectants / crystallization additives
+    "EDO",
+    "GOL",
+    "DMS",
+    "PEG",
+    "MPD",
+    "BME",
+    "DTT",
+    "1PE",
+    "P6G",
+    "PGE",
+    "2PE",
+    "PE4",  # PEG variants
+    # Common solvents
+    "EOH",
+    "MOH",
+    "IPA",
+    "FMT",
+    "ACT",
+    # Buffer molecules
+    "TRS",
+    "EPE",
+    "MES",
+    "CIT",
+    "IMD",
+    # Common modified amino acids (protein modifications, not ligands)
+    "MSE",
+    "OCS",
+    "SEP",
+    "TPO",
+    "PTR",
+    "CSO",
+    "KCX",
+    "LLP",
+    "HYP",
+    "PCA",
 }
 
 
@@ -142,12 +185,24 @@ def _resolve_ligand_id(ligand_id, atoms, non_standard, pdb_id):
             f"No ligand residues found in {pdb_id}. "
             f"Non-standard residues: {non_standard}"
         )
-    # Pick the candidate with the most heavy atoms
+    # Pick the candidate with the most heavy atoms per single residue instance
     best, best_count = candidates[0], 0
     for cand in candidates:
-        count = int(np.sum((atoms.res_name == cand) & (atoms.element != "H")))
-        if count > best_count:
-            best, best_count = cand, count
+        cand_heavy = (atoms.res_name == cand) & (atoms.element != "H")
+        if not np.any(cand_heavy):
+            continue
+        # Count atoms in ONE instance (not all copies across chains)
+        cand_atoms = atoms[cand_heavy]
+        first_res_id = cand_atoms.res_id[0]
+        first_chain = cand_atoms.chain_id[0]
+        instance_count = int(
+            np.sum(
+                (cand_atoms.res_id == first_res_id)
+                & (cand_atoms.chain_id == first_chain)
+            )
+        )
+        if instance_count > best_count:
+            best, best_count = cand, instance_count
     print(f"Auto-detected ligand: {best} ({best_count} heavy atoms)")
     return best
 
@@ -214,11 +269,12 @@ def _ligand_to_rdkit(ligand_atoms, res_name, info_module, biotite_rdkit):
         raw_mol = biotite_rdkit.to_mol(ligand_atoms)
         ideal_sdf = get_ideal_ligand_sdf(res_name)
         if ideal_sdf:
-            template = Chem.MolFromMolBlock(ideal_sdf, removeHs=False)
+            template = Chem.MolFromMolBlock(ideal_sdf, sanitize=False, removeHs=False)
             if template is not None:
-                raw_no_h = Chem.RemoveHs(raw_mol)
-                tmpl_no_h = Chem.RemoveHs(template)
+                raw_no_h = Chem.RemoveHs(raw_mol, sanitize=False)
+                tmpl_no_h = Chem.RemoveHs(template, sanitize=False)
                 rd_mol = AllChem.AssignBondOrdersFromTemplate(tmpl_no_h, raw_no_h)
+                Chem.SanitizeMol(rd_mol)
                 rd_mol = Chem.AddHs(rd_mol, addCoords=True)
                 print(f"Bond orders assigned via RCSB ideal SDF for {res_name}")
                 return rd_mol
@@ -232,8 +288,9 @@ def _ligand_to_rdkit(ligand_atoms, res_name, info_module, biotite_rdkit):
             template = AllChem.MolFromSmiles(smiles)
             if template is not None:
                 raw_mol = biotite_rdkit.to_mol(ligand_atoms)
-                raw_no_h = Chem.RemoveHs(raw_mol)
+                raw_no_h = Chem.RemoveHs(raw_mol, sanitize=False)
                 rd_mol = AllChem.AssignBondOrdersFromTemplate(template, raw_no_h)
+                Chem.SanitizeMol(rd_mol)
                 rd_mol = Chem.AddHs(rd_mol, addCoords=True)
                 print(f"Bond orders assigned via RCSB SMILES for {res_name}")
                 return rd_mol
