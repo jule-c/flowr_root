@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mol* Viewer</title>
     <link rel="stylesheet" href="/static/lib/molstar/molstar.css" />
+    <link rel="stylesheet" href="/static/lib/molstar/theme/light.css" />
     <style>
         * {
             margin: 0;
@@ -18,7 +19,7 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
-            background: #1a1a2e;
+            background: #E9E3DC;
         }
 
         #app {
@@ -32,9 +33,9 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            color: #c8b2dd;
+            color: #594f62;
             font: 14px/1.5 Inter, sans-serif;
-            background: #1a1a2e;
+            background: #E9E3DC;
         }
 
         .embed-message.embed-loading {
@@ -72,6 +73,7 @@
             showMessage('Initializing Mol* viewer...', true);
             try {
                 viewer = await molstar.Viewer.create(app, {
+                    viewportBackgroundColor: '#E9E3DC',
                     layoutIsExpanded: false,
                     layoutShowControls: true,
                     layoutShowRemoteState: false,

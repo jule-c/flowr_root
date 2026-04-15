@@ -1,4 +1,4 @@
-name: flowr_root
+name: flowr_root_test
 channels:
   - pytorch
   - conda-forge

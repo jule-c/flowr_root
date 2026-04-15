@@ -148,6 +148,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Clear any session-level caches that might leak across reloads.
     try { sessionStorage.clear(); } catch (e) { console.debug('sessionStorage unavailable:', e.message); }
 
+    // Warn before navigating away (back button, swipe, refresh, tab/window close) when data is loaded
+    window.addEventListener('beforeunload', (e) => {
+        if (state.proteinData || state.ligandData || (state.generatedResults && state.generatedResults.length > 0)) {
+            e.preventDefault();
+        }
+    });
+
     // Start with landing page
     initLandingPage();
     initRDKitLib();
@@ -5146,9 +5153,15 @@ async function _fetchAndRenderPriorCloudPreview() { // NOSONAR
 // =========================================================================
 
 function initResizeHandle() {
-    // Right panel resize handle
     const handle = document.getElementById('panel-resize-handle');
     const panel = document.getElementById('results-panel');
+    const handleLeft = document.getElementById('panel-resize-handle-left');
+    const panelLeft = document.querySelector('.panel:not(.panel-right)');
+    const MIN_PANEL = 200;
+    const MIN_VIEWER = 300;
+    const HANDLE_SPACE = 10;
+
+    // Right panel resize handle
     if (handle && panel) {
         let startX, startWidth;
         handle.addEventListener('mousedown', (e) => {
@@ -5159,7 +5172,9 @@ function initResizeHandle() {
 
             const onMove = (ev) => {
                 const delta = startX - ev.clientX;
-                const newW = Math.max(200, Math.min(800, startWidth + delta));
+                const otherW = panelLeft ? panelLeft.offsetWidth : 0;
+                const maxW = window.innerWidth - otherW - MIN_VIEWER - HANDLE_SPACE;
+                const newW = Math.max(MIN_PANEL, Math.min(maxW, startWidth + delta));
                 panel.style.width = newW + 'px';
             };
             const onUp = () => {
@@ -5173,8 +5188,6 @@ function initResizeHandle() {
     }
 
     // Left panel resize handle
-    const handleLeft = document.getElementById('panel-resize-handle-left');
-    const panelLeft = document.querySelector('.panel:not(.panel-right)');
     if (handleLeft && panelLeft) {
         let startX, startWidth;
         handleLeft.addEventListener('mousedown', (e) => {
@@ -5185,7 +5198,9 @@ function initResizeHandle() {
 
             const onMove = (ev) => {
                 const delta = ev.clientX - startX;
-                const newW = Math.max(200, Math.min(700, startWidth + delta));
+                const otherW = panel ? panel.offsetWidth : 0;
+                const maxW = window.innerWidth - otherW - MIN_VIEWER - HANDLE_SPACE;
+                const newW = Math.max(MIN_PANEL, Math.min(maxW, startWidth + delta));
                 panelLeft.style.width = newW + 'px';
             };
             const onUp = () => {
@@ -5197,6 +5212,22 @@ function initResizeHandle() {
             document.addEventListener('mouseup', onUp);
         });
     }
+
+    // Reset inline panel widths on viewport resize if they would cause overflow
+    window.addEventListener('resize', () => {
+        const vw = window.innerWidth;
+        if (vw < 900) {
+            if (panel) panel.style.width = '';
+            if (panelLeft) panelLeft.style.width = '';
+            return;
+        }
+        const leftW = panelLeft ? panelLeft.offsetWidth : 0;
+        const rightW = panel ? panel.offsetWidth : 0;
+        if (leftW + rightW + HANDLE_SPACE + MIN_VIEWER > vw) {
+            if (panel) panel.style.width = '';
+            if (panelLeft) panelLeft.style.width = '';
+        }
+    });
 }
 
 // =========================================================================

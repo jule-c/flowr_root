@@ -3641,7 +3641,7 @@ def _active_learning_worker(job_id: str, req: dict):  # NOSONAR
             ckpt_path=ckpt,
             data_path=data_info["data_path"],
             splits_path=data_info["splits_path"],
-            statistics_path=data_info["statistics_path"],
+            statistics_path=data_info.get("statistics_path"),
             save_dir=str(save_dir),
             n_ligands=len(ligand_sdf_strings),
             epochs=req.get("epochs"),

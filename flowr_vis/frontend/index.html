@@ -23,6 +23,8 @@
         rel="stylesheet">
 
     <link rel="stylesheet" href="/static/style.css?v=20260326e">
+    <link rel="icon" type="image/svg+xml"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='28' y2='28'%3E%3Cstop offset='0%25' stop-color='%23DFC6F6'/%3E%3Cstop offset='100%25' stop-color='%23D5D653'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='14' cy='14' r='13' stroke='url(%23g)' stroke-width='2' fill='none'/%3E%3Ccircle cx='14' cy='14' r='6' fill='url(%23g)'/%3E%3Ccircle cx='8' cy='8' r='2.5' fill='%23DFC6F6'/%3E%3Ccircle cx='20' cy='8' r='2.5' fill='%23c8b2dd'/%3E%3Ccircle cx='8' cy='20' r='2.5' fill='%23D5D653'/%3E%3Ccircle cx='20' cy='20' r='2.5' fill='%23ae9e66'/%3E%3C/svg%3E">
 </head>
 
 <body>
@@ -573,37 +575,45 @@
                         <span class="section-icon"></span> Generation Settings
                     </h3>
 
-                    <div class="setting-group">
+                    <div class="setting-group-stacked">
                         <label class="setting-label" for="n-samples">Number of samples</label>
-                        <input type="range" id="n-samples" min="10" max="1000" step="10" value="100" class="slider"
-                            oninput="document.getElementById('n-samples-val').textContent = this.value">
-                        <span class="setting-value" id="n-samples-val">100</span>
+                        <div class="slider-row">
+                            <input type="range" id="n-samples" min="10" max="1000" step="10" value="100" class="slider"
+                                oninput="document.getElementById('n-samples-val').textContent = this.value">
+                            <span class="setting-value" id="n-samples-val">100</span>
+                        </div>
                     </div>
 
-                    <div class="setting-group">
+                    <div class="setting-group-stacked">
                         <label class="setting-label" for="batch-size">Batch size</label>
-                        <input type="range" id="batch-size" min="1" max="100" value="25" class="slider"
-                            oninput="document.getElementById('batch-size-val').textContent = this.value">
-                        <span class="setting-value" id="batch-size-val">25</span>
+                        <div class="slider-row">
+                            <input type="range" id="batch-size" min="1" max="100" value="25" class="slider"
+                                oninput="document.getElementById('batch-size-val').textContent = this.value">
+                            <span class="setting-value" id="batch-size-val">25</span>
+                        </div>
                     </div>
 
-                    <div class="setting-group">
+                    <div class="setting-group-stacked">
                         <label class="setting-label" for="integration-steps">Integration steps</label>
-                        <input type="range" id="integration-steps" min="20" max="200" step="10" value="100"
-                            class="slider" oninput="document.getElementById('steps-val').textContent = this.value">
-                        <span class="setting-value" id="steps-val">100</span>
+                        <div class="slider-row">
+                            <input type="range" id="integration-steps" min="20" max="200" step="10" value="100"
+                                class="slider" oninput="document.getElementById('steps-val').textContent = this.value">
+                            <span class="setting-value" id="steps-val">100</span>
+                        </div>
                     </div>
 
-                    <div class="setting-group sbdd-only" id="pocket-cutoff-group">
+                    <div class="setting-group-stacked sbdd-only" id="pocket-cutoff-group">
                         <label class="setting-label" for="pocket-cutoff">Pocket cutoff (Å)</label>
-                        <input type="range" id="pocket-cutoff" min="3" max="12" step="0.5" value="6" class="slider"
-                            oninput="document.getElementById('cutoff-val').textContent = this.value">
-                        <span class="setting-value" id="cutoff-val">6.0</span>
+                        <div class="slider-row">
+                            <input type="range" id="pocket-cutoff" min="3" max="12" step="0.5" value="6" class="slider"
+                                oninput="document.getElementById('cutoff-val').textContent = this.value">
+                            <span class="setting-value" id="cutoff-val">6.0</span>
+                        </div>
                     </div>
 
                     <div class="setting-group">
                         <label class="setting-label" for="gen-seed">Random seed</label>
-                        <input type="number" id="gen-seed" class="gen-input-small" value="42" min="0" max="999999"
+                        <input type="number" id="gen-seed" class="input-number" value="42" min="0" max="999999"
                             step="1">
                         <span class="help-tooltip"
                             data-tooltip="Random seed for reproducibility. Change this to get different generation results.">?</span>

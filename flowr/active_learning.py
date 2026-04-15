@@ -68,20 +68,24 @@ def prepare_al_data(
     output_dir: str,
     pocket_cutoff: float = 7.0,
     remove_hs: bool = True,
+    skip_statistics: bool = True,
     progress_callback: Optional[Callable[[int, str, str], None]] = None,
 ) -> Dict[str, str]:
-    """Prepare LMDB dataset + splits + statistics from selected ligands.
+    """Prepare LMDB dataset + splits from selected ligands.
 
     Args:
         protein_pdb_path: Path to the protein PDB file.
         ligand_sdf_strings: List of SDF-format strings for selected ligands.
-        output_dir: Directory to write LMDB, splits, and statistics.
+        output_dir: Directory to write LMDB, splits, and (optionally) statistics.
         pocket_cutoff: Distance cutoff for pocket extraction.
         remove_hs: Whether to remove hydrogens (must match base model).
+        skip_statistics: Skip computing dataset statistics (default True).
+            Statistics are only needed for validation, which is disabled
+            during active learning finetuning.
         progress_callback: Optional callback(progress_pct, message, phase).
 
     Returns:
-        Dict with keys: data_path, splits_path, statistics_path
+        Dict with keys: data_path, splits_path, and optionally statistics_path
     """
     from flowr.constants import ATOM_ENCODER as atom_encoder
     from flowr.data.preprocess_pdbs import process_complex
@@ -208,50 +212,55 @@ def prepare_al_data(
     splits_path = data_path / "splits.npz"
     np.savez(splits_path, idx_train=idx_train, idx_val=idx_val, idx_test=idx_test)
 
-    if progress_callback:
-        progress_callback(75, "Computing dataset statistics...", "preparing")
+    result = {
+        "data_path": str(data_path),
+        "splits_path": str(splits_path),
+    }
 
-    # Compute statistics from training data
-    data_list = []
-    for mol_bytes in rdkit_mols:
-        if mol_bytes is not None:
-            mol = Chem.Mol(mol_bytes)
-            try:
-                data_list.append(
-                    mol_to_dict(mol, atom_encoder=atom_encoder, remove_hs=remove_hs)
-                )
-            except Exception:
-                pass
+    if skip_statistics:
+        print("Skipping statistics computation (not needed for AL finetuning).")
+    else:
+        if progress_callback:
+            progress_callback(75, "Computing dataset statistics...", "preparing")
 
-    if not data_list:
-        raise ValueError("Could not compute statistics from processed ligands.")
+        # Compute statistics from training data
+        data_list = []
+        for mol_bytes in rdkit_mols:
+            if mol_bytes is not None:
+                mol = Chem.Mol(mol_bytes)
+                try:
+                    data_list.append(
+                        mol_to_dict(mol, atom_encoder=atom_encoder, remove_hs=remove_hs)
+                    )
+                except Exception:
+                    pass
 
-    statistics = compute_all_statistics(
-        data_list,
-        atom_encoder,
-        charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
-        additional_feats=True,
-    )
+        if not data_list:
+            raise ValueError("Could not compute statistics from processed ligands.")
 
-    # Save statistics files
-    h = "noh" if remove_hs else "h"
-    processed_dir = data_path / "processed"
-    processed_dir.mkdir(parents=True, exist_ok=True)
+        statistics = compute_all_statistics(
+            data_list,
+            atom_encoder,
+            charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
+            additional_feats=True,
+        )
 
-    # Save for train split (used by build_data_statistic)
-    _save_statistics(statistics, processed_dir, "train", h)
-    # Also save as val and test (even though they're empty, the loader expects them)
-    _save_statistics(statistics, processed_dir, "val", h)
-    _save_statistics(statistics, processed_dir, "test", h)
+        # Save statistics files
+        h = "noh" if remove_hs else "h"
+        processed_dir = data_path / "processed"
+        processed_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save for train split (used by build_data_statistic)
+        _save_statistics(statistics, processed_dir, "train", h)
+        # Also save as val and test (even though they're empty, the loader expects them)
+        _save_statistics(statistics, processed_dir, "val", h)
+        _save_statistics(statistics, processed_dir, "test", h)
+        result["statistics_path"] = str(processed_dir)
 
     if progress_callback:
         progress_callback(80, "Data preparation complete.", "preparing")
 
-    return {
-        "data_path": str(data_path),
-        "splits_path": str(splits_path),
-        "statistics_path": str(processed_dir),
-    }
+    return result
 
 
 def _save_statistics(statistics, processed_dir: Path, split: str, h: str):
@@ -280,9 +289,9 @@ def run_al_finetuning(
     ckpt_path: str,
     data_path: str,
     splits_path: str,
-    statistics_path: str,
-    save_dir: str,
-    n_ligands: int,
+    statistics_path: Optional[str] = None,
+    save_dir: str = "",
+    n_ligands: int = 0,
     epochs: Optional[int] = None,
     lora_rank: int = 16,
     lora_alpha: int = 32,
@@ -377,10 +386,26 @@ def run_al_finetuning(
         progress_callback(95, "Loading dataset...", "preparing")
 
     args.remove_hs = hparams["remove_hs"]
-    statistics = util.build_data_statistic(args)
-    dataset_info = DataInfos(statistics, vocab, hparams)
-    atom_types_distribution = dataset_info.atom_types.float()
-    bond_types_distribution = dataset_info.edge_types.float()
+
+    # Statistics are only needed if the checkpoint uses "prior-sample" noise.
+    # All current checkpoints use "uniform-sample", where distributions are unused.
+    type_noise = hparams.get("val-ligand-prior-type-noise", "uniform-sample")
+    bond_noise = hparams.get("val-ligand-prior-bond-noise", "uniform-sample")
+
+    if type_noise == "prior-sample" or bond_noise == "prior-sample":
+        if statistics_path is None:
+            raise ValueError(
+                "Checkpoint uses 'prior-sample' noise which requires dataset "
+                "statistics, but none were computed. Re-run prepare_al_data "
+                "with skip_statistics=False."
+            )
+        statistics = util.build_data_statistic(args)
+        dataset_info = DataInfos(statistics, vocab, hparams)
+        atom_types_distribution = dataset_info.atom_types.float()
+        bond_types_distribution = dataset_info.edge_types.float()
+    else:
+        atom_types_distribution = None
+        bond_types_distribution = None
 
     # Load datamodule with custom handling for empty val/test
     dm = _load_al_dm(
@@ -443,7 +468,7 @@ def _build_al_args(
     ckpt_path: str,
     data_path: str,
     splits_path: str,
-    statistics_path: str,
+    statistics_path: Optional[str],
     save_dir: str,
     epochs: int,
     lora_rank: int,

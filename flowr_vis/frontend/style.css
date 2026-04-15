@@ -1458,15 +1458,21 @@ body {
 }
 
 .btn-outline:hover:not(:disabled) {
-    border-color: var(--lavender);
-    color: var(--lavender);
-    background: var(--lavender-glow);
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border-color: var(--border-hover);
+}
+
+.btn-outline:active:not(:disabled) {
+    color: #7c3aed;
+    border-color: #b388ff;
+    background: #f1eaff;
 }
 
 .btn-outline.btn-toggled {
-    border-color: var(--lavender);
-    color: var(--lavender);
-    background: var(--lavender-glow);
+    color: #7c3aed;
+    border-color: #b388ff;
+    background: #f1eaff;
 }
 
 .btn-primary {
@@ -1693,7 +1699,7 @@ body {
     flex-direction: column;
     border-radius: var(--radius-lg);
     overflow: hidden;
-    background: #1a1a2e;
+    background: var(--bg-primary);
 }
 
 .molstar-overlay-header {
@@ -1739,7 +1745,7 @@ body {
     flex: 1;
     width: 100%;
     border: none;
-    background: #1a1a2e;
+    background: var(--bg-primary);
 }
 
 .toolbar-btn.molstar-active {
@@ -2891,8 +2897,8 @@ button.result-card {
 }
 
 .mol-2d-tab.active {
-    color: var(--lavender);
-    background: var(--lavender-glow);
+    color: #7c3aed;
+    background: #f1eaff;
 }
 
 /* ===== Inpainting Legend ===== */
