@@ -12,6 +12,7 @@ def generate_molecules(
     device="cuda",
     save_traj=False,
     iter="",
+    should_cancel=None,
 ):
     """
     Generate molecules
@@ -56,6 +57,7 @@ def generate_molecules(
         corr_iters=args.corrector_iters,
         save_traj=save_traj,
         iter=iter,
+        should_cancel=should_cancel,
     )
 
     # Generate RDKit molecules
@@ -73,6 +75,7 @@ def generate_ligands_per_target(
     save_traj=False,
     iter="",
     guidance_params: dict | None = None,
+    should_cancel=None,
 ):
     """
     Generate ligands for a specific protein target using flow-based molecular generation.
@@ -174,6 +177,7 @@ def generate_ligands_per_target(
         sigma=guidance_params["sigma"],
         maximize=guidance_params["maximize"],
         coord_noise_level=guidance_params["coord_noise_level"],
+        should_cancel=should_cancel,
     )
 
     # Generate RDKit molecules
@@ -243,7 +247,7 @@ def generate_n_ligands(args, hparams, model, batch, batch_idx=0, device="cuda"):
     lig_prior = {
         k: v.to(device) if torch.is_tensor(v) else v for k, v in lig_prior.items()
     }
-    if args.arch == "pocket_flex" and hparams["pocket_noise"] == "apo":
+    if args.arch == "pocket_flex" and hparams.get("pocket_noise") == "apo":
         pocket_prior = model.builder.extract_pocket_from_complex(prior)
     else:
         pocket_prior = model.builder.extract_pocket_from_complex(data)

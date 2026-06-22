@@ -1051,6 +1051,19 @@ def load_model(
     )
     hparams = dotdict(checkpoint["hyper_parameters"])
     hparams["compile_model"] = False
+    # Backward/forward-compat: resolve pocket_noise once with a robust fallback chain.
+    # Older or re-trained checkpoints may drop the top-level 'pocket_noise' in favor of
+    # the per-split train/val/test-pocket-noise keys. Every downstream use (the assertions
+    # below, and the **hparams splat into the model / Integrator) hard-indexes
+    # hparams['pocket_noise'], so guarantee it is present here. The checkpoint value takes
+    # precedence over the CLI default so an 'apo' checkpoint is never overridden by
+    # --pocket_noise.
+    hparams["pocket_noise"] = (
+        hparams.get("pocket_noise")
+        or hparams.get("train-pocket-noise")
+        or getattr(args, "pocket_noise", "fix")
+        or "fix"
+    )
     # Set sampling hyperparameters
     hparams["integration-steps"] = args.integration_steps
     hparams["sampling_strategy"] = args.ode_sampling_strategy
@@ -1257,29 +1270,15 @@ def load_model(
             pocket_enc=pocket_enc,
         )
     elif args.arch == "pocket_flex":
-        from flowr.models.complex import SemlaEncoder, SemlaLayer
-        from flowr.models.fm_complex import LigandPocketCFM
-
-        n_res_types = vocab_pocket_res.size
-        layer = SemlaLayer(
-            d_equi=hparams["d_equi"],
-            d_inv=hparams["d_inv"],
-            d_message=hparams["d_message"],
-            n_heads=hparams["n_attn_heads"],
-            d_attn_ff=hparams["d_attn_ff"],
-            d_edge=hparams["d_edge"],
-        )
-        egnn_gen = SemlaEncoder(
-            layer=layer,
-            n_layers=hparams["n_layers"],
-            n_atom_names=n_atom_types,
-            n_res_types=n_res_types,
-            n_charge_types=n_charge_types,
-            n_bond_types=n_bond_types,
-            self_cond=hparams["self_cond"],
-            n_rbf=hparams["num_rbf"],
-            emb_size=hparams["size_emb"],
-            equi_diff=True,
+        # The flexible/apo-pocket architecture depends on modules
+        # (flowr.models.complex.SemlaEncoder and flowr.models.fm_complex.LigandPocketCFM)
+        # that are not bundled in this release, so it cannot be instantiated here.
+        # Raise an explicit error instead of failing with a cryptic ModuleNotFoundError.
+        raise NotImplementedError(
+            "The 'pocket_flex' (flexible/apo pocket) architecture is not available in this "
+            "release: it requires flowr.models.complex.SemlaEncoder and "
+            "flowr.models.fm_complex.LigandPocketCFM, which are not bundled. Use "
+            "--arch pocket with a holo-pocket checkpoint (--pocket_type holo) instead."
         )
     else:
         raise ValueError(f"Unknown architecture {args.arch}")

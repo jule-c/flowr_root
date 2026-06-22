@@ -15,6 +15,7 @@ from torchmetrics import MetricCollection
 import flowr.util.metrics as Metrics
 from flowr.constants import INPAINT_ENCODER as inpaint_mode_encoder
 from flowr.data.data_info import GeneralInfos as DataInfos
+from flowr.gen.cancellation import raise_if_cancelled
 from flowr.models.integrator import Integrator
 from flowr.models.losses import LossComputer
 from flowr.models.mol_builder import MolBuilder
@@ -1621,6 +1622,7 @@ class LigandPocketCFM(pl.LightningModule):
         coord_noise_level: float = 0.2,
         final_inpaint: bool = False,
         final_corr_pred: bool = True,
+        should_cancel=None,
     ):
 
         self.integrator.use_sde_simulation = (
@@ -1687,6 +1689,9 @@ class LigandPocketCFM(pl.LightningModule):
                 pocket_atom_mask=pocket_data["mask"],
             )
             for i, step_size in enumerate(step_sizes):
+                # Cooperative cancellation: abort between integration steps
+                # rather than running the whole batch to completion.
+                raise_if_cancelled(should_cancel, i)
                 cond = cond_batch if self.self_condition else None
                 # Run the model
                 out = self(

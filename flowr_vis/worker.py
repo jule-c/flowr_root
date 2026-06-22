@@ -91,6 +91,22 @@ DEVICE = str(get_device())
 logger.info("PyTorch device: %s", DEVICE)
 
 
+def _free_accelerator_memory():
+    """Return cached accelerator memory to the OS.
+
+    Both CUDA (NVIDIA) and MPS (Apple Silicon) keep freed tensors in a reuse
+    cache that is *not* released automatically. On Apple Silicon the GPU shares
+    system RAM, so an un-emptied cache keeps the high-water-mark pinned (often
+    several GB) after a run finishes or is cancelled — slowing the whole machine.
+    Calling the matching ``empty_cache`` returns it to the system.
+    """
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+
 def _sanitize_job_id(job_id: str) -> str:
     """Validate and return job_id, or raise ValueError if malicious."""
     if not job_id or not _re.match(r"^[a-zA-Z0-9_-]+$", job_id):
@@ -143,6 +159,16 @@ except ImportError as exc:
         "generation will not work.",
         exc,
     )
+
+# Cooperative-cancellation hook raised from inside the model integration loop.
+# Guarded with a fallback so the name is always defined even if FLOWR is absent.
+try:
+    from flowr.gen.cancellation import GenerationCancelled
+except ImportError:
+
+    class GenerationCancelled(Exception):
+        pass
+
 
 # ---------------------------------------------------------------------------
 # Checkpoint path resolution
@@ -405,9 +431,7 @@ def _load_model_if_needed(ckpt_path: str = None) -> bool:
             return False
         finally:
             # Ensure GPU cleanup runs even on load failure
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            _free_accelerator_memory()
 
 
 def _default_args_mol(**overrides) -> Namespace:
@@ -551,9 +575,7 @@ def _load_mol_model_if_needed(ckpt_path: str = None) -> bool:
             return False
         finally:
             # Ensure GPU cleanup runs even on load failure
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            _free_accelerator_memory()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2027,6 +2049,9 @@ def _run_flowr_generation(  # NOSONAR
                     device=DEVICE,
                     save_traj=False,
                     iter=f"{k}_{i}",
+                    should_cancel=lambda: bool(
+                        job.get("cancelled") or job.get("status") == "cancelled"
+                    ),
                 )
 
                 _raw_generated += len(gen_ligs_batch)
@@ -2807,6 +2832,9 @@ def _run_flowr_generation_mol(  # NOSONAR
                     device=DEVICE,
                     save_traj=False,
                     iter=f"{k}_{i}",
+                    should_cancel=lambda: bool(
+                        job.get("cancelled") or job.get("status") == "cancelled"
+                    ),
                 )
 
                 # ── Translate generated mols back to reference ligand COM ──
@@ -3435,7 +3463,9 @@ def _generation_worker(job_id: str, req: dict):  # NOSONAR
             health_check_type=exc.check_type,
             health_check_advice=exc.advice,
         )
-    except _JobCancelled as exc:
+    except (_JobCancelled, GenerationCancelled) as exc:
+        # GenerationCancelled is raised mid-batch from inside the model
+        # integration loop; _JobCancelled from the between-stage checks.
         job.update(status="cancelled", error=str(exc))
     except Exception as exc:
         logger.exception("Generation failed for job %s", job_id)
@@ -3445,9 +3475,7 @@ def _generation_worker(job_id: str, req: dict):  # NOSONAR
         job.update(status="failed", progress=0, error=err_msg)
     finally:
         # Cleanup GPU memory after generation
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        _free_accelerator_memory()
         _generation_semaphore.release()
         # Clean up temporary files after releasing semaphore to avoid
         # blocking future generations if rmtree hangs (e.g. NFS issues)
@@ -3668,9 +3696,7 @@ def _active_learning_worker(job_id: str, req: dict):  # NOSONAR
             )
         # Release references so GC can free GPU tensors
         del old_model, old_mol_model
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        _free_accelerator_memory()
 
         job.update(
             status="completed",
@@ -3693,9 +3719,7 @@ def _active_learning_worker(job_id: str, req: dict):  # NOSONAR
         job.update(status="failed", progress=0, error=err_msg)
     finally:
         # Cleanup GPU memory after active learning
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        _free_accelerator_memory()
         _generation_semaphore.release()
         # Don't clean up job_dir here — the checkpoint needs to persist
         # until the server copies/references it. Cleanup via TTL.

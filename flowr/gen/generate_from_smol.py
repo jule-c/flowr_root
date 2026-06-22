@@ -186,6 +186,14 @@ def load_model(args):
     CFM = LigandPocketCFM
     type_mask_index = None
     bond_mask_index = None
+    # Backward/forward-compat: guarantee pocket_noise is present (see load_model in
+    # scriptutil.py). Checkpoint value first, then the per-split key, then the CLI arg.
+    hparams["pocket_noise"] = (
+        hparams.get("pocket_noise")
+        or hparams.get("train-pocket-noise")
+        or getattr(args, "pocket_noise", "fix")
+        or "fix"
+    )
     integrator = Integrator(
         args.integration_steps,
         use_sde_simulation=args.use_sde_simulation,
