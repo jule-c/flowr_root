@@ -99,6 +99,7 @@ from chem_utils import (
     validate_molecule as _validate_molecule,
 )
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request as StarletteRequest
 
 logger = logging.getLogger(__name__)
@@ -231,17 +232,51 @@ FRONTEND_DIR = Path(__file__).parent / "frontend"
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 
-class NoCacheMiddleware(BaseHTTPMiddleware):
+class CacheControlMiddleware(BaseHTTPMiddleware):
+    """Differentiated caching for production performance.
+
+    Previously every "/" and "/static/*" response was sent with
+    ``no-store``, forcing the browser to re-download the entire ~16 MB of
+    immutable vendor libraries (plotly, molstar, 3Dmol, RDKit + wasm) on
+    *every* page load and defeating the ``?v=`` cache-busting strategy.
+
+    The policy now is:
+
+    * ``/static/lib/**`` — vendor libraries that are content-stable across
+      deploys → ``immutable`` for a year. To update one, bump its filename
+      or add a ``?v=`` query string in index.html.
+    * everything else under "/" and "/static/" (index.html, app.js,
+      style.css, fonts, etc.) → ``no-cache``: the browser may cache but
+      MUST revalidate via the strong ETag that StaticFiles/FileResponse
+      already emit, so a deploy is picked up immediately (cheap 304 when
+      unchanged, full 200 when changed) and nothing is ever served stale.
+      This deliberately replaces the old ``no-store`` so reloads become
+      ETag revalidations instead of full re-downloads, while the ``?v=``
+      query string on app.js/style.css remains a belt-and-suspenders
+      hard cache-bust.
+    """
+
     async def dispatch(self, request: StarletteRequest, call_next):
         response = await call_next(request)
-        if request.url.path == "/" or request.url.path.startswith("/static/"):
-            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
+        path = request.url.path
+        if path.startswith("/static/lib/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            self._drop_legacy_headers(response)
+        elif path == "/" or path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+            self._drop_legacy_headers(response)
         return response
 
+    @staticmethod
+    def _drop_legacy_headers(response):
+        # Starlette's MutableHeaders has no .pop(); delete only if present so a
+        # stray Pragma/Expires (HTTP/1.0 anti-caching) can't override our policy.
+        for header in ("Pragma", "Expires"):
+            if header in response.headers:
+                del response.headers[header]
 
-app.add_middleware(NoCacheMiddleware)
+
+app.add_middleware(CacheControlMiddleware)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -674,6 +709,15 @@ class AnonymousUserMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(AnonymousUserMiddleware)
+
+# Compression — registered LAST so it is the OUTERMOST middleware and therefore
+# compresses the fully-formed response (after all header middleware run). Text
+# assets (app.js ~340 KB, the vendor JS libs, JSON API payloads) shrink ~3-4x.
+# Only applied when the client advertises Accept-Encoding: gzip; a Vary header is
+# emitted automatically so caches key on encoding. minimum_size avoids wasting CPU
+# on tiny bodies; compresslevel 6 is the standard speed/ratio sweet spot for
+# on-the-fly compression of multi-MB files.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 
 logger.info("Upload directory:  %s", UPLOAD_DIR)
@@ -1723,14 +1767,10 @@ def _poll_worker_job(job_id: str, worker_url: str = None) -> Optional[Dict[str, 
 
 @app.get("/")
 async def index():
-    return FileResponse(
-        str(FRONTEND_DIR / "index.html"),
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
+    # Cache-Control is owned by CacheControlMiddleware ("/" -> no-cache, i.e.
+    # revalidate via the ETag FileResponse emits from the file stat). Keeping the
+    # header in one place avoids the two definitions drifting apart.
+    return FileResponse(str(FRONTEND_DIR / "index.html"))
 
 
 @app.get("/checkpoints")
