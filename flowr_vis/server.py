@@ -4321,7 +4321,14 @@ async def chemical_space(  # NOSONAR
         raise HTTPException(501, _ERR_RDKIT_UNAVAILABLE)
     _validate_job_id(job_id)
     job = _get_user_job(job_id, request)
+    # The body — RDKit reparse of every accumulated ligand, Morgan fingerprints,
+    # and PCA/t-SNE/UMAP fit_transform — is seconds to tens of seconds of CPU.
+    # Run it on the shared pool so it never blocks the single event loop.
+    return await _run_cpu(_chemical_space_compute, job, method, perplexity)
 
+
+def _chemical_space_compute(job, method, perplexity):
+    """CPU-bound body of GET /chemical-space (extracted to run off the loop)."""
     # Use all accumulated results if available, otherwise fall back to latest
     all_results = job.get("all_results", [])
     latest_results = job.get("results", [])
@@ -4500,7 +4507,13 @@ async def property_space(job_id: str, request: Request):  # NOSONAR
         raise HTTPException(501, _ERR_RDKIT_UNAVAILABLE)
     _validate_job_id(job_id)
     job = _get_user_job(job_id, request)
+    # RDKit reparse + full descriptor computation per ligand across all rounds is
+    # CPU-heavy; run it on the shared pool so it never blocks the event loop.
+    return await _run_cpu(_property_space_compute, job)
 
+
+def _property_space_compute(job):
+    """CPU-bound body of GET /property-space (extracted to run off the loop)."""
     all_results = job.get("all_results", [])
     latest_results = job.get("results", [])
     if not all_results and not latest_results:
