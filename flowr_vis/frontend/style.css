@@ -46,6 +46,11 @@ dialog {
     --border: rgba(120, 94, 1, 0.15);
     --border-hover: rgba(120, 94, 1, 0.30);
 
+    /* Warm surface ramp (brightest → page base; --bg-primary #E9E3DC is the deepest step) */
+    --surface-bright: #F7F3ED;
+    --surface-card: #F2EDE5;
+    --surface-inset: #EFE9E2;
+
     /* ── Text ── */
     --text-primary: #2c2731;
     --text-secondary: #594f62;
@@ -409,7 +414,7 @@ body {
 .panel-left>.panel-section,
 .panel-right>.panel-section {
     background:
-        linear-gradient(#F2EDE5, #F2EDE5) padding-box,
+        linear-gradient(var(--surface-card), var(--surface-card)) padding-box,
         linear-gradient(135deg, rgba(223, 198, 246, 0.45), rgba(168, 148, 186, 0.30)) border-box;
     border: 1px solid transparent;
     border-radius: var(--radius-md);
@@ -1295,23 +1300,6 @@ body {
     border-bottom: none;
 }
 
-/* ===== 2D MOLECULE DETAIL ===== */
-.mol-detail-img {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #fff;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: var(--space-2);
-    min-height: 180px;
-}
-
-.mol-detail-img svg {
-    max-width: 100%;
-    height: auto;
-}
-
 /* ===== FLOATING 2D STRUCTURE OVERLAY ===== */
 /* ===== RESIDUE HOVER CARD ===== */
 .residue-hover-card {
@@ -1581,28 +1569,6 @@ body {
     cursor: grabbing !important;
 }
 
-.input-file-sm {
-    font-size: var(--text-base);
-    color: var(--text-secondary);
-    max-width: 160px;
-}
-
-.input-file-sm::file-selector-button {
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    cursor: pointer;
-    margin-right: var(--space-1-5);
-}
-
-.input-file-sm::file-selector-button:hover {
-    border-color: var(--lavender);
-    color: var(--lavender);
-}
-
 /* ===== BUTTONS ===== */
 .btn {
     display: inline-flex;
@@ -1688,27 +1654,6 @@ body {
     border-color: rgba(204, 51, 51, 0.45);
 }
 
-.btn-al {
-    /* Uses main gradient for visual coherence */
-    background: var(--gradient-1);
-    color: #fff;
-    font-weight: var(--weight-semibold);
-    border: none;
-    width: 100%;
-    box-shadow: 0 2px 8px rgba(120, 94, 1, .15);
-    transition: all 0.2s;
-}
-
-.btn-al:hover:not(:disabled) {
-    box-shadow: 0 3px 16px rgba(120, 94, 1, .25);
-    transform: translateY(-1px);
-}
-
-.btn-al:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-}
-
 .btn-icon {
     display: none;
 }
@@ -1766,7 +1711,7 @@ body {
     position: relative;
     gap: var(--space-3);
     padding: var(--space-3) var(--space-3-5);
-    background: #EFE9E2;
+    background: var(--surface-inset);
     border-radius: var(--radius-lg);
 }
 
@@ -1781,7 +1726,7 @@ body {
     align-items: center;
     padding: 0.5em 1em;
     background:
-        linear-gradient(135deg, #F7F3ED, #F2EDE5) padding-box,
+        linear-gradient(135deg, var(--surface-bright), var(--surface-card)) padding-box,
         linear-gradient(135deg, rgba(213, 214, 83, 0.50), rgba(170, 171, 66, 0.35)) border-box;
     border: 2px solid transparent;
     border-radius: var(--radius-lg);
@@ -1832,7 +1777,7 @@ body {
     width: 100%;
     position: relative;
     background:
-        linear-gradient(135deg, #F7F3ED, #F2EDE5) padding-box,
+        linear-gradient(135deg, var(--surface-bright), var(--surface-card)) padding-box,
         linear-gradient(135deg, rgba(213, 214, 83, 0.50), rgba(170, 171, 66, 0.35)) border-box;
     border: 2px solid transparent;
     border-radius: var(--radius-xl);
@@ -2161,7 +2106,7 @@ button.result-card {
 /* ───── Generation failure card (standalone panel-section) ───── */
 #generation-failure-card {
     background:
-        linear-gradient(#F2EDE5, #F2EDE5) padding-box,
+        linear-gradient(var(--surface-card), var(--surface-card)) padding-box,
         linear-gradient(135deg, rgba(224, 85, 85, 0.35), rgba(180, 90, 90, 0.20)) border-box;
     border: 1px solid transparent;
 }
@@ -2879,11 +2824,6 @@ button.result-card {
     border: 1px solid rgba(127, 128, 49, 0.2);
 }
 
-/* Active Learning section */
-.al-section {
-    margin-top: 0;
-}
-
 /* ── Active Learning Card Overlay (matches landing-card style) ── */
 .al-overlay {
     position: fixed;
@@ -2911,25 +2851,6 @@ button.result-card {
     box-shadow: var(--shadow-lg);
     text-align: center;
     animation: modal-slide-in 0.25s ease;
-}
-
-.al-card-logo {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-3);
-    margin-bottom: var(--space-1-5);
-}
-
-.al-card-title {
-    font-size: var(--text-4xl);
-    font-weight: var(--weight-bold);
-    letter-spacing: 2px;
-    background: var(--gradient-1);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin: 0;
 }
 
 .al-card-subtitle {
@@ -3065,26 +2986,6 @@ button.result-card {
 .gen-hs-controls .info-label {
     font-size: var(--text-base);
     margin-right: auto;
-}
-
-.input-select {
-    flex: 1;
-    padding: var(--space-1-5) var(--space-2-5);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-    font-family: var(--font-sans);
-    font-size: var(--text-base);
-    cursor: pointer;
-    max-width: 200px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.input-select:focus {
-    outline: none;
-    border-color: var(--lavender);
 }
 
 /* ===== 2D OVERLAY TABS ===== */
@@ -3442,14 +3343,6 @@ button.result-card {
     font-family: var(--font-mono);
 }
 
-/* Affinity modal – empty state */
-.affinity-empty {
-    text-align: center;
-    padding: var(--space-10) var(--space-5);
-    color: var(--text-muted);
-    font-size: var(--text-xl);
-}
-
 @media (max-width: 900px) {
     .affinity-plot-container {
         grid-template-columns: 1fr;
@@ -3647,19 +3540,6 @@ button.result-card {
     border-radius: var(--radius-sm);
     background: var(--bg-elevated);
     color: var(--text-primary);
-    font-family: var(--font-mono);
-}
-
-.affinity-badge {
-    display: inline-block;
-    margin-left: var(--space-2);
-    padding: var(--space-px) var(--space-1-5);
-    font-size: var(--text-base);
-    font-weight: var(--weight-semibold);
-    color: var(--chartreuse-dark);
-    background: var(--chartreuse-bg);
-    border: 1px solid var(--chartreuse-dark);
-    border-radius: var(--radius-sm);
     font-family: var(--font-mono);
 }
 

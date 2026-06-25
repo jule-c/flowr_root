@@ -22,7 +22,7 @@
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
 
-    <link rel="stylesheet" href="/static/style.css?v=20260625b">
+    <link rel="stylesheet" href="/static/style.css?v=20260625c">
     <link rel="icon" type="image/svg+xml"
         href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='28' y2='28'%3E%3Cstop offset='0%25' stop-color='%23DFC6F6'/%3E%3Cstop offset='100%25' stop-color='%23D5D653'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='14' cy='14' r='13' stroke='url(%23g)' stroke-width='2' fill='none'/%3E%3Ccircle cx='14' cy='14' r='6' fill='url(%23g)'/%3E%3Ccircle cx='8' cy='8' r='2.5' fill='%23DFC6F6'/%3E%3Ccircle cx='20' cy='8' r='2.5' fill='%23c8b2dd'/%3E%3Ccircle cx='8' cy='20' r='2.5' fill='%23D5D653'/%3E%3Ccircle cx='20' cy='20' r='2.5' fill='%23ae9e66'/%3E%3C/svg%3E">
 </head>
@@ -30,7 +30,7 @@
 <body>
 
     <!-- SVG sprite sheet for reused logos -->
-    <svg style="display:none" aria-hidden="true">
+    <svg style="display: none" aria-hidden="true">
         <defs>
             <linearGradient id="flowr-grad" x1="0" y1="0" x2="28" y2="28">
                 <stop offset="0%" stop-color="#DFC6F6" />
@@ -240,8 +240,8 @@
 
                     <!-- SBDD guidance banner -->
                     <div class="input-guidance sbdd-only" id="sbdd-guidance">
-                        <p style="margin:0 0 4px 0;"><strong>Two options for structure-based generation:</strong></p>
-                        <ol style="margin:0; padding-left:18px; font-size:14px; color:#6f637b; line-height:1.5;">
+                        <p style="margin: 0 0 var(--space-1) 0;"><strong>Two options for structure-based generation:</strong></p>
+                        <ol style="margin: 0; padding-left: var(--space-4-5); font-size: var(--text-base); color: #6f637b; line-height: var(--leading-normal);">
                             <li><strong>Protein + Ligand</strong> — upload both to identify the binding site</li>
                             <li><strong>Protein Pocket only</strong> — upload a pre-cut pocket PDB and specify the
                                 number of heavy atoms to generate</li>
@@ -250,8 +250,8 @@
 
                     <!-- LBDD guidance banner -->
                     <div class="input-guidance lbdd-only hidden" id="lbdd-guidance">
-                        <p style="margin:0 0 4px 0;"><strong>Three options for ligand-based generation:</strong></p>
-                        <ol style="margin:0; padding-left:18px; font-size:14px; color:#6f637b; line-height:1.5;">
+                        <p style="margin: 0 0 var(--space-1) 0;"><strong>Three options for ligand-based generation:</strong></p>
+                        <ol style="margin: 0; padding-left: var(--space-4-5); font-size: var(--text-base); color: #6f637b; line-height: var(--leading-normal);">
                             <li><strong>Reference molecule</strong> — upload an SDF/MOL file</li>
                             <li><strong>SMILES string</strong> — enter a SMILES and generate a 3D conformer</li>
                             <li><strong>From scratch</strong> — specify only the number of heavy atoms (no reference
@@ -364,7 +364,7 @@
                                 Generate 3D
                             </button>
                         </div>
-                        <div class="smiles-file-row" style="margin-top:4px;">
+                        <div class="smiles-file-row" style="margin-top: var(--space-1);">
                             <input type="file" id="smiles-file" accept=".smi,.txt" hidden
                                 onchange="uploadSmilesFile(this)">
                             <button class="btn btn-xs btn-outline"
@@ -450,7 +450,7 @@
                     </div>
 
                     <!-- Number of heavy atoms (de novo mode, both SBDD and LBDD) -->
-                    <div class="sub-options hidden" id="num-heavy-atoms-group" style="margin-top:6px;">
+                    <div class="sub-options hidden" id="num-heavy-atoms-group" style="margin-top: var(--space-1-5);">
                         <label class="setting-label" for="num-heavy-atoms">Number of Heavy Atoms
                             <span class="help-tooltip"
                                 data-tooltip="Specify the number of heavy atoms for de novo generation.">?</span>
@@ -458,13 +458,13 @@
                         <div class="num-heavy-atoms-row">
                             <input type="number" id="num-heavy-atoms" class="input-number" min="1" max="200" value=""
                                 placeholder="e.g. 25" oninput="onNumHeavyAtomsChange()">
-                            <span class="muted-text" id="num-heavy-atoms-hint" style="font-size:13px;"></span>
+                            <span class="muted-text" id="num-heavy-atoms-hint" style="font-size: var(--text-sm);"></span>
                         </div>
                     </div>
 
                     <!-- Anisotropic prior (shown for applicable conditional modes) -->
-                    <div id="anisotropic-prior-opt" class="sub-options hidden" style="margin-top:6px;">
-                        <label class="mode-option" style="gap:8px;">
+                    <div id="anisotropic-prior-opt" class="sub-options hidden" style="margin-top: var(--space-1-5);">
+                        <label class="mode-option" style="gap: var(--space-2);">
                             <input type="checkbox" id="anisotropic-prior-cb"
                                 onchange="onAnisotropicPriorChange(this.checked)">
                             <span class="mode-label">Anisotropic prior</span>
@@ -474,8 +474,8 @@
                     </div>
 
                     <!-- Ref-ligand CoM prior shift (shown for scaffold_hopping, scaffold_elaboration, linker_inpainting, core_growing) -->
-                    <div id="ref-ligand-com-prior-opt" class="sub-options hidden" style="margin-top:6px;">
-                        <label class="mode-option" style="gap:8px;">
+                    <div id="ref-ligand-com-prior-opt" class="sub-options hidden" style="margin-top: var(--space-1-5);">
+                        <label class="mode-option" style="gap: var(--space-2);">
                             <input type="checkbox" id="ref-ligand-com-prior-cb"
                                 onchange="onRefLigandComPriorChange(this.checked)">
                             <span class="mode-label">Ref-ligand CoM prior</span>
@@ -512,7 +512,7 @@
                                 <span class="help-tooltip"
                                     data-tooltip="Visually position the prior point cloud in the 3D viewer. Click to place the center, then drag to adjust. Hold Shift and drag to reposition. Normal rotation/zoom works when not holding Shift.">?</span>
                             </span>
-                            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                            <div style="display: flex; align-items: center; gap: var(--space-1-5); flex-wrap: wrap;">
                                 <button class="btn btn-sm btn-outline" id="place-prior-btn"
                                     onclick="togglePriorPlacement()">
                                     <span id="place-prior-icon"></span> Place
@@ -520,7 +520,7 @@
                                 <button class="btn btn-sm btn-outline hidden" id="reset-prior-pos-btn"
                                     onclick="resetPriorPosition()"
                                     title="Reset to default position (ligand center of mass)">↺ Reset</button>
-                                <span class="muted-text" id="prior-coords-display" style="font-size:13px;"></span>
+                                <span class="muted-text" id="prior-coords-display" style="font-size: var(--text-sm);"></span>
                             </div>
                         </div>
                     </div>
@@ -548,7 +548,7 @@
                     <p class="section-desc"><b>Shift+click</b> atoms in the 3D viewer to select/deselect, or
                         <b>Shift+drag</b> to lasso-select multiple atoms for
                         <b>replacement</b>. Selected
-                        atoms (shown in <b style="color:#CE93D8">purple</b>) will be regenerated; all other atoms are
+                        atoms (shown in <b style="color: #CE93D8">purple</b>) will be regenerated; all other atoms are
                         kept
                         fixed.
                     </p>
@@ -643,7 +643,7 @@
                     </div>
 
                     <div class="setting-group sub-option-inline" id="noise-scale-group">
-                        <label class="setting-label" style="min-width:80px;" for="noise-scale">Scale</label>
+                        <label class="setting-label" style="min-width: 80px;" for="noise-scale">Scale</label>
                         <input type="range" id="noise-scale" min="0" max="1" step="0.05" value="0.1" class="slider"
                             oninput="document.getElementById('noise-scale-val').textContent = this.value">
                         <span class="setting-value" id="noise-scale-val">0.1</span>
@@ -684,7 +684,7 @@
                     </div>
 
                     <div class="setting-group sub-option-inline" id="diversity-threshold-group">
-                        <label class="setting-label" style="min-width:80px;" for="diversity-threshold">Threshold</label>
+                        <label class="setting-label" style="min-width: 80px;" for="diversity-threshold">Threshold</label>
                         <input type="range" id="diversity-threshold" min="0.1" max="1.0" step="0.05" value="0.8"
                             class="slider" oninput="document.getElementById('div-thresh-val').textContent = this.value">
                         <span class="setting-value" id="div-thresh-val">0.8</span>
@@ -878,7 +878,7 @@
                         <button class="toolbar-btn active sbdd-only" onclick="setViewMode('complex')" id="view-complex"
                             title="Show complex">
                             <svg width="18" height="15" viewBox="0 0 18 15" fill="none" stroke="currentColor"
-                                stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px">
+                                stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -3px">
                                 <path d="M2.5 13C6 11.5 6 9.5 2.5 8C-1 6.5 -1 4.5 2.5 3C4.5 2 6 1.5 7 2"
                                     stroke-width="1.4" />
                                 <polygon points="13,3 15.5,4.8 15.5,8.2 13,10 10.5,8.2 10.5,4.8" fill="none"
@@ -891,14 +891,14 @@
                         <button class="toolbar-btn sbdd-only" onclick="setViewMode('protein')" id="view-protein"
                             title="Show protein only">
                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
-                                stroke-width="1.5" stroke-linecap="round" style="vertical-align:-3px">
+                                stroke-width="1.5" stroke-linecap="round" style="vertical-align: -3px">
                                 <path d="M4 13C9 11 9 9 4 7.5C-1 6 -1 4 4 2.5C7 1.5 9 1 11 1.5" />
                             </svg> Protein
                         </button>
                         <button class="toolbar-btn sbdd-only" onclick="setViewMode('ligand')" id="view-ligand"
                             title="Show ligand only">
                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
-                                stroke-width="1.3" stroke-linejoin="round" style="vertical-align:-3px">
+                                stroke-width="1.3" stroke-linejoin="round" style="vertical-align: -3px">
                                 <polygon points="7.5,1.5 12.5,4.2 12.5,9.8 7.5,12.5 2.5,9.8 2.5,4.2" />
                                 <line x1="7.5" y1="4" x2="7.5" y2="7" opacity="0.5" />
                                 <line x1="4.5" y1="9" x2="7" y2="7.5" opacity="0.5" />
@@ -911,7 +911,7 @@
                         <button class="toolbar-btn sbdd-only" onclick="toggleSurface()" id="btn-surface"
                             title="Toggle protein surface">
                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
-                                stroke-width="1.3" stroke-linecap="round" style="vertical-align:-3px">
+                                stroke-width="1.3" stroke-linecap="round" style="vertical-align: -3px">
                                 <path d="M1.5 11C3 6 5 9 7.5 5.5C10 2 12 7 13.5 4" />
                                 <path d="M1.5 11C3 8 5 11 7.5 8C10 5 12 9 13.5 6" opacity="0.3" />
                             </svg> Surface
@@ -919,7 +919,7 @@
                         <button class="toolbar-btn sbdd-only" onclick="toggleFullAtom()" id="btn-full-atom"
                             title="Show all protein atoms as sticks">
                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
-                                stroke-width="1.2" style="vertical-align:-3px">
+                                stroke-width="1.2" style="vertical-align: -3px">
                                 <circle cx="4" cy="4" r="1.8" fill="currentColor" opacity="0.35" />
                                 <circle cx="11" cy="4" r="1.8" fill="currentColor" opacity="0.35" />
                                 <circle cx="7.5" cy="11" r="1.8" fill="currentColor" opacity="0.35" />
@@ -931,7 +931,7 @@
                         <button class="toolbar-btn sbdd-only" onclick="toggleBindingSite()" id="btn-binding-site"
                             title="Show protein binding site residues within 3.5Å of the ligand">
                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
-                                stroke-width="1.3" stroke-linecap="round" style="vertical-align:-3px">
+                                stroke-width="1.3" stroke-linecap="round" style="vertical-align: -3px">
                                 <path d="M2 3.5L2 9C2 12 5.5 13.5 7.5 13.5C9.5 13.5 13 12 13 9L13 3.5" />
                                 <circle cx="7.5" cy="8" r="2" fill="currentColor" opacity="0.3" stroke="currentColor" />
                             </svg> Binding Site
@@ -939,7 +939,7 @@
                         <button class="toolbar-btn sbdd-only" onclick="showInteractions3D('ref')" id="btn-int-ref"
                             title="Show interactions for reference ligand">
                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
-                                stroke-width="1.3" style="vertical-align:-3px">
+                                stroke-width="1.3" style="vertical-align: -3px">
                                 <circle cx="3" cy="7.5" r="2.2" fill="currentColor" opacity="0.25" />
                                 <circle cx="12" cy="7.5" r="2.2" fill="currentColor" opacity="0.25" />
                                 <line x1="5.2" y1="7.5" x2="9.8" y2="7.5" stroke-dasharray="1.5 1.2" />
@@ -964,7 +964,7 @@
                         <button class="toolbar-btn" onclick="togglePriorCloud()" id="toggle-prior-cloud"
                             title="Toggle the prior point cloud showing where new atoms were sampled from">
                             <svg width="15" height="15" viewBox="0 0 15 15" fill="currentColor"
-                                style="vertical-align:-3px">
+                                style="vertical-align: -3px">
                                 <circle cx="3.5" cy="4" r="1.5" opacity="0.7" />
                                 <circle cx="9" cy="2.5" r="1.3" opacity="0.5" />
                                 <circle cx="12" cy="5.5" r="1.4" opacity="0.6" />
@@ -980,7 +980,7 @@
                         <button class="toolbar-btn sbdd-only" onclick="toggleMolstar()" id="btn-molstar"
                             title="Open Molstar viewer">
                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
-                                stroke-width="1.3" style="vertical-align:-3px">
+                                stroke-width="1.3" style="vertical-align: -3px">
                                 <circle cx="7.5" cy="7.5" r="5.5" />
                                 <circle cx="7.5" cy="7.5" r="2" fill="currentColor" opacity="0.3" />
                                 <line x1="7.5" y1="2" x2="7.5" y2="4" />
@@ -993,7 +993,7 @@
                 </div>
                 <div id="viewer3d" class="viewer3d-canvas"></div>
                 <!-- Molstar iframe overlay (hidden by default) -->
-                <div id="molstar-overlay" class="molstar-overlay" style="display:none;">
+                <div id="molstar-overlay" class="molstar-overlay" style="display: none;">
                     <div class="molstar-overlay-header">
                         <span class="molstar-overlay-title">Mol* Explorer</span>
                         <button class="molstar-close-btn" onclick="closeMolstar()" title="Close Molstar viewer">
@@ -1007,7 +1007,7 @@
                     <iframe id="molstar-frame" class="molstar-frame" sandbox="allow-scripts allow-same-origin"
                         title="Molstar Viewer"></iframe>
                 </div>
-                <div id="residue-hover-card" class="residue-hover-card" style="display:none;">
+                <div id="residue-hover-card" class="residue-hover-card" style="display: none;">
                     <span id="residue-hover-name" class="hover-res-name"></span>
                     <span class="hover-sep">&middot;</span>
                     <span id="residue-hover-chain" class="hover-chain-label"></span>
@@ -1263,15 +1263,15 @@
     <!-- ===== CLEAR ALL CONFIRMATION MODAL ===== -->
     <div id="clear-confirm-modal" class="al-overlay hidden">
         <div class="al-card" style="max-width: 380px;">
-            <h2 class="landing-section-title" style="margin-bottom: 8px;">Delete All Ligands</h2>
-            <p id="clear-confirm-msg" class="al-card-desc" style="margin-bottom: 20px;">
+            <h2 class="landing-section-title" style="margin-bottom: var(--space-2);">Delete All Ligands</h2>
+            <p id="clear-confirm-msg" class="al-card-desc" style="margin-bottom: var(--space-5);">
                 All generated ligands from all rounds will be permanently deleted.
             </p>
-            <div style="display: flex; gap: 10px;">
+            <div style="display: flex; gap: var(--space-2-5);">
                 <button class="btn btn-sm btn-outline" onclick="closeModal('clear-confirm-modal')"
-                    style="flex: 1; padding: 10px;">Cancel</button>
+                    style="flex: 1; padding: var(--space-2-5);">Cancel</button>
                 <button class="btn btn-sm btn-danger" onclick="_executeClearAll()"
-                    style="flex: 1; padding: 10px;">Delete All</button>
+                    style="flex: 1; padding: var(--space-2-5);">Delete All</button>
             </div>
         </div>
     </div>
@@ -1279,17 +1279,17 @@
     <!-- ===== ACTIVE LEARNING EXPLANATION MODAL ===== -->
     <div id="al-explain-modal" class="al-overlay hidden">
         <div class="al-card">
-            <h2 class="landing-section-title" style="margin-bottom: 8px;">Active Learning</h2>
+            <h2 class="landing-section-title" style="margin-bottom: var(--space-2);">Active Learning</h2>
             <p class="al-card-desc">Short LoRA finetuning on your selection. Subsequent generations will
                 produce ligands closer to this chemical space.</p>
 
             <div class="al-card-divider"></div>
 
-            <div class="info-card" style="margin-bottom: 20px;">
+            <div class="info-card" style="margin-bottom: var(--space-5);">
                 <div class="info-row">
                     <label class="info-label" for="al-ckpt-select">Base Model</label>
                     <select id="al-ckpt-select" class="info-value"
-                        style="width: 170px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: 2px 4px; font-size: 0.92rem; cursor: pointer;">
+                        style="width: 170px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: var(--space-0-5) var(--space-1); font-size: var(--text-xl); cursor: pointer;">
                         <option value="">Loading…</option>
                     </select>
                 </div>
@@ -1300,31 +1300,31 @@
                 <div class="info-row">
                     <label class="info-label" for="al-epochs-input">Epochs</label>
                     <input type="number" id="al-epochs-input" class="info-value" min="1" max="100" step="1" value="2"
-                        style="width: 52px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: 2px 4px; font-size: 0.92rem;">
+                        style="width: 52px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: var(--space-0-5) var(--space-1); font-size: var(--text-xl);">
                 </div>
                 <div class="info-row">
                     <label class="info-label" for="al-lr-input">Learning Rate</label>
                     <input type="text" id="al-lr-input" class="info-value" value="5e-4"
-                        style="width: 64px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: 2px 4px; font-size: 0.92rem;">
+                        style="width: 64px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: var(--space-0-5) var(--space-1); font-size: var(--text-xl);">
                 </div>
                 <div class="info-row">
                     <label class="info-label" for="al-batch-cost-input">Batch Size</label>
                     <input type="number" id="al-batch-cost-input" class="info-value" min="1" max="32" step="1" value="4"
-                        style="width: 52px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: 2px 4px; font-size: 0.92rem;">
+                        style="width: 52px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: var(--space-0-5) var(--space-1); font-size: var(--text-xl);">
                 </div>
                 <div class="info-row">
                     <label class="info-label" for="al-acc-batches-input">Grad. Accum. Steps</label>
                     <input type="number" id="al-acc-batches-input" class="info-value" min="1" max="32" step="1"
                         value="2"
-                        style="width: 52px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: 2px 4px; font-size: 0.92rem;">
+                        style="width: 52px; text-align: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: var(--space-0-5) var(--space-1); font-size: var(--text-xl);">
                 </div>
             </div>
 
             <!-- Round selection for including previous rounds in finetuning -->
-            <div id="al-round-selection" class="hidden" style="margin-bottom: 16px;"></div>
+            <div id="al-round-selection" class="hidden" style="margin-bottom: var(--space-4);"></div>
 
             <button class="btn btn-sm btn-primary btn-block" onclick="startActiveLearning()" id="al-start-btn"
-                style="width: 100%; padding: 10px;">
+                style="width: 100%; padding: var(--space-2-5);">
                 Start LoRA Finetuning
             </button>
 
@@ -1336,7 +1336,7 @@
     <div id="al-progress-modal" class="al-overlay hidden" style="z-index: 10000;">
         <div class="al-card">
             <div id="al-progress-training" style="display: block;">
-                <h2 class="landing-section-title" style="margin-bottom: 4px;">Finetuning</h2>
+                <h2 class="landing-section-title" style="margin-bottom: var(--space-1);">Finetuning</h2>
 
                 <!-- Rotating molecule animation -->
                 <div class="al-molecule-spinner">
@@ -1366,7 +1366,7 @@
                     </svg>
                 </div>
 
-                <p id="al-progress-message" class="al-card-subtitle" style="margin-bottom: 16px;">
+                <p id="al-progress-message" class="al-card-subtitle" style="margin-bottom: var(--space-4);">
                     Starting LoRA finetuning…
                 </p>
 
@@ -1382,7 +1382,7 @@
                 </div>
 
                 <!-- Phase 2: Training (hidden until training starts) -->
-                <div id="al-phase2-section" class="al-phase-section" style="display: none; margin-top: 14px;">
+                <div id="al-phase2-section" class="al-phase-section" style="display: none; margin-top: var(--space-3-5);">
                     <div class="al-phase-header">
                         <span class="al-phase-label">LoRA Training</span>
                         <span id="al-phase2-pct" class="al-phase-pct">0%</span>
@@ -1393,38 +1393,38 @@
                 </div>
 
                 <button id="al-cancel-btn" class="btn btn-sm btn-outline" onclick="cancelActiveLearning()"
-                    style="margin-top: 18px; width: 100%; padding: 8px;">
+                    style="margin-top: var(--space-4-5); width: 100%; padding: var(--space-2);">
                     Cancel Finetuning
                 </button>
             </div>
 
             <div id="al-progress-cancelled" style="display: none; text-align: center;">
-                <p class="al-card-subtitle" style="margin-bottom: 8px;"><strong>Finetuning Cancelled</strong></p>
-                <p style="color: var(--text-muted); font-size: 15px; margin-bottom: 20px;">
+                <p class="al-card-subtitle" style="margin-bottom: var(--space-2);"><strong>Finetuning Cancelled</strong></p>
+                <p style="color: var(--text-muted); font-size: var(--text-md); margin-bottom: var(--space-5);">
                     LoRA finetuning was cancelled. No model changes were applied.
                 </p>
-                <button class="btn btn-sm btn-outline" onclick="closeActiveLearningDone()" style="padding: 8px 32px;">
+                <button class="btn btn-sm btn-outline" onclick="closeActiveLearningDone()" style="padding: var(--space-2) var(--space-8);">
                     Close
                 </button>
             </div>
 
             <div id="al-progress-done" style="display: none; text-align: center;">
-                <p class="al-card-subtitle" style="margin-bottom: 8px;"><strong>LoRA Finetuning Complete</strong></p>
-                <p style="color: var(--text-muted); font-size: 15px; margin-bottom: 20px;">
+                <p class="al-card-subtitle" style="margin-bottom: var(--space-2);"><strong>LoRA Finetuning Complete</strong></p>
+                <p style="color: var(--text-muted); font-size: var(--text-md); margin-bottom: var(--space-5);">
                     Finetuned model active for next generations.<br>
-                    <span style="font-size: 13px;">Use the <strong>Save</strong> button in the Model panel to persist
+                    <span style="font-size: var(--text-sm);">Use the <strong>Save</strong> button in the Model panel to persist
                         this checkpoint.</span>
                 </p>
-                <button class="btn btn-sm btn-primary" onclick="closeActiveLearningDone()" style="padding: 8px 32px;">
+                <button class="btn btn-sm btn-primary" onclick="closeActiveLearningDone()" style="padding: var(--space-2) var(--space-8);">
                     OK
                 </button>
             </div>
 
             <div id="al-progress-error" style="display: none; text-align: center;">
-                <p class="al-card-subtitle" style="margin-bottom: 8px; color: var(--error);"><strong>Finetuning
+                <p class="al-card-subtitle" style="margin-bottom: var(--space-2); color: var(--error);"><strong>Finetuning
                         Failed</strong></p>
-                <p id="al-error-message" style="color: var(--text-muted); font-size: 15px; margin-bottom: 20px;"></p>
-                <button class="btn btn-sm btn-outline" onclick="closeActiveLearningDone()" style="padding: 8px 32px;">
+                <p id="al-error-message" style="color: var(--text-muted); font-size: var(--text-md); margin-bottom: var(--space-5);"></p>
+                <button class="btn btn-sm btn-outline" onclick="closeActiveLearningDone()" style="padding: var(--space-2) var(--space-8);">
                     Close
                 </button>
             </div>
