@@ -49,7 +49,7 @@ dialog {
     /* ── Text ── */
     --text-primary: #2c2731;
     --text-secondary: #594f62;
-    --text-muted: #857693;
+    --text-muted: #645773;
 
     /* ── Semantic ── */
     --accent: #9c8aac;
@@ -64,6 +64,14 @@ dialog {
     --selected: #CE93D8;
     --selected-glow: rgba(206, 147, 216, 0.25);
     --selected-bg: rgba(206, 147, 216, 0.12);
+
+    /* ── Active / toggled control state (single source of truth) ── */
+    --active-fg: #7b4fc4;
+    --active-border: #b69adf;
+    --active-bg: #efe7fb;
+
+    /* ── Focus ring ── */
+    --focus-ring: var(--lavender-deeper);
 
     /* ── Gradients ── */
     --gradient-1: linear-gradient(135deg, #DFC6F6 0%, #D5D653 100%);
@@ -80,6 +88,42 @@ dialog {
     --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
     --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.10);
     --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.14);
+}
+
+/* ===== ACCESSIBILITY ===== */
+
+/* Visible keyboard focus across all interactive elements. Uses :focus-visible
+   so mouse clicks don't show a ring; box-shadow ring won't be clipped by
+   overflow:hidden ancestors the way outline can be. */
+:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible,
+[role="button"]:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+/* Respect users who prefer reduced motion: neutralise the looping/decorative
+   animations and long transitions. Status badges carry text labels, so losing
+   the spin/pulse never loses meaning. */
+@media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
 }
 
 /* ===== RESET ===== */
@@ -118,12 +162,17 @@ body {
     display: flex;
     align-items: center;
     gap: 16px;
+    /* Allow the subtitle to ellipsis instead of pushing the right-hand
+       controls off the (overflow:hidden) topbar on narrow widths. */
+    min-width: 0;
+    flex: 1 1 auto;
 }
 
 .topbar-right {
     display: flex;
     align-items: center;
     gap: 12px;
+    flex: 0 0 auto;
 }
 
 .btn-reset-session {
@@ -154,6 +203,7 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
     cursor: pointer;
     border: none;
     background: none;
@@ -192,6 +242,25 @@ body {
     border-left: 1px solid var(--border);
     padding-left: 16px;
     letter-spacing: 0.2px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Drop the subtitle entirely on narrow widths so the logo + actions never
+   collide. */
+@media (max-width: 1100px) {
+    .topbar-subtitle {
+        display: none;
+    }
+
+    /* Drop the decorative toolbar separators once the toolbar is tight enough
+       to wrap — groups stay visually separated by the row spacing, and a lone
+       separator can never strand itself on its own wrapped row. */
+    .viewer-toolbar .toolbar-sep {
+        display: none;
+    }
 }
 
 .topbar-info {
@@ -264,8 +333,12 @@ body {
 
 /* ===== PANELS ===== */
 .panel {
-    width: 420px;
-    min-width: 200px;
+    /* Intrinsic, non-collapsing width that scales with the viewport.
+       flex:0 0 auto keeps flex-basis:auto so the `width` (and the inline
+       width set by the drag-resize handler) is honoured; the clamp lower
+       bound is the real floor, so panels never smash to an unreadable size. */
+    flex: 0 0 auto;
+    width: clamp(300px, 23vw, 420px);
     background: transparent;
     overflow-y: auto;
     padding: 18px 24px;
@@ -284,17 +357,8 @@ body {
 }
 
 /* Left-panel sections get a card-like sub-panel treatment */
-.panel-left>.panel-section {
-    background:
-        linear-gradient(#F2EDE5, #F2EDE5) padding-box,
-        linear-gradient(135deg, rgba(223, 198, 246, 0.45), rgba(168, 148, 186, 0.30)) border-box;
-    border: 1px solid transparent;
-    border-radius: var(--radius-md);
-    padding: 14px 16px;
-    box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.55);
-}
-
-/* Right-panel sections also get card treatment */
+/* Left- and right-panel sections share the same card treatment. */
+.panel-left>.panel-section,
 .panel-right>.panel-section {
     background:
         linear-gradient(#F2EDE5, #F2EDE5) padding-box,
@@ -374,11 +438,20 @@ body {
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: all .15s ease;
-    opacity: 0;
+    /* Discoverable at rest (was 0 — invisible on touch/keyboard), rising to
+       full on hover/focus/active. */
+    opacity: 0.55;
 }
 
 .result-card:hover .set-ref-btn,
+.result-card:focus-within .set-ref-btn,
 .result-card.active .set-ref-btn {
+    opacity: 1;
+}
+
+/* The Original-ligand card's "Set as Reference" is its single primary action —
+   always fully visible. */
+.original-ligand-card .set-ref-btn {
     opacity: 1;
 }
 
@@ -544,7 +617,8 @@ body {
     margin-top: 0.4em;
 }
 
-.rcsb-divider {
+.rcsb-divider,
+.db-loaders-divider {
     height: 2px;
     margin: 14px 0 12px;
     border: none;
@@ -791,7 +865,31 @@ body {
     gap: 8px;
     margin-bottom: 10px;
     min-width: 0;
-    overflow: hidden;
+    /* No overflow:hidden — it clipped the trailing help-tooltip "?" on rows
+       like the random-seed input. min-width:0 on the children keeps the row
+       contained instead. */
+}
+
+/* Stacked variant: a label on its own line above a slider row. (These classes
+   were used in the markup but had no rules, so sliders relied on accidental
+   block flow.) */
+.setting-group-stacked {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+    min-width: 0;
+}
+
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.slider-row .slider {
+    min-width: 0;
 }
 
 .setting-label {
@@ -1075,7 +1173,7 @@ body {
     font-size: 14px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    background: var(--bg-surface);
+    background: var(--bg-elevated);
     color: var(--text-primary);
     font-family: var(--font-mono);
 }
@@ -1210,7 +1308,7 @@ body {
     position: absolute;
     bottom: 16px;
     right: 16px;
-    width: 420px;
+    width: min(420px, calc(100% - 32px));
     background: rgba(255, 255, 255, 0.95);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
@@ -1223,7 +1321,9 @@ body {
     resize: both;
     min-width: 300px;
     min-height: 280px;
-    max-width: 90vw;
+    /* Relative to the viewer (this overlay's positioned ancestor), so it never
+       spills past a narrow viewer column. */
+    max-width: calc(100% - 32px);
     max-height: 80vh;
     display: flex;
     flex-direction: column;
@@ -1387,6 +1487,36 @@ body {
     border-color: var(--lavender);
 }
 
+/* Branded native <select> (was unstyled → OS-default, off-brand). appearance:none
+   plus an inline SVG chevron keeps a consistent arrow across browsers. */
+.select-input {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 30px 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background-color: var(--bg-elevated);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%23645773' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    transition: border-color .2s;
+}
+
+.select-input:hover {
+    border-color: var(--border-hover);
+}
+
+.select-input:focus {
+    outline: none;
+    border-color: var(--lavender);
+}
+
 /* Prior cloud placement button */
 #place-prior-btn.placing {
     background: var(--lavender);
@@ -1464,15 +1594,15 @@ body {
 }
 
 .btn-outline:active:not(:disabled) {
-    color: #7c3aed;
-    border-color: #b388ff;
-    background: #f1eaff;
+    color: var(--active-fg);
+    border-color: var(--active-border);
+    background: var(--active-bg);
 }
 
 .btn-outline.btn-toggled {
-    color: #7c3aed;
-    border-color: #b388ff;
-    background: #f1eaff;
+    color: var(--active-fg);
+    border-color: var(--active-border);
+    background: var(--active-bg);
 }
 
 .btn-primary {
@@ -1578,6 +1708,11 @@ body {
 /* ===== 3D VIEWER ===== */
 .viewer-container {
     flex: 1;
+    /* Allow the viewer to shrink below its toolbar's intrinsic width so the
+       side panels keep their readable width instead of absorbing all the
+       horizontal deficit. 360px is the hard floor (kept in sync with the
+       MIN_VIEWER constant in app.js). */
+    min-width: 360px;
     display: flex;
     flex-direction: column;
     position: relative;
@@ -1589,7 +1724,11 @@ body {
 
 .viewer-toolbar {
     display: flex;
-    flex-wrap: nowrap;
+    /* Wrap to additional rows when the viewer is narrow instead of forcing a
+       huge min-content width onto the layout (the original cause of the panel
+       collapse). Groups keep white-space:nowrap so labels never break. */
+    flex-wrap: wrap;
+    row-gap: 6px;
     justify-content: center;
     align-items: center;
     padding: 0.5em 1em;
@@ -1635,9 +1774,9 @@ body {
 }
 
 .toolbar-btn.active {
-    color: #7c3aed;
-    border-color: #b388ff;
-    background: #f1eaff;
+    color: var(--active-fg);
+    border-color: var(--active-border);
+    background: var(--active-bg);
 }
 
 .viewer3d-canvas {
@@ -1749,9 +1888,9 @@ body {
 }
 
 .toolbar-btn.molstar-active {
-    color: var(--accent);
-    border-color: var(--accent);
-    background: var(--accent-glow);
+    color: var(--active-fg);
+    border-color: var(--active-border);
+    background: var(--active-bg);
 }
 
 .viewer-container.molstar-freeze .viewer-toolbar .toolbar-btn:not(#btn-molstar) {
@@ -1873,11 +2012,15 @@ button.result-card {
     line-height: 1.4;
     max-height: 40px;
     overflow: hidden;
+    /* Fade the clipped tail instead of a hard cut, signalling there's more. */
+    -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 65%, transparent 100%);
 }
 
 .result-props {
     display: flex;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 4px 12px;
     margin-top: 6px;
     font-size: 13px;
     color: var(--text-muted);
@@ -2110,6 +2253,14 @@ button.result-card {
     border-left: 3px solid var(--error);
 }
 
+.toast.toast-warning {
+    border-left: 3px solid var(--warning);
+}
+
+.toast.toast-info {
+    border-left: 3px solid var(--accent);
+}
+
 @keyframes toast-in {
     from {
         opacity: 0;
@@ -2123,21 +2274,34 @@ button.result-card {
 }
 
 /* Responsive */
-@media (max-width:1200px) {
-    .panel {
-        width: 320px;
-        min-width: 200px;
-    }
-}
+/* The three-column layout stays continuously responsive from very wide
+   screens down to ~1025px via the clamp() on .panel and the viewer's
+   min-width:0-style shrink — no per-width panel overrides needed. */
 
-@media (max-width:900px) {
+/* Tablet / small laptop: stack into a single vertically-scrolling column.
+   The viewer gets an explicit height so the 3D canvas never collapses, and
+   the (now meaningless) horizontal resize handles are hidden. */
+@media (max-width:1024px) {
     .main-container {
         flex-direction: column;
+        overflow-y: auto;
+        gap: 12px;
     }
 
     .panel {
+        flex: 0 0 auto;
         width: 100%;
-        max-height: 300px;
+        max-height: none;
+    }
+
+    .viewer-container {
+        min-width: 0;
+        min-height: 62vh;
+    }
+
+    .panel-resize-handle,
+    .panel-resize-handle-left {
+        display: none;
     }
 }
 
@@ -2569,11 +2733,12 @@ button.result-card {
 
 .smiles-input-row .input-text {
     flex: 1;
+    min-width: 0;
     font-family: var(--font-mono);
     font-size: 14px;
     padding: 6px 10px;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-sm);
     background: var(--bg-elevated);
     color: var(--text-primary);
     outline: none;
@@ -2607,9 +2772,9 @@ button.result-card {
     width: 100%;
     padding: 6px 8px;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-sm);
     background: var(--bg-elevated);
-    color: var(--text);
+    color: var(--text-primary);
     font-size: 14px;
     cursor: pointer;
     outline: none;
@@ -2635,6 +2800,7 @@ button.result-card {
 /* ===== BULK ACTIONS ===== */
 .bulk-actions-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     align-items: center;
     margin-bottom: 8px;
@@ -2843,6 +3009,7 @@ button.result-card {
 
 .gen-hs-buttons {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
 }
@@ -2897,8 +3064,8 @@ button.result-card {
 }
 
 .mol-2d-tab.active {
-    color: #7c3aed;
-    background: #f1eaff;
+    color: var(--active-fg);
+    background: var(--active-bg);
 }
 
 /* ===== Inpainting Legend ===== */
@@ -3070,7 +3237,7 @@ button.result-card {
 .modal-error {
     text-align: center;
     padding: 40px 20px;
-    color: #cc3333;
+    color: var(--error);
     font-size: 17px;
     grid-column: 1 / -1;
 }
@@ -3288,7 +3455,7 @@ button.result-card {
 }
 
 .prop-alert {
-    color: #cc3333;
+    color: var(--error);
     font-weight: 600;
 }
 
@@ -3449,12 +3616,7 @@ button.result-card {
 }
 
 /* Strong divider between guidance and database loaders */
-.db-loaders-divider {
-    height: 2px;
-    margin: 14px 0 12px;
-    border: none;
-    background: radial-gradient(ellipse at center, var(--lavender) 0%, var(--lavender-dark) 40%, transparent 80%);
-}
+/* (.db-loaders-divider shares the .rcsb-divider rule above) */
 
 /* ===== Model Card (left sidebar) ===== */
 
@@ -3523,7 +3685,7 @@ button.result-card {
 }
 
 .model-save-status.error {
-    color: #cc3333;
+    color: var(--error);
 }
 
 /* Inline load expansion */
@@ -3560,7 +3722,7 @@ button.result-card {
     color: var(--text-primary);
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-sm);
     cursor: pointer;
     transition: all 0.15s;
 }

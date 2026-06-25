@@ -262,16 +262,24 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
                 "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data: blob:; "
+                # Mol* spawns blob-URL web workers for parsing/rendering.
+                "worker-src 'self' blob:; "
                 "connect-src 'self'; "
                 "frame-ancestors 'self'"
             )
         else:
             csp = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline'; "
+                # RDKit.js (Emscripten runtime) needs 'unsafe-eval' to compile
+                # its WebAssembly module for the client-side 2D depictions used
+                # throughout the ligand cards ('wasm-unsafe-eval' alone is not
+                # enough — the runtime evaluates JS strings). This matches the
+                # molstar branch above; 'unsafe-inline' is already permitted.
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
                 "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
                 "font-src 'self' https://fonts.gstatic.com; "
-                "img-src 'self' data:; "
+                # blob: lets Plotly's "download plot as PNG" button work.
+                "img-src 'self' data: blob:; "
                 "connect-src 'self'; "
                 "frame-src 'self'; "
                 "frame-ancestors 'self'"

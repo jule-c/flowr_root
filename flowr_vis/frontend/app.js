@@ -158,6 +158,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Start with landing page
     initLandingPage();
     initRDKitLib();
+
+    // Keyboard activation for role="button" elements (logo, ligand cards) that
+    // carry only onclick handlers — Enter/Space should activate them too.
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+        const el = e.target.closest && e.target.closest('[role="button"][tabindex]');
+        if (!el) return;
+        // Don't hijack keys aimed at a real control nested inside the element
+        // (e.g. the "Set as Reference" <button> inside a ligand card).
+        if (e.target !== el && e.target.closest('button, a, input, select, textarea')) return;
+        e.preventDefault();
+        el.click();
+    });
 });
 
 function initMainApp() {
@@ -5157,8 +5170,8 @@ function initResizeHandle() {
     const panel = document.getElementById('results-panel');
     const handleLeft = document.getElementById('panel-resize-handle-left');
     const panelLeft = document.querySelector('.panel:not(.panel-right)');
-    const MIN_PANEL = 200;
-    const MIN_VIEWER = 300;
+    const MIN_PANEL = 280;            // readable floor for a dragged panel
+    const MIN_VIEWER = 360;           // keep in sync with .viewer-container min-width in style.css
     const HANDLE_SPACE = 10;
 
     // Right panel resize handle
@@ -5216,7 +5229,9 @@ function initResizeHandle() {
     // Reset inline panel widths on viewport resize if they would cause overflow
     window.addEventListener('resize', () => {
         const vw = window.innerWidth;
-        if (vw < 900) {
+        // Below the stacking breakpoint (style.css @media max-width:1024px) the
+        // panels are full-width, so any dragged inline width must be cleared.
+        if (vw <= 1024) {
             if (panel) panel.style.width = '';
             if (panelLeft) panelLeft.style.width = '';
             return;

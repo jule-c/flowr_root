@@ -22,7 +22,7 @@
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
 
-    <link rel="stylesheet" href="/static/style.css?v=20260326e">
+    <link rel="stylesheet" href="/static/style.css?v=20260625a">
     <link rel="icon" type="image/svg+xml"
         href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='28' y2='28'%3E%3Cstop offset='0%25' stop-color='%23DFC6F6'/%3E%3Cstop offset='100%25' stop-color='%23D5D653'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='14' cy='14' r='13' stroke='url(%23g)' stroke-width='2' fill='none'/%3E%3Ccircle cx='14' cy='14' r='6' fill='url(%23g)'/%3E%3Ccircle cx='8' cy='8' r='2.5' fill='%23DFC6F6'/%3E%3Ccircle cx='20' cy='8' r='2.5' fill='%23c8b2dd'/%3E%3Ccircle cx='8' cy='20' r='2.5' fill='%23D5D653'/%3E%3Ccircle cx='20' cy='20' r='2.5' fill='%23ae9e66'/%3E%3C/svg%3E">
 </head>
@@ -213,10 +213,15 @@
                 <input type="file" id="main-session-file" accept=".json" class="hidden">
                 <button class="btn-reset-session" id="reset-session-btn" onclick="resetCurrentSession()"
                     title="Clear uploads and reset current session">
-                    &#x21BB; RESET
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="23 4 23 10 17 10" />
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                    </svg>
+                    RESET
                 </button>
-                <span id="status-badge" class="badge badge-idle">Ready</span>
-                <span class="topbar-info" id="backend-status">●</span>
+                <span id="status-badge" class="badge badge-idle" role="status" aria-live="polite">Ready</span>
+                <span class="topbar-info" id="backend-status" role="img" aria-label="Backend status">●</span>
             </div>
         </header>
 
@@ -869,7 +874,7 @@
             <!-- ===== CENTER: 3D VIEWER ===== -->
             <main class="viewer-container">
                 <div class="viewer-toolbar">
-                    <div class="toolbar-group">
+                    <div class="toolbar-group sbdd-only">
                         <button class="toolbar-btn active sbdd-only" onclick="setViewMode('complex')" id="view-complex"
                             title="Show complex">
                             <svg width="18" height="15" viewBox="0 0 18 15" fill="none" stroke="currentColor"
@@ -901,8 +906,8 @@
                             </svg> Ligand
                         </button>
                     </div>
-                    <div class="toolbar-sep"></div>
-                    <div class="toolbar-group">
+                    <div class="toolbar-sep sbdd-only"></div>
+                    <div class="toolbar-group sbdd-only">
                         <button class="toolbar-btn sbdd-only" onclick="toggleSurface()" id="btn-surface"
                             title="Toggle protein surface">
                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
@@ -941,7 +946,7 @@
                             </svg> Interactions
                         </button>
                     </div>
-                    <div class="toolbar-sep"></div>
+                    <div class="toolbar-sep sbdd-only"></div>
                     <div class="toolbar-group">
                         <button class="toolbar-btn" onclick="centerOnLigand()" title="Zoom to ligand">
                             &#x2299; Focus Ligand
@@ -970,8 +975,8 @@
                             </svg> Prior Cloud
                         </button>
                     </div>
-                    <div class="toolbar-sep" id="molstar-sep"></div>
-                    <div class="toolbar-group" id="molstar-group">
+                    <div class="toolbar-sep sbdd-only" id="molstar-sep"></div>
+                    <div class="toolbar-group sbdd-only" id="molstar-group">
                         <button class="toolbar-btn sbdd-only" onclick="toggleMolstar()" id="btn-molstar"
                             title="Open Molstar viewer">
                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor"
@@ -1416,7 +1421,7 @@
             </div>
 
             <div id="al-progress-error" style="display: none; text-align: center;">
-                <p class="al-card-subtitle" style="margin-bottom: 8px; color: #cc3333;"><strong>Finetuning
+                <p class="al-card-subtitle" style="margin-bottom: 8px; color: var(--error);"><strong>Finetuning
                         Failed</strong></p>
                 <p id="al-error-message" style="color: var(--text-muted); font-size: 15px; margin-bottom: 20px;"></p>
                 <button class="btn btn-sm btn-outline" onclick="closeActiveLearningDone()" style="padding: 8px 32px;">
@@ -1487,7 +1492,7 @@
 
 
     <!-- ===== JAVASCRIPT ===== -->
-    <script src="/static/app.js?v=20260326b"></script>
+    <script src="/static/app.js?v=20260625a"></script>
     <script>
         (function () {
             var protArea = document.getElementById('protein-upload-area');
