@@ -30,6 +30,7 @@ import time
 import urllib.parse
 import uuid
 from collections import deque, namedtuple
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -345,6 +346,30 @@ atexit.register(_cleanup_upload_dir)
 
 JOBS: Dict[str, Dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
+
+# ── Shared bounded thread pool for CPU-bound request work ──
+# This server is a SINGLE uvicorn process with a SINGLE event loop, so any
+# blocking call made directly inside an `async def` handler freezes EVERY other
+# request (health checks, job-status polling, other users) for its full
+# duration. Heavy synchronous work — RDKit/OpenEye parsing & drawing, numpy
+# distance math, scikit-learn / UMAP fit_transform — is therefore offloaded to
+# this pool via `_run_cpu` so the loop stays responsive.
+#
+# A *bounded* pool is deliberate (vs asyncio.to_thread's default ~32-worker
+# executor): RDKit ETKDG (numThreads=0) and OpenEye Omega already use internal
+# multithreading, so running many heavy calls at once would oversubscribe the
+# cores and make latency worse. These C/C++ extensions release the GIL, so the
+# event loop genuinely regains control while they run.
+_CPU_POOL = ThreadPoolExecutor(
+    max_workers=min(8, (os.cpu_count() or 4)),
+    thread_name_prefix="flowr-cpu",
+)
+
+
+async def _run_cpu(func, *args):
+    """Await a blocking CPU-bound callable on the shared pool, off the event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_CPU_POOL, func, *args)
 
 # ── Per-user settings (checkpoint, workflow type) ──
 _user_settings: Dict[str, Dict[str, Any]] = {}
@@ -2588,77 +2613,85 @@ async def generate_conformers(
     job_dir = _job_upload_dir(user, job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    conformers = []
+    def _compute_conformers():
+        # Conformer generation (OpenEye Omega or RDKit ETKDG fallback) is
+        # multi-second CPU work; this runs on the shared pool, off the event
+        # loop, so the rest of the server stays responsive. Logic unchanged.
+        conformers = []
 
-    if OPENEYE_AVAILABLE:
-        try:
-            # Parse SMILES into OEMol
-            oemol = oechem.OEMol()
-            if not oechem.OESmilesToMol(oemol, smiles):
-                raise HTTPException(400, f"Invalid SMILES: {smiles}")
-            oechem.OEAddExplicitHydrogens(oemol)
+        if OPENEYE_AVAILABLE:
+            try:
+                # Parse SMILES into OEMol
+                oemol = oechem.OEMol()
+                if not oechem.OESmilesToMol(oemol, smiles):
+                    raise HTTPException(400, f"Invalid SMILES: {smiles}")
+                oechem.OEAddExplicitHydrogens(oemol)
 
-            # Run Omega conformer generation
-            # Use OEOmegaSampling_Pose (matches working oe_conformer.py).
-            omega_opts = oeomega.OEOmegaOptions(oeomega.OEOmegaSampling_Pose)
-            omega_opts.SetMaxConfs(max_confs)
-            omega_opts.SetStrictStereo(False)
-            omega = oeomega.OEOmega(omega_opts)
-            ret = omega.Build(oemol)
-            if ret != oeomega.OEOmegaReturnCode_Success:
-                raise HTTPException(
-                    500,
-                    f"Omega conformer generation failed: "
-                    f"{oeomega.OEGetOmegaError(ret)}",
+                # Run Omega conformer generation
+                # Use OEOmegaSampling_Pose (matches working oe_conformer.py).
+                omega_opts = oeomega.OEOmegaOptions(oeomega.OEOmegaSampling_Pose)
+                omega_opts.SetMaxConfs(max_confs)
+                omega_opts.SetStrictStereo(False)
+                omega = oeomega.OEOmega(omega_opts)
+                ret = omega.Build(oemol)
+                if ret != oeomega.OEOmegaReturnCode_Success:
+                    raise HTTPException(
+                        500,
+                        f"Omega conformer generation failed: "
+                        f"{oeomega.OEGetOmegaError(ret)}",
+                    )
+
+                # Extract each conformer as separate SDF + energy
+                for i, conf in enumerate(oemol.GetConfs()):
+                    # Get energy
+                    energy = conf.GetEnergy()
+
+                    # Convert to RDKit mol for SDF output
+                    single_mol = oechem.OEMol(conf)
+                    ofs = oechem.oemolostream()
+                    ofs.SetFormat(oechem.OEFormat_SDF)
+                    ofs.openstring()
+                    oechem.OEWriteMolecule(ofs, single_mol)
+                    sdf_block = ofs.GetString().decode("utf-8")
+
+                    # Also try to get an RDKit mol for property computation
+                    rdmol = Chem.MolFromMolBlock(sdf_block, removeHs=False)
+                    props = _compute_all_properties(rdmol) if rdmol else {}
+
+                    conformers.append(
+                        {
+                            "idx": i,
+                            "sdf": sdf_block,
+                            "energy": round(energy, 4),
+                            "properties": props,
+                        }
+                    )
+
+            except HTTPException:
+                raise
+            except Exception as exc:
+                # Fall back to RDKit if OE fails
+                logger.warning(
+                    "OpenEye conformer generation failed: %s, falling back to RDKit",
+                    exc,
                 )
-
-            # Extract each conformer as separate SDF + energy
-            for i, conf in enumerate(oemol.GetConfs()):
-                # Get energy
-                energy = conf.GetEnergy()
-
-                # Convert to RDKit mol for SDF output
-                single_mol = oechem.OEMol(conf)
-                ofs = oechem.oemolostream()
-                ofs.SetFormat(oechem.OEFormat_SDF)
-                ofs.openstring()
-                oechem.OEWriteMolecule(ofs, single_mol)
-                sdf_block = ofs.GetString().decode("utf-8")
-
-                # Also try to get an RDKit mol for property computation
-                rdmol = Chem.MolFromMolBlock(sdf_block, removeHs=False)
-                props = _compute_all_properties(rdmol) if rdmol else {}
-
-                conformers.append(
-                    {
-                        "idx": i,
-                        "sdf": sdf_block,
-                        "energy": round(energy, 4),
-                        "properties": props,
-                    }
-                )
-
-        except HTTPException:
-            raise
-        except Exception as exc:
-            # Fall back to RDKit if OE fails
-            logger.warning(
-                "OpenEye conformer generation failed: %s, falling back to RDKit", exc
-            )
+                conformers = _generate_conformers_rdkit(smiles, max_confs)
+        else:
             conformers = _generate_conformers_rdkit(smiles, max_confs)
-    else:
-        conformers = _generate_conformers_rdkit(smiles, max_confs)
 
-    if not conformers:
-        raise HTTPException(500, "Failed to generate any conformers.")
+        if not conformers:
+            raise HTTPException(500, "Failed to generate any conformers.")
 
-    # Sort by energy (lowest first); None energies (MMFF failures) sort last
-    conformers.sort(
-        key=lambda c: c["energy"] if c.get("energy") is not None else float("inf")
-    )
-    # Re-index after sorting
-    for i, c in enumerate(conformers):
-        c["idx"] = i
+        # Sort by energy (lowest first); None energies (MMFF failures) sort last
+        conformers.sort(
+            key=lambda c: c["energy"] if c.get("energy") is not None else float("inf")
+        )
+        # Re-index after sorting
+        for i, c in enumerate(conformers):
+            c["idx"] = i
+        return conformers
+
+    conformers = await _run_cpu(_compute_conformers)
 
     # Save conformers to job directory for later selection
     with _jobs_lock:
@@ -2689,9 +2722,14 @@ def _generate_conformers_rdkit(smiles: str, max_confs: int = 10) -> list:
         return []
     mol = Chem.AddHs(mol)
 
-    # Generate conformers
+    # Generate conformers.
+    # NOTE: ETKDGv3 exposes `maxIterations`, not `maxAttempts` — the latter was
+    # never a valid attribute on the params object, so the old code raised
+    # `AttributeError: Cannot set unknown attribute 'maxAttempts'` and the RDKit
+    # fallback path crashed with a 500 whenever OpenEye was unavailable (i.e. the
+    # entire /generate-conformers feature was broken without an OE license).
     params = AllChem.ETKDGv3()
-    params.maxAttempts = 200
+    params.maxIterations = 200
     params.numThreads = 0
     params.pruneRmsThresh = 0.5
     cids = AllChem.EmbedMultipleConfs(mol, numConfs=max_confs, params=params)
