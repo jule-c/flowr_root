@@ -29,7 +29,7 @@ import threading
 import time
 import urllib.parse
 import uuid
-from collections import deque, namedtuple
+from collections import OrderedDict, deque, namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -1098,12 +1098,43 @@ def _parse_pdb_atoms(pdb_path: str) -> List[Dict[str, Any]]:
     return atoms
 
 
+# Parsed protein atoms cached by (path, mtime, size). A job's protein file is
+# written once at upload and never mutated, so the parsed list is stable; the
+# stat key re-parses only if the file ever changes. /compute-interactions is
+# called once per ligand the user inspects — all against the SAME protein — so
+# this removes a full re-parse of a multi-thousand-atom PDB on every click.
+_PDB_ATOM_CACHE: "OrderedDict[tuple, List[Dict[str, Any]]]" = OrderedDict()
+_PDB_ATOM_CACHE_MAX = 8
+_pdb_atom_cache_lock = threading.Lock()
+
+
+def _parse_pdb_atoms_cached(pdb_path: str) -> List[Dict[str, Any]]:
+    """LRU-cached :func:`_parse_pdb_atoms`. Returned list is read-only by callers."""
+    try:
+        st = os.stat(pdb_path)
+        key = (pdb_path, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return _parse_pdb_atoms(pdb_path)
+    with _pdb_atom_cache_lock:
+        cached = _PDB_ATOM_CACHE.get(key)
+        if cached is not None:
+            _PDB_ATOM_CACHE.move_to_end(key)
+            return cached
+    atoms = _parse_pdb_atoms(pdb_path)
+    with _pdb_atom_cache_lock:
+        _PDB_ATOM_CACHE[key] = atoms
+        _PDB_ATOM_CACHE.move_to_end(key)
+        while len(_PDB_ATOM_CACHE) > _PDB_ATOM_CACHE_MAX:
+            _PDB_ATOM_CACHE.popitem(last=False)
+    return atoms
+
+
 def _compute_interactions(  # NOSONAR
     pdb_path: str, ligand_mol, cutoff: float = 4.0
 ) -> List[Dict[str, Any]]:
     """Protein-ligand interaction detection using vectorized numpy distance computation."""
     # Acknowledged: high cognitive complexity — refactoring deferred (python:S3776).
-    prot_atoms = _parse_pdb_atoms(pdb_path)
+    prot_atoms = _parse_pdb_atoms_cached(pdb_path)
     if not prot_atoms or ligand_mol is None:
         return []
 
@@ -4141,11 +4172,13 @@ async def compute_interactions_endpoint(
     if not protein_path:
         raise HTTPException(400, _ERR_NO_PROTEIN)
 
+    # Resolve the ligand source on the loop (fast dict reads); the heavy work
+    # (RDKit parse + PDB parse + pairwise distance math) runs off the loop.
     if ligand_idx < 0:
         ligand_path = job.get("ligand_path")
         if not ligand_path:
             raise HTTPException(400, "No reference ligand.")
-        mol = _read_ligand_mol(ligand_path)
+        sdf_source = ("path", ligand_path)
     else:
         results = job.get("results", [])
         if ligand_idx >= len(results):
@@ -4153,12 +4186,18 @@ async def compute_interactions_endpoint(
         sdf_data = results[ligand_idx].get("sdf", "")
         if not sdf_data:
             raise HTTPException(400, "No SDF data.")
-        mol = Chem.MolFromMolBlock(sdf_data, removeHs=True)
+        sdf_source = ("block", sdf_data)
 
-    if mol is None:
-        raise HTTPException(400, _ERR_CANNOT_PARSE_LIGAND)
+    def _compute():
+        if sdf_source[0] == "path":
+            mol = _read_ligand_mol(sdf_source[1])
+        else:
+            mol = Chem.MolFromMolBlock(sdf_source[1], removeHs=True)
+        if mol is None:
+            raise HTTPException(400, _ERR_CANNOT_PARSE_LIGAND)
+        return _compute_interactions(protein_path, mol)
 
-    interactions = _compute_interactions(protein_path, mol)
+    interactions = await _run_cpu(_compute)
     return {"interactions": interactions, "count": len(interactions)}
 
 
