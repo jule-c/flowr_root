@@ -5941,6 +5941,27 @@ function _getSelectedOriginalIndices() {
 }
 
 /**
+ * Inverse of the _original_idx mapping: given an ORIGINAL (pre-rank-select)
+ * generation index, return its CURRENT position in state.generatedResults, or
+ * -1 if it is no longer present (e.g. filtered out by a top-N rank & select).
+ *
+ * Chemical-space and affinity plot points carry the server's original index,
+ * but showGeneratedLigand() indexes state.generatedResults positionally. After
+ * rank & select that array is reordered/truncated (each entry tagged with
+ * _original_idx), so the two index spaces diverge and clicking a point would
+ * otherwise open the WRONG ligand. Without rank & select _original_idx is
+ * absent, so this is the identity (pos === origIdx) and behaviour is unchanged.
+ */
+function _originalIdxToPosition(origIdx) {
+    const results = state.generatedResults || [];
+    for (let i = 0; i < results.length; i++) {
+        const oi = results[i] ? results[i]._original_idx : undefined;
+        if ((oi != null ? oi : i) === origIdx) return i;
+    }
+    return -1;
+}
+
+/**
  * Filter server-returned ligand array by current checkbox selection.
  * Previous rounds are always included (their ligands were "kept").
  * Current round is filtered to only checked ligands.
@@ -7754,7 +7775,10 @@ function _renderChemSpacePlot(data) {
         if (point?.data.name === 'Reference') return;
         const cd = point?.customdata;
         if (cd && cd.iteration === latestIter) {
-            showGeneratedLigand(cd.localIdx);
+            // cd.localIdx is the ORIGINAL index; translate to the current array
+            // position so rank & select still selects the clicked ligand.
+            const pos = _originalIdxToPosition(cd.localIdx);
+            if (pos >= 0) showGeneratedLigand(pos);
         }
     });
 }
@@ -8221,7 +8245,10 @@ function _renderAffinityPlots(data) {
         document.getElementById(plotId).on('plotly_click', (eventData) => {
             const cd = eventData.points[0]?.customdata;
             if (typeof cd?.index === 'number' && cd.iteration === state.iterationIdx - 1) {
-                showGeneratedLigand(cd.index);
+                // cd.index is the ORIGINAL index; translate to the current array
+                // position so rank & select still selects the clicked ligand.
+                const pos = _originalIdxToPosition(cd.index);
+                if (pos >= 0) showGeneratedLigand(pos);
             }
         });
     });
