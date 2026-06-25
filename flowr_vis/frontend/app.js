@@ -1669,6 +1669,10 @@ function _getActiveLigandModel() {
 }
 
 function applyProteinStyle() {
+    // No protein model yet (e.g. a hover/clear event firing during or right
+    // after upload): nothing to style. 3Dmol's setStyle dereferences the model,
+    // so styling a null model throws. Mirrors the guard in reapplyHoverable().
+    if (!state.proteinModel) return;
     // Base cartoon — use bolder style in protein-only view
     const isProteinView = state.viewMode === 'protein';
     state.viewer.setStyle(
