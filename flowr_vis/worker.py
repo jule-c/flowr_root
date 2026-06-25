@@ -1670,22 +1670,47 @@ def _compute_cloud_size(  # NOSONAR
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _filter_against_history(gen_ligs, previous_smiles, threshold, vocab):  # NOSONAR
-    """Filter generated ligands against previously generated SMILES for novelty."""
+def _build_history_fps(previous_smiles):
+    """Morgan fingerprints for the active-learning generation history.
+
+    Hoisted out of _filter_against_history so the per-batch sampling loop does
+    not rebuild these identical fingerprints on every iteration. Returns the
+    same list (same order, same Morgan params) the original inline loop
+    produced, so downstream novelty-filter decisions are bit-for-bit unchanged.
+    """
+    from rdkit.Chem import AllChem
+
+    history_fps = []
+    for smi in previous_smiles or []:
+        mol = Chem.MolFromSmiles(smi)
+        if mol is not None:
+            history_fps.append(
+                AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)
+            )
+    return history_fps
+
+
+def _filter_against_history(
+    gen_ligs, previous_smiles, threshold, vocab, history_fps=None
+):  # NOSONAR
+    """Filter generated ligands against previously generated SMILES for novelty.
+
+    ``history_fps`` may be precomputed once (via _build_history_fps) and passed
+    in to avoid rebuilding the identical history fingerprints on every batch;
+    when None it is built from ``previous_smiles``, preserving the original
+    behaviour exactly.
+    """
     # Acknowledged: high cognitive complexity — refactoring deferred (python:S3776).
-    if not previous_smiles or not gen_ligs:
+    if not gen_ligs:
         return gen_ligs
 
     from rdkit import DataStructs
     from rdkit.Chem import AllChem
 
-    # Compute fingerprints for history
-    history_fps = []
-    for smi in previous_smiles:
-        mol = Chem.MolFromSmiles(smi)
-        if mol is not None:
-            fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)
-            history_fps.append(fp)
+    if history_fps is None:
+        if not previous_smiles:
+            return gen_ligs
+        history_fps = _build_history_fps(previous_smiles)
 
     if not history_fps:
         return gen_ligs
@@ -2010,6 +2035,12 @@ def _run_flowr_generation(  # NOSONAR
         _history_removed = 0
         _pf_total_before = 0
         _pf_total_after = 0
+        # Novelty-filter fingerprints depend only on previous_smiles (constant
+        # for this whole generation), so build them ONCE here instead of
+        # rebuilding the identical fingerprints on every sampling iteration.
+        _history_fps = (
+            _build_history_fps(previous_smiles) if previous_smiles else None
+        )
 
         while len(all_gen_ligs) < n_samples and k <= max_sample_iter:
             _raise_if_cancelled(job, "sampling")
@@ -2160,7 +2191,11 @@ def _run_flowr_generation(  # NOSONAR
                 if previous_smiles and (filter_valid_unique or filter_diversity):
                     _hist_before = len(all_gen_ligs)
                     all_gen_ligs = _filter_against_history(
-                        all_gen_ligs, previous_smiles, diversity_threshold, vocab
+                        all_gen_ligs,
+                        previous_smiles,
+                        diversity_threshold,
+                        vocab,
+                        history_fps=_history_fps,
                     )
                     _hist_after = len(all_gen_ligs)
                     _history_input += _hist_before
@@ -2805,6 +2840,11 @@ def _run_flowr_generation_mol(  # NOSONAR
         _TeeStream(sys.stderr, _captured_stderr_mol, stream_name="stderr"),
         torch.no_grad(),
     ):
+        # Novelty-filter fingerprints depend only on previous_smiles (constant
+        # for this whole generation); build them ONCE here, not every iteration.
+        _history_fps = (
+            _build_history_fps(previous_smiles) if previous_smiles else None
+        )
         while len(all_gen_mols) < sample_target and k <= max_sample_iter:
             _raise_if_cancelled(job, "sampling")
             dataloader = gen_util.get_dataloader(args, dataset, interpolant, iter=k)
@@ -2936,7 +2976,11 @@ def _run_flowr_generation_mol(  # NOSONAR
                 if previous_smiles and (filter_valid_unique or filter_diversity):
                     _hist_before = len(all_gen_mols)
                     all_gen_mols = _filter_against_history(
-                        all_gen_mols, previous_smiles, diversity_threshold, vocab
+                        all_gen_mols,
+                        previous_smiles,
+                        diversity_threshold,
+                        vocab,
+                        history_fps=_history_fps,
                     )
                     _hist_after = len(all_gen_mols)
                     _history_input += _hist_before
