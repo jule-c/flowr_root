@@ -88,6 +88,54 @@ dialog {
     --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
     --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.10);
     --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.14);
+
+    /* ── Type scale (px; root font-size is 18px) ── */
+    --text-2xs: 11px;
+    --text-xs: 12px;
+    --text-sm: 13px;
+    --text-base: 14px;
+    --text-md: 15px;
+    --text-lg: 16px;
+    --text-xl: 17px;
+    --text-2xl: 18px;
+    --text-3xl: 22px;
+    --text-4xl: 28px;
+    --text-5xl: 38px;
+
+    /* ── Line-height scale (unitless) ── */
+    --leading-none: 1;
+    --leading-tight: 1.3;
+    --leading-snug: 1.4;
+    --leading-text: 1.45;
+    --leading-normal: 1.5;
+    --leading-prose: 1.55;
+    --leading-loose: 1.65;
+
+    /* ── Font-weight scale ── */
+    --weight-regular: 400;
+    --weight-medium: 500;
+    --weight-semibold: 600;
+    --weight-bold: 700;
+
+    /* ── Spacing scale (px; 1 unit = 4px grid, half-steps for 2/6/10/14/18/22) ── */
+    --space-px: 1px;
+    --space-0-5: 2px;
+    --space-1: 4px;
+    --space-1-5: 6px;
+    --space-2: 8px;
+    --space-2-5: 10px;
+    --space-3: 12px;
+    --space-3-5: 14px;
+    --space-4: 16px;
+    --space-4-5: 18px;
+    --space-5: 20px;
+    --space-5-5: 22px;
+    --space-6: 24px;
+    --space-7: 28px;
+    --space-8: 32px;
+    --space-9: 36px;
+    --space-10: 40px;
+    --space-15: 60px;
 }
 
 /* ===== ACCESSIBILITY ===== */
@@ -139,7 +187,7 @@ html,
 body {
     height: 100%;
     font-family: var(--font-sans);
-    font-size: 18px;
+    font-size: var(--text-2xl);
     background: var(--bg-primary);
     color: var(--text-primary);
     overflow: hidden;
@@ -152,7 +200,7 @@ body {
     align-items: center;
     justify-content: space-between;
     height: 56px;
-    padding: 0 24px;
+    padding: 0 var(--space-6);
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
     z-index: 100;
@@ -161,7 +209,7 @@ body {
 .topbar-left {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: var(--space-4);
     /* Allow the subtitle to ellipsis instead of pushing the right-hand
        controls off the (overflow:hidden) topbar on narrow widths. */
     min-width: 0;
@@ -171,17 +219,17 @@ body {
 .topbar-right {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--space-3);
     flex: 0 0 auto;
 }
 
 .btn-reset-session {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 5px 12px;
-    font-size: 0.75rem;
-    font-weight: 600;
+    gap: var(--space-1);
+    padding: var(--space-1-5) var(--space-3);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
     font-family: var(--font-sans);
     color: #fff;
     background: var(--lavender-dark);
@@ -202,7 +250,7 @@ body {
 .logo {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     flex-shrink: 0;
     cursor: pointer;
     border: none;
@@ -210,7 +258,7 @@ body {
     font: inherit;
     color: inherit;
     border-radius: var(--radius-sm);
-    padding: 4px 8px;
+    padding: var(--space-1) var(--space-2);
     margin: -4px -8px;
     transition: opacity 0.15s ease, background 0.15s ease;
 }
@@ -226,8 +274,8 @@ body {
 }
 
 .logo-text {
-    font-size: 22px;
-    font-weight: 700;
+    font-size: var(--text-3xl);
+    font-weight: var(--weight-bold);
     letter-spacing: 2px;
     background: var(--gradient-1);
     -webkit-background-clip: text;
@@ -236,11 +284,11 @@ body {
 }
 
 .topbar-subtitle {
-    font-size: 14px;
-    font-weight: 700;
+    font-size: var(--text-base);
+    font-weight: var(--weight-bold);
     color: var(--text-muted);
     border-left: 1px solid var(--border);
-    padding-left: 16px;
+    padding-left: var(--space-4);
     letter-spacing: 0.2px;
     min-width: 0;
     overflow: hidden;
@@ -265,7 +313,7 @@ body {
 
 .topbar-info {
     color: var(--chartreuse);
-    font-size: 12px;
+    font-size: var(--text-xs);
     animation: pulse 2s ease-in-out infinite;
 }
 
@@ -283,10 +331,10 @@ body {
 
 /* ===== BADGES ===== */
 .badge {
-    padding: 4px 12px;
+    padding: var(--space-1) var(--space-3);
     border-radius: 12px;
-    font-size: 14px;
-    font-weight: 600;
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
     text-transform: uppercase;
     letter-spacing: .5px;
 }
@@ -341,7 +389,7 @@ body {
     width: clamp(300px, 23vw, 420px);
     background: transparent;
     overflow-y: auto;
-    padding: 18px 24px;
+    padding: var(--space-4-5) var(--space-6);
 }
 
 .panel-right {
@@ -349,7 +397,7 @@ body {
 }
 
 .panel-section {
-    margin-bottom: 14px;
+    margin-bottom: var(--space-3-5);
 }
 
 .panel-section:last-child {
@@ -365,7 +413,7 @@ body {
         linear-gradient(135deg, rgba(223, 198, 246, 0.45), rgba(168, 148, 186, 0.30)) border-box;
     border: 1px solid transparent;
     border-radius: var(--radius-md);
-    padding: 14px 16px;
+    padding: var(--space-3-5) var(--space-4);
     box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
 
@@ -374,7 +422,7 @@ body {
     background: none;
     border: none;
     box-shadow: none;
-    padding: 14px 0;
+    padding: var(--space-3-5) 0;
 }
 
 /* Frozen sidebar during generation — inputs dimmed, cancel button stays active.
@@ -405,13 +453,13 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 10px 16px;
+    padding: var(--space-2-5) var(--space-4);
     background: var(--bg-input);
     border: 1px solid var(--lavender);
     border-radius: var(--radius-md);
-    margin-bottom: 12px;
-    font-size: 13px;
-    font-weight: 600;
+    margin-bottom: var(--space-3);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
     color: var(--text-primary);
     letter-spacing: 0.2px;
     opacity: 0;
@@ -427,10 +475,10 @@ body {
 .set-ref-btn {
     display: block;
     width: 100%;
-    margin-top: 6px;
-    padding: 4px 0;
-    font-size: 11px;
-    font-weight: 600;
+    margin-top: var(--space-1-5);
+    padding: var(--space-1) 0;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
     letter-spacing: 0.3px;
     color: var(--lavender-deeper);
     background: transparent;
@@ -467,12 +515,12 @@ body {
 }
 
 .section-title {
-    font-size: 13px;
-    font-weight: 700;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 1.2px;
-    margin-bottom: 12px;
+    margin-bottom: var(--space-3);
     display: flex;
     align-items: center;
     gap: 0;
@@ -483,10 +531,10 @@ body {
 }
 
 .section-desc {
-    font-size: 16px;
+    font-size: var(--text-lg);
     color: var(--text-muted);
-    line-height: 1.55;
-    margin-bottom: 10px;
+    line-height: var(--leading-prose);
+    margin-bottom: var(--space-2-5);
 }
 
 /* ===== INPUT GUIDANCE BANNERS ===== */
@@ -495,11 +543,11 @@ body {
     border: 1px solid var(--lavender);
     border-left: 3px solid var(--lavender);
     border-radius: var(--radius-md);
-    padding: 10px 12px;
-    margin-bottom: 12px;
-    font-size: 15px;
+    padding: var(--space-2-5) var(--space-3);
+    margin-bottom: var(--space-3);
+    font-size: var(--text-md);
     color: var(--text-secondary);
-    line-height: 1.5;
+    line-height: var(--leading-normal);
 }
 
 .input-guidance strong {
@@ -507,19 +555,19 @@ body {
 }
 
 .input-guidance ol li {
-    margin-bottom: 2px;
+    margin-bottom: var(--space-0-5);
 }
 
 /* ===== POCKET-ONLY MODE ===== */
 .pocket-only-toggle {
-    margin-top: 8px;
+    margin-top: var(--space-2);
 }
 
 .btn-pocket-only {
     width: 100%;
     text-align: center;
-    font-size: 14px;
-    padding: 8px 10px;
+    font-size: var(--text-base);
+    padding: var(--space-2) var(--space-2-5);
     border-style: dashed;
     color: var(--text-secondary);
     transition: all .2s;
@@ -541,7 +589,7 @@ body {
 .rcsb-title {
     display: block;
     font-size: 0.9em;
-    font-weight: 700;
+    font-weight: var(--weight-bold);
     color: var(--text-secondary);
     margin-bottom: 0.4em;
 }
@@ -583,7 +631,7 @@ body {
 .btn-rcsb-search {
     padding: 0.45em 0.9em;
     font-size: 0.85em;
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     border: 1.5px solid var(--lavender-dark);
     border-radius: var(--radius-sm);
     background: var(--gradient-accent);
@@ -613,14 +661,14 @@ body {
     gap: 0.4em;
     color: var(--success);
     font-size: 0.85em;
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     margin-top: 0.4em;
 }
 
 .rcsb-divider,
 .db-loaders-divider {
     height: 2px;
-    margin: 14px 0 12px;
+    margin: var(--space-3-5) 0 var(--space-3);
     border: none;
     background: radial-gradient(ellipse at center, var(--lavender) 0%, var(--lavender-dark) 40%, transparent 80%);
 }
@@ -629,7 +677,7 @@ body {
 .num-heavy-atoms-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .num-heavy-atoms-row .input-number {
@@ -639,21 +687,21 @@ body {
 
 /* ===== UPLOAD ===== */
 .upload-group {
-    margin-bottom: 12px;
+    margin-bottom: var(--space-3);
 }
 
 .upload-label {
     display: block;
-    font-size: 16px;
-    font-weight: 700;
+    font-size: var(--text-lg);
+    font-weight: var(--weight-bold);
     color: var(--text-secondary);
-    margin-bottom: 6px;
+    margin-bottom: var(--space-1-5);
 }
 
 .upload-area {
     border: 1.5px dashed var(--border);
     border-radius: var(--radius-md);
-    padding: 20px 16px;
+    padding: var(--space-5) var(--space-4);
     text-align: center;
     cursor: pointer;
     transition: border-color .2s, background-color .2s;
@@ -670,16 +718,16 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-1-5);
     color: var(--text-muted);
-    font-size: 16px;
+    font-size: var(--text-lg);
 }
 
 .upload-placeholder a {
     color: var(--lavender-dark);
     cursor: pointer;
     text-decoration: none;
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     border-bottom: 1px solid var(--lavender-dark);
     transition: color 0.15s, border-color 0.15s;
 }
@@ -696,10 +744,10 @@ body {
 .upload-success {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     color: var(--success);
-    font-size: 16px;
-    font-weight: 500;
+    font-size: var(--text-lg);
+    font-weight: var(--weight-medium);
     min-width: 0;
     overflow: hidden;
 }
@@ -720,8 +768,8 @@ body {
     border-radius: 50%;
     background: var(--success-bg);
     color: var(--success);
-    font-size: 13px;
-    font-weight: 700;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
     flex-shrink: 0;
 }
 
@@ -730,15 +778,15 @@ body {
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    padding: 10px 12px;
+    padding: var(--space-2-5) var(--space-3);
 }
 
 .info-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 5px 0;
-    font-size: 16px;
+    padding: var(--space-1-5) 0;
+    font-size: var(--text-lg);
 }
 
 .info-row+.info-row {
@@ -747,13 +795,13 @@ body {
 
 .info-label {
     color: var(--text-muted);
-    font-weight: 500;
+    font-weight: var(--weight-medium);
 }
 
 .info-value {
     color: var(--text-primary);
     font-family: var(--font-mono);
-    font-size: 14px;
+    font-size: var(--text-base);
     max-width: 220px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -781,8 +829,8 @@ body {
 /* ===== ATOM SELECTION ===== */
 .atom-selection-controls {
     display: flex;
-    gap: 6px;
-    margin-bottom: 8px;
+    gap: var(--space-1-5);
+    margin-bottom: var(--space-2);
     flex-wrap: wrap;
 }
 
@@ -790,28 +838,28 @@ body {
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    padding: 8px 10px;
+    padding: var(--space-2) var(--space-2-5);
     min-height: 40px;
     max-height: 120px;
     overflow-y: auto;
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
 }
 
 .atom-chip {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--space-1);
     background: var(--selected-bg);
     color: var(--selected);
     border: 1px solid rgba(206, 147, 216, .30);
     border-radius: 4px;
-    padding: 3px 7px;
-    font-size: 13px;
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
     font-family: var(--font-mono);
-    margin: 2px;
+    margin: var(--space-0-5);
     cursor: pointer;
     transition: all .15s;
-    font-weight: 500;
+    font-weight: var(--weight-medium);
 }
 
 .atom-chip::before {
@@ -832,13 +880,13 @@ body {
 }
 
 .atom-chip .chip-x {
-    font-size: 12px;
+    font-size: var(--text-xs);
     opacity: .6;
 }
 
 .muted-text {
     color: var(--text-muted);
-    font-size: 14px;
+    font-size: var(--text-base);
     font-style: italic;
 }
 
@@ -862,8 +910,8 @@ body {
 .setting-group {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 10px;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2-5);
     min-width: 0;
     /* No overflow:hidden — it clipped the trailing help-tooltip "?" on rows
        like the random-seed input. min-width:0 on the children keeps the row
@@ -876,15 +924,15 @@ body {
 .setting-group-stacked {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    margin-bottom: 12px;
+    gap: var(--space-1-5);
+    margin-bottom: var(--space-3);
     min-width: 0;
 }
 
 .slider-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-2-5);
     min-width: 0;
 }
 
@@ -893,8 +941,8 @@ body {
 }
 
 .setting-label {
-    font-size: 16px;
-    font-weight: 400;
+    font-size: var(--text-lg);
+    font-weight: var(--weight-regular);
     color: var(--text-secondary);
     min-width: 120px;
     flex-shrink: 0;
@@ -933,11 +981,11 @@ body {
 
 .setting-value {
     font-family: var(--font-mono);
-    font-size: 16px;
+    font-size: var(--text-lg);
     color: var(--lavender-deeper);
     min-width: 40px;
     text-align: right;
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     flex-shrink: 0;
 }
 
@@ -945,18 +993,18 @@ body {
 .mode-selector {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--space-1);
 }
 
 .mode-option {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
+    gap: var(--space-2);
+    padding: var(--space-1-5) var(--space-2-5);
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: background .15s;
-    font-size: 16px;
+    font-size: var(--text-lg);
     color: var(--text-secondary);
 }
 
@@ -972,7 +1020,7 @@ body {
 
 .mode-option input[type="radio"]:checked+.mode-label {
     color: var(--text-primary);
-    font-weight: 500;
+    font-weight: var(--weight-medium);
 }
 
 .mode-label {
@@ -989,8 +1037,8 @@ body {
     border-radius: 50%;
     background: var(--bg-elevated);
     color: var(--text-muted);
-    font-size: 12px;
-    font-weight: 700;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-bold);
     cursor: help;
     flex-shrink: 0;
     border: 1px solid var(--border);
@@ -1007,10 +1055,10 @@ body {
     position: fixed;
     background: var(--lavender-deep);
     color: #f0eaf6;
-    font-size: 14px;
-    font-weight: 400;
-    line-height: 1.5;
-    padding: 8px 12px;
+    font-size: var(--text-base);
+    font-weight: var(--weight-regular);
+    line-height: var(--leading-normal);
+    padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
     white-space: normal;
     width: max-content;
@@ -1046,8 +1094,8 @@ body {
 .checkbox-label {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 16px;
+    gap: var(--space-2);
+    font-size: var(--text-lg);
     color: var(--text-secondary);
     cursor: pointer;
 }
@@ -1065,17 +1113,17 @@ body {
 }
 
 .sub-option-inline {
-    margin-left: 24px;
-    padding-left: 8px;
+    margin-left: var(--space-6);
+    padding-left: var(--space-2);
     border-left: 2px solid var(--border);
 }
 
 /* ===== PROPERTY FILTER PANEL ===== */
 .prop-filter-panel {
-    margin-left: 24px;
-    padding: 8px 10px;
+    margin-left: var(--space-6);
+    padding: var(--space-2) var(--space-2-5);
     border-left: 2px solid var(--border);
-    margin-bottom: 10px;
+    margin-bottom: var(--space-2-5);
     max-height: 280px;
     overflow-y: auto;
 }
@@ -1083,22 +1131,22 @@ body {
 .prop-filter-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--space-1);
 }
 
 .prop-filter-placeholder {
-    font-size: 14px;
+    font-size: var(--text-base);
     color: var(--text-muted);
     font-style: italic;
-    padding: 4px 0;
+    padding: var(--space-1) 0;
 }
 
 .prop-filter-row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 3px 0;
-    font-size: 14px;
+    gap: var(--space-1-5);
+    padding: var(--space-1) 0;
+    font-size: var(--text-base);
 }
 
 .prop-filter-row input[type="checkbox"] {
@@ -1114,7 +1162,7 @@ body {
     color: var(--text-secondary);
     min-width: 105px;
     flex-shrink: 0;
-    font-size: 14px;
+    font-size: var(--text-base);
     cursor: pointer;
     user-select: none;
 }
@@ -1122,7 +1170,7 @@ body {
 .prop-filter-row .prop-range-inputs {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--space-1);
     opacity: 0.4;
     transition: opacity 0.15s;
 }
@@ -1133,29 +1181,29 @@ body {
 
 .prop-filter-row .prop-range-inputs .input-number {
     width: 58px;
-    padding: 2px 4px;
-    font-size: 14px;
+    padding: var(--space-0-5) var(--space-1);
+    font-size: var(--text-base);
     text-align: center;
 }
 
 .prop-filter-row .prop-range-sep {
     color: var(--text-muted);
-    font-size: 13px;
+    font-size: var(--text-sm);
 }
 
 /* ADMET filter styles */
 .adme-filter-entries {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    margin-bottom: 8px;
+    gap: var(--space-2-5);
+    margin-bottom: var(--space-2);
 }
 
 .adme-entry {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 6px 8px;
+    gap: var(--space-1);
+    padding: var(--space-1-5) var(--space-2);
     background: var(--bg-elevated);
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
@@ -1164,13 +1212,13 @@ body {
 .adme-entry-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-1-5);
 }
 
 .adme-entry .input-text {
     flex: 1;
-    padding: 3px 6px;
-    font-size: 14px;
+    padding: var(--space-1) var(--space-1-5);
+    font-size: var(--text-base);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--bg-elevated);
@@ -1179,19 +1227,19 @@ body {
 }
 
 .adme-upload-btn {
-    font-size: 13px !important;
-    padding: 3px 8px !important;
+    font-size: var(--text-sm) !important;
+    padding: var(--space-1) var(--space-2) !important;
     white-space: nowrap;
 }
 
 .adme-range-label {
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
     min-width: 24px;
 }
 
 .adme-model-name {
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
     font-style: italic;
     overflow: hidden;
@@ -1200,8 +1248,8 @@ body {
 }
 
 #adme-add-entry {
-    font-size: 13px;
-    padding: 3px 10px;
+    font-size: var(--text-sm);
+    padding: var(--space-1) var(--space-2-5);
     align-self: flex-start;
 }
 
@@ -1209,11 +1257,11 @@ body {
 .file-pick-wrapper {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .file-pick-name {
-    font-size: 14px;
+    font-size: var(--text-base);
     color: var(--text-muted);
     font-family: var(--font-mono);
     overflow: hidden;
@@ -1227,19 +1275,19 @@ body {
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    padding: 10px 12px;
+    padding: var(--space-2-5) var(--space-3);
     max-height: 260px;
     overflow-y: auto;
     font-family: var(--font-mono);
-    font-size: 14px;
-    line-height: 1.65;
+    font-size: var(--text-base);
+    line-height: var(--leading-loose);
     color: var(--text-secondary);
     white-space: pre-wrap;
     word-break: break-word;
 }
 
 .metrics-log .metric-line {
-    padding: 2px 0;
+    padding: var(--space-0-5) 0;
     border-bottom: 1px solid var(--border);
 }
 
@@ -1255,7 +1303,7 @@ body {
     background: #fff;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    padding: 8px;
+    padding: var(--space-2);
     min-height: 180px;
 }
 
@@ -1274,10 +1322,10 @@ body {
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
     color: var(--text-primary);
-    padding: 8px 16px;
+    padding: var(--space-2) var(--space-4);
     border-radius: var(--radius-md);
-    font-size: 14px;
-    font-weight: 500;
+    font-size: var(--text-base);
+    font-weight: var(--weight-medium);
     font-family: 'Inter', system-ui, sans-serif;
     z-index: 12;
     pointer-events: none;
@@ -1287,21 +1335,21 @@ body {
     box-shadow: var(--shadow-md);
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-1-5);
 }
 
 .hover-res-name {
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
 }
 
 .hover-sep {
     color: var(--text-muted);
-    font-size: 12px;
+    font-size: var(--text-xs);
 }
 
 .hover-chain-label {
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: var(--text-sm);
 }
 
 .mol-2d-overlay {
@@ -1352,15 +1400,15 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 14px;
+    padding: var(--space-2-5) var(--space-3-5);
     border-bottom: 1px solid var(--border);
     background: rgba(223, 198, 246, 0.08);
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .mol-2d-title {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
     color: var(--text-muted);
     letter-spacing: 0.5px;
     text-transform: uppercase;
@@ -1371,9 +1419,9 @@ body {
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    font-size: 19px;
-    line-height: 1;
-    padding: 2px 6px;
+    font-size: var(--text-2xl);
+    line-height: var(--leading-none);
+    padding: var(--space-0-5) var(--space-1-5);
     border-radius: var(--radius-sm);
     transition: all 0.15s;
 }
@@ -1387,7 +1435,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 12px;
+    padding: var(--space-3);
     min-height: 260px;
     background: #fff;
     overflow: auto;
@@ -1412,33 +1460,33 @@ body {
 }
 
 .mol-2d-info {
-    padding: 8px 14px 12px;
+    padding: var(--space-2) var(--space-3-5) var(--space-3);
     border-top: 1px solid var(--border);
 }
 
 .mol-2d-smiles {
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--text-xs);
     color: var(--text-muted);
     word-break: break-all;
-    line-height: 1.4;
-    margin-bottom: 6px;
+    line-height: var(--leading-snug);
+    margin-bottom: var(--space-1-5);
     max-height: 60px;
     overflow-y: auto;
 }
 
 .mol-2d-props {
     display: flex;
-    gap: 6px;
+    gap: var(--space-1-5);
     flex-wrap: wrap;
 }
 
 .mol-2d-props span {
     font-family: var(--font-mono);
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--text-secondary);
     background: var(--bg-elevated);
-    padding: 2px 8px;
+    padding: var(--space-0-5) var(--space-2);
     border-radius: 4px;
     border: 1px solid var(--border);
 }
@@ -1460,25 +1508,25 @@ body {
 
 /* ===== SUB-OPTIONS (indented, e.g. fragment growing) ===== */
 .sub-options {
-    margin-left: 28px;
-    padding: 8px 12px;
+    margin-left: var(--space-7);
+    padding: var(--space-2) var(--space-3);
     border-left: 2px solid var(--border);
-    margin-top: 4px;
+    margin-top: var(--space-1);
 }
 
 .sub-options .setting-group {
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
 }
 
 .input-number {
     width: 70px;
-    padding: 4px 8px;
+    padding: var(--space-1) var(--space-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--bg-elevated);
     color: var(--text-primary);
     font-family: var(--font-mono);
-    font-size: 16px;
+    font-size: var(--text-lg);
     text-align: center;
 }
 
@@ -1492,13 +1540,13 @@ body {
 .select-input {
     flex: 1;
     min-width: 0;
-    padding: 5px 30px 5px 10px;
+    padding: var(--space-1-5) var(--space-8) var(--space-1-5) var(--space-2-5);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background-color: var(--bg-elevated);
     color: var(--text-primary);
     font-family: var(--font-sans);
-    font-size: 14px;
+    font-size: var(--text-base);
     cursor: pointer;
     appearance: none;
     -webkit-appearance: none;
@@ -1534,20 +1582,20 @@ body {
 }
 
 .input-file-sm {
-    font-size: 14px;
+    font-size: var(--text-base);
     color: var(--text-secondary);
     max-width: 160px;
 }
 
 .input-file-sm::file-selector-button {
-    padding: 3px 8px;
+    padding: var(--space-1) var(--space-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--bg-elevated);
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: var(--text-sm);
     cursor: pointer;
-    margin-right: 6px;
+    margin-right: var(--space-1-5);
 }
 
 .input-file-sm::file-selector-button:hover {
@@ -1560,14 +1608,14 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: var(--space-1-5);
     font-family: var(--font-sans);
-    font-size: 17px;
-    font-weight: 700;
+    font-size: var(--text-xl);
+    font-weight: var(--weight-bold);
     border: none;
     border-radius: var(--radius-sm);
     cursor: pointer;
-    padding: 8px 16px;
+    padding: var(--space-2) var(--space-4);
     transition: all .2s;
 }
 
@@ -1577,8 +1625,8 @@ body {
 }
 
 .btn-sm {
-    padding: 5px 12px;
-    font-size: 14px;
+    padding: var(--space-1-5) var(--space-3);
+    font-size: var(--text-base);
 }
 
 .btn-outline {
@@ -1608,7 +1656,7 @@ body {
 .btn-primary {
     background: var(--gradient-1);
     color: #fff;
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     box-shadow: 0 2px 8px rgba(120, 94, 1, .15);
     letter-spacing: 0.3px;
 }
@@ -1620,8 +1668,8 @@ body {
 
 .btn-block {
     width: 100%;
-    padding: 11px;
-    font-size: 16px;
+    padding: var(--space-3);
+    font-size: var(--text-lg);
     text-transform: uppercase;
     letter-spacing: 0.8px;
 }
@@ -1630,8 +1678,8 @@ body {
     background: #fbefef;
     border: 1px solid rgba(204, 51, 51, 0.30);
     color: #b91c1c;
-    font-weight: 500;
-    font-size: 14px;
+    font-weight: var(--weight-medium);
+    font-size: var(--text-base);
     letter-spacing: 0.3px;
 }
 
@@ -1644,7 +1692,7 @@ body {
     /* Uses main gradient for visual coherence */
     background: var(--gradient-1);
     color: #fff;
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     border: none;
     width: 100%;
     box-shadow: 0 2px 8px rgba(120, 94, 1, .15);
@@ -1671,7 +1719,7 @@ body {
     height: 4px;
     background: var(--bg-elevated);
     border-radius: 2px;
-    margin-top: 10px;
+    margin-top: var(--space-2-5);
     overflow: hidden;
 }
 
@@ -1700,9 +1748,9 @@ body {
 .progress-text {
     display: block;
     text-align: center;
-    font-size: 14px;
+    font-size: var(--text-base);
     color: var(--text-muted);
-    margin-top: 6px;
+    margin-top: var(--space-1-5);
 }
 
 /* ===== 3D VIEWER ===== */
@@ -1716,8 +1764,8 @@ body {
     display: flex;
     flex-direction: column;
     position: relative;
-    gap: 12px;
-    padding: 12px 14px;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-3-5);
     background: #EFE9E2;
     border-radius: var(--radius-lg);
 }
@@ -1728,7 +1776,7 @@ body {
        huge min-content width onto the layout (the original cause of the panel
        collapse). Groups keep white-space:nowrap so labels never break. */
     flex-wrap: wrap;
-    row-gap: 6px;
+    row-gap: var(--space-1-5);
     justify-content: center;
     align-items: center;
     padding: 0.5em 1em;
@@ -1758,7 +1806,7 @@ body {
     padding: 0.3em 0.6em;
     font-size: 0.85em;
     font-family: var(--font-sans);
-    font-weight: 700;
+    font-weight: var(--weight-bold);
     background: transparent;
     color: var(--text-muted);
     border: 1px solid transparent;
@@ -1808,24 +1856,24 @@ body {
     background: rgba(255, 255, 255, 0.72);
     border: 1px solid rgba(120, 94, 1, 0.10);
     border-radius: var(--radius-lg);
-    padding: 28px 32px;
+    padding: var(--space-7) var(--space-8);
     box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.6);
     backdrop-filter: blur(12px);
     max-width: 420px;
 }
 
 .overlay-content h3 {
-    font-size: 18px;
-    font-weight: 600;
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-semibold);
     color: var(--text-secondary);
-    margin: 12px 0 6px;
+    margin: var(--space-3) 0 var(--space-1-5);
     letter-spacing: 0.3px;
 }
 
 .overlay-content p {
-    font-size: 16px;
+    font-size: var(--text-lg);
     max-width: 320px;
-    line-height: 1.55;
+    line-height: var(--leading-prose);
     color: var(--text-muted);
 }
 
@@ -1845,7 +1893,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 12px;
+    padding: var(--space-1-5) var(--space-3);
     background: var(--bg-primary);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
@@ -1853,8 +1901,8 @@ body {
 }
 
 .molstar-overlay-title {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
     color: var(--text-primary);
     letter-spacing: 0.5px;
     font-family: var(--font-sans);
@@ -1902,18 +1950,18 @@ body {
 .results-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .result-card {
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    padding: 10px 12px;
+    padding: var(--space-2-5) var(--space-3);
     cursor: pointer;
     transition: all .2s;
     display: flex;
-    gap: 10px;
+    gap: var(--space-2-5);
     align-items: flex-start;
 }
 
@@ -1937,29 +1985,29 @@ button.result-card {
 /* ── Original ligand card (right panel) ── */
 .original-ligand-card {
     border-left: 3px solid #c9943c;
-    padding-left: 10px;
+    padding-left: var(--space-2-5);
 }
 
 .original-ligand-card .result-title {
-    font-size: 15px;
+    font-size: var(--text-md);
 }
 
 .original-ligand-card .set-ref-btn {
-    margin-top: 6px;
+    margin-top: var(--space-1-5);
 }
 
 /* ── Reference ligand card (right panel) ── */
 .ref-ligand-card {
     border-left: 3px solid var(--lavender-dark);
-    padding-left: 10px;
+    padding-left: var(--space-2-5);
 }
 
 .ref-ligand-card .result-title {
-    font-size: 15px;
+    font-size: var(--text-md);
 }
 
 .ref-card-2d {
-    margin: 6px 0 4px;
+    margin: var(--space-1-5) 0 var(--space-1);
     text-align: center;
     min-height: 0;
 }
@@ -1974,7 +2022,7 @@ button.result-card {
     flex-shrink: 0;
     width: 14px;
     height: 14px;
-    margin-top: 3px;
+    margin-top: var(--space-1);
     cursor: pointer;
     accent-color: var(--lavender-deeper);
 }
@@ -1988,28 +2036,28 @@ button.result-card {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 6px;
+    margin-bottom: var(--space-1-5);
 }
 
 .result-title {
-    font-size: 16px;
-    font-weight: 600;
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
     color: var(--text-primary);
 }
 
 .result-badge {
-    font-size: 13px;
-    padding: 2px 7px;
+    font-size: var(--text-sm);
+    padding: var(--space-0-5) var(--space-2);
     border-radius: 4px;
     font-family: var(--font-mono);
 }
 
 .result-smiles {
-    font-size: 13px;
+    font-size: var(--text-sm);
     font-family: var(--font-mono);
     color: var(--text-muted);
     word-break: break-all;
-    line-height: 1.4;
+    line-height: var(--leading-snug);
     max-height: 40px;
     overflow: hidden;
     /* Fade the clipped tail instead of a hard cut, signalling there's more. */
@@ -2020,9 +2068,9 @@ button.result-card {
 .result-props {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px 12px;
-    margin-top: 6px;
-    font-size: 13px;
+    gap: var(--space-1) var(--space-3);
+    margin-top: var(--space-1-5);
+    font-size: var(--text-sm);
     color: var(--text-muted);
 }
 
@@ -2032,17 +2080,17 @@ button.result-card {
 
 .results-placeholder {
     text-align: center;
-    padding: 40px 20px;
+    padding: var(--space-10) var(--space-5);
 }
 
 /* ───── Round headers & previous-round sections ───── */
 .round-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 4px;
-    font-size: 13px;
-    font-weight: 600;
+    gap: var(--space-2);
+    padding: var(--space-1-5) var(--space-1);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
     color: var(--text-secondary);
 }
 
@@ -2060,8 +2108,8 @@ button.result-card {
 }
 
 .round-count {
-    font-weight: 400;
-    font-size: 12px;
+    font-weight: var(--weight-regular);
+    font-size: var(--text-xs);
     color: var(--text-muted);
     margin-left: auto;
 }
@@ -2069,7 +2117,7 @@ button.result-card {
 .round-header-collapsible {
     cursor: pointer;
     border-radius: var(--radius-sm);
-    padding: 6px 8px;
+    padding: var(--space-1-5) var(--space-2);
     transition: background .15s;
 }
 
@@ -2078,7 +2126,7 @@ button.result-card {
 }
 
 .round-chevron {
-    font-size: 11px;
+    font-size: var(--text-2xs);
     transition: transform .2s;
     color: var(--text-muted);
 }
@@ -2088,22 +2136,22 @@ button.result-card {
 }
 
 .prev-round-section {
-    margin-top: 6px;
+    margin-top: var(--space-1-5);
     border-top: 1px solid var(--border);
-    padding-top: 2px;
+    padding-top: var(--space-0-5);
 }
 
 .prev-round-body {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 4px 0;
+    gap: var(--space-1);
+    padding: var(--space-1) 0;
 }
 
 .result-card-prev {
     opacity: 0.7;
     cursor: default;
-    padding: 6px 10px;
+    padding: var(--space-1-5) var(--space-2-5);
 }
 
 .result-card-prev:hover {
@@ -2126,32 +2174,32 @@ button.result-card {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
-    padding: 8px 16px 4px;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4) var(--space-1);
     text-align: center;
 }
 
 .failure-card-message {
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
     max-width: 340px;
-    line-height: 1.45;
+    line-height: var(--leading-text);
     margin: 0;
     word-break: break-word;
 }
 
 .failure-card-advice {
-    font-size: 12px;
+    font-size: var(--text-xs);
     color: var(--text-muted);
     max-width: 340px;
-    line-height: 1.45;
-    margin: 4px 0 0;
+    line-height: var(--leading-text);
+    margin: var(--space-1) 0 0;
     word-break: break-word;
     font-style: italic;
 }
 
 .failure-card-retry-btn {
-    margin-top: 4px;
+    margin-top: var(--space-1);
 }
 
 /* ───── Result card error placeholder ───── */
@@ -2162,17 +2210,17 @@ button.result-card {
 
 /* ───── AL round selection checkboxes ───── */
 .al-round-sel-label {
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--text-secondary);
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
 }
 
 .al-round-cb-row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    padding: 4px 0;
+    gap: var(--space-1-5);
+    font-size: var(--text-sm);
+    padding: var(--space-1) 0;
     cursor: pointer;
     color: var(--text-primary);
 }
@@ -2183,7 +2231,7 @@ button.result-card {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
     background: var(--bg-secondary);
     border-top: 1px solid var(--border);
@@ -2235,9 +2283,9 @@ button.result-card {
     transform: translateX(-50%);
     background: rgba(255, 255, 255, 0.95);
     color: var(--text-primary);
-    padding: 10px 22px;
+    padding: var(--space-2-5) var(--space-5-5);
     border-radius: var(--radius-md);
-    font-size: 17px;
+    font-size: var(--text-xl);
     box-shadow: var(--shadow-lg);
     z-index: 1000;
     animation: toast-in .3s ease;
@@ -2285,7 +2333,7 @@ button.result-card {
     .main-container {
         flex-direction: column;
         overflow-y: auto;
-        gap: 12px;
+        gap: var(--space-3);
     }
 
     .panel {
@@ -2321,7 +2369,7 @@ button.result-card {
     background-image: linear-gradient(135deg, rgba(223, 198, 246, 0.15) 0%, rgba(213, 214, 83, 0.10) 100%);
     animation: landingFadeIn 0.5s ease;
     overflow-y: auto;
-    padding: 40px 16px;
+    padding: var(--space-10) var(--space-4);
 }
 
 @keyframes landingFadeIn {
@@ -2356,7 +2404,7 @@ button.result-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-xl);
-    padding: 40px 36px 32px;
+    padding: var(--space-10) var(--space-9) var(--space-8);
     box-shadow: var(--shadow-lg);
     backdrop-filter: blur(16px);
     text-align: center;
@@ -2366,13 +2414,13 @@ button.result-card {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 14px;
-    margin-bottom: 6px;
+    gap: var(--space-3-5);
+    margin-bottom: var(--space-1-5);
 }
 
 .landing-title {
-    font-size: 38px;
-    font-weight: 700;
+    font-size: var(--text-5xl);
+    font-weight: var(--weight-bold);
     letter-spacing: 3px;
     background: var(--gradient-1);
     -webkit-background-clip: text;
@@ -2381,7 +2429,7 @@ button.result-card {
 }
 
 .landing-subtitle {
-    font-size: 17px;
+    font-size: var(--text-xl);
     color: var(--text-muted);
     margin-bottom: 0;
 }
@@ -2389,31 +2437,31 @@ button.result-card {
 .landing-divider {
     height: 1px;
     background: var(--border);
-    margin: 24px 0 20px;
+    margin: var(--space-6) 0 var(--space-5);
 }
 
 .landing-section-title {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 1.2px;
-    margin-bottom: 14px;
+    margin-bottom: var(--space-3-5);
 }
 
 /* Radio options */
 .landing-options {
     display: flex;
-    gap: 10px;
-    margin-bottom: 18px;
+    gap: var(--space-2-5);
+    margin-bottom: var(--space-4-5);
 }
 
 .landing-option {
     flex: 1;
     display: flex;
     align-items: flex-start;
-    gap: 10px;
-    padding: 12px 14px;
+    gap: var(--space-2-5);
+    padding: var(--space-3) var(--space-3-5);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -2435,53 +2483,53 @@ button.result-card {
 
 .landing-option input[type="radio"] {
     accent-color: var(--lavender-deeper);
-    margin-top: 2px;
+    margin-top: var(--space-0-5);
     flex-shrink: 0;
 }
 
 .landing-option-content {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
 }
 
 .landing-option-label {
-    font-size: 17px;
-    font-weight: 600;
+    font-size: var(--text-xl);
+    font-weight: var(--weight-semibold);
     color: var(--text-primary);
 }
 
 .landing-option-desc {
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
-    line-height: 1.4;
+    line-height: var(--leading-snug);
 }
 
 /* Dropdowns */
 .landing-select-group {
     text-align: left;
-    margin-bottom: 18px;
+    margin-bottom: var(--space-4-5);
 }
 
 .landing-select-label {
     display: block;
-    font-size: 14px;
-    font-weight: 500;
+    font-size: var(--text-base);
+    font-weight: var(--weight-medium);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    margin-bottom: 6px;
+    margin-bottom: var(--space-1-5);
 }
 
 .landing-select {
     width: 100%;
-    padding: 10px 14px;
+    padding: var(--space-2-5) var(--space-3-5);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--bg-input);
     color: var(--text-primary);
     font-family: var(--font-sans);
-    font-size: 17px;
+    font-size: var(--text-xl);
     cursor: pointer;
     transition: border-color 0.2s;
     appearance: none;
@@ -2490,7 +2538,7 @@ button.result-card {
     background-repeat: no-repeat;
     background-position: right 12px center;
     background-size: 12px;
-    padding-right: 32px;
+    padding-right: var(--space-8);
 }
 
 .landing-select:focus {
@@ -2506,13 +2554,13 @@ button.result-card {
 
 /* Status */
 .landing-status {
-    padding: 10px 14px;
+    padding: var(--space-2-5) var(--space-3-5);
     border-radius: var(--radius-md);
-    font-size: 16px;
-    margin-bottom: 14px;
+    font-size: var(--text-lg);
+    margin-bottom: var(--space-3-5);
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .landing-status.status-loading {
@@ -2534,17 +2582,17 @@ button.result-card {
 }
 
 .landing-launch {
-    margin-top: 4px;
-    margin-bottom: 16px;
-    font-size: 17px;
-    padding: 12px 14px;
+    margin-top: var(--space-1);
+    margin-bottom: var(--space-4);
+    font-size: var(--text-xl);
+    padding: var(--space-3) var(--space-3-5);
     letter-spacing: 0.8px;
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     text-transform: uppercase;
 }
 
 .landing-footer-text {
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
     margin: 0;
 }
@@ -2552,9 +2600,9 @@ button.result-card {
 .landing-footer-text code {
     font-family: var(--font-mono);
     background: var(--bg-elevated);
-    padding: 1px 5px;
+    padding: var(--space-px) var(--space-1-5);
     border-radius: 3px;
-    font-size: 13px;
+    font-size: var(--text-sm);
 }
 
 /* ── Session restore (landing page) ── */
@@ -2564,8 +2612,8 @@ button.result-card {
     width: 520px;
     max-width: 92vw;
     margin: 0;
-    padding: 16px 0;
-    gap: 14px;
+    padding: var(--space-4) 0;
+    gap: var(--space-3-5);
 }
 
 .landing-or-divider::before,
@@ -2586,35 +2634,35 @@ button.result-card {
 }
 
 .landing-or-divider span {
-    font-size: 0.7rem;
+    font-size: var(--text-sm);
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--lavender-dark);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
 }
 
 .landing-restore-card {
-    padding: 28px 36px 24px;
+    padding: var(--space-7) var(--space-9) var(--space-6);
     text-align: center;
 }
 
 .landing-restore-desc {
-    font-size: 0.8rem;
+    font-size: var(--text-base);
     color: var(--text-muted);
-    margin-bottom: 12px;
+    margin-bottom: var(--space-3);
 }
 
 .landing-restore-dropzone {
     position: relative;
     border: 2px dashed var(--lavender-dark);
     border-radius: 10px;
-    padding: 24px 16px;
+    padding: var(--space-6) var(--space-4);
     cursor: pointer;
     transition: border-color 0.2s, background 0.2s;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .landing-restore-dropzone:hover,
@@ -2629,16 +2677,16 @@ button.result-card {
 }
 
 .landing-restore-text {
-    font-size: 0.8rem;
+    font-size: var(--text-base);
     color: var(--text-muted);
 }
 
 .landing-restore-text code {
     font-family: var(--font-mono);
     background: var(--bg-elevated);
-    padding: 1px 5px;
+    padding: var(--space-px) var(--space-1-5);
     border-radius: 3px;
-    font-size: 0.75rem;
+    font-size: var(--text-sm);
 }
 
 .landing-restore-file-input {
@@ -2653,16 +2701,16 @@ button.result-card {
    ═══════════════════════════════════════════════════════════════ */
 .workflow-selector {
     display: flex;
-    gap: 10px;
-    margin-bottom: 4px;
+    gap: var(--space-2-5);
+    margin-bottom: var(--space-1);
 }
 
 .workflow-card {
     flex: 1;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 12px 14px;
+    gap: var(--space-2-5);
+    padding: var(--space-3) var(--space-3-5);
     border: 2px solid var(--border);
     border-radius: var(--radius-lg);
     background: var(--bg-elevated);
@@ -2700,26 +2748,26 @@ button.result-card {
     border: 1px solid rgba(120, 94, 1, 0.08);
     flex-shrink: 0;
     font-size: 0;
-    line-height: 1;
+    line-height: var(--leading-none);
     color: var(--lavender-deeper);
 }
 
 .workflow-card-body {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
 }
 
 .workflow-card-title {
-    font-weight: 600;
-    font-size: 16px;
+    font-weight: var(--weight-semibold);
+    font-size: var(--text-lg);
     color: var(--text-primary);
 }
 
 .workflow-card-desc {
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
-    line-height: 1.3;
+    line-height: var(--leading-tight);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2727,7 +2775,7 @@ button.result-card {
    ═══════════════════════════════════════════════════════════════ */
 .smiles-input-row {
     display: flex;
-    gap: 6px;
+    gap: var(--space-1-5);
     align-items: center;
 }
 
@@ -2735,8 +2783,8 @@ button.result-card {
     flex: 1;
     min-width: 0;
     font-family: var(--font-mono);
-    font-size: 14px;
-    padding: 6px 10px;
+    font-size: var(--text-base);
+    padding: var(--space-1-5) var(--space-2-5);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--bg-elevated);
@@ -2752,30 +2800,30 @@ button.result-card {
 .smiles-file-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 /* ═══════════════════════════════════════════════════════════════
    CONFORMER PICKER (LBDD)
    ═══════════════════════════════════════════════════════════════ */
 .conformer-picker {
-    margin-top: 8px;
+    margin-top: var(--space-2);
 }
 
 .conformer-grid {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--space-1);
 }
 
 .conformer-select {
     width: 100%;
-    padding: 6px 8px;
+    padding: var(--space-1-5) var(--space-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--bg-elevated);
     color: var(--text-primary);
-    font-size: 14px;
+    font-size: var(--text-base);
     cursor: pointer;
     outline: none;
     transition: border-color 0.2s;
@@ -2801,14 +2849,14 @@ button.result-card {
 .bulk-actions-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: var(--space-1-5);
     align-items: center;
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
 }
 
 .bulk-actions-row .muted-text {
     margin-left: auto;
-    font-size: 13px;
+    font-size: var(--text-sm);
     white-space: nowrap;
 }
 
@@ -2817,15 +2865,15 @@ button.result-card {
 }
 
 #clear-gen-btn {
-    margin-top: 4px;
+    margin-top: var(--space-1);
 }
 
 /* Legacy save styles (kept for save-status) */
 .save-status {
-    margin-top: 8px;
-    padding: 6px 10px;
+    margin-top: var(--space-2);
+    padding: var(--space-1-5) var(--space-2-5);
     border-radius: var(--radius-sm);
-    font-size: 14px;
+    font-size: var(--text-base);
     background: var(--success-bg);
     color: var(--success);
     border: 1px solid rgba(127, 128, 49, 0.2);
@@ -2859,7 +2907,7 @@ button.result-card {
     background: var(--bg-primary);
     border: 1px solid var(--border);
     border-radius: var(--radius-xl);
-    padding: 32px 32px 28px;
+    padding: var(--space-8) var(--space-8) var(--space-7);
     box-shadow: var(--shadow-lg);
     text-align: center;
     animation: modal-slide-in 0.25s ease;
@@ -2869,13 +2917,13 @@ button.result-card {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 12px;
-    margin-bottom: 6px;
+    gap: var(--space-3);
+    margin-bottom: var(--space-1-5);
 }
 
 .al-card-title {
-    font-size: 28px;
-    font-weight: 700;
+    font-size: var(--text-4xl);
+    font-weight: var(--weight-bold);
     letter-spacing: 2px;
     background: var(--gradient-1);
     -webkit-background-clip: text;
@@ -2885,32 +2933,32 @@ button.result-card {
 }
 
 .al-card-subtitle {
-    font-size: 17px;
+    font-size: var(--text-xl);
     color: var(--text-muted);
-    line-height: 1.5;
+    line-height: var(--leading-normal);
     margin-bottom: 0;
 }
 
 .al-card-desc {
-    font-size: 15px;
+    font-size: var(--text-md);
     color: var(--text-muted);
-    line-height: 1.5;
+    line-height: var(--leading-normal);
     margin-bottom: 0;
 }
 
 .al-card-divider {
     height: 1px;
     background: var(--border);
-    margin: 18px 0 16px;
+    margin: var(--space-4-5) 0 var(--space-4);
 }
 
 .al-card-close {
     display: block;
-    margin: 14px auto 0;
+    margin: var(--space-3-5) auto 0;
     background: none;
     border: none;
     color: var(--text-muted);
-    font-size: 14px;
+    font-size: var(--text-base);
     cursor: pointer;
     font-family: var(--font-sans);
     transition: color 0.15s;
@@ -2922,7 +2970,7 @@ button.result-card {
 
 /* Rotating molecule animation */
 .al-molecule-spinner {
-    margin: 20px auto 16px;
+    margin: var(--space-5) auto var(--space-4);
     width: 72px;
     height: 72px;
 }
@@ -2967,19 +3015,19 @@ button.result-card {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 6px;
+    margin-bottom: var(--space-1-5);
 }
 
 .al-phase-label {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
     color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
 
 .al-phase-pct {
-    font-size: 13px;
+    font-size: var(--text-sm);
     font-family: var(--font-mono);
     color: var(--text-muted);
 }
@@ -2999,8 +3047,8 @@ button.result-card {
 
 /* Extra-small button */
 .btn-xs {
-    padding: 3px 8px;
-    font-size: 13px;
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
 }
 
 /* Generated ligand H controls */
@@ -3011,23 +3059,23 @@ button.result-card {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .gen-hs-controls .info-label {
-    font-size: 14px;
+    font-size: var(--text-base);
     margin-right: auto;
 }
 
 .input-select {
     flex: 1;
-    padding: 5px 10px;
+    padding: var(--space-1-5) var(--space-2-5);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--bg-elevated);
     color: var(--text-primary);
     font-family: var(--font-sans);
-    font-size: 14px;
+    font-size: var(--text-base);
     cursor: pointer;
     max-width: 200px;
     overflow: hidden;
@@ -3042,16 +3090,16 @@ button.result-card {
 /* ===== 2D OVERLAY TABS ===== */
 .mol-2d-tabs {
     display: flex;
-    gap: 2px;
+    gap: var(--space-0-5);
 }
 
 .mol-2d-tab {
     background: none;
     border: none;
-    padding: 3px 10px;
-    font-size: 13px;
+    padding: var(--space-1) var(--space-2-5);
+    font-size: var(--text-sm);
     font-family: var(--font-sans);
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     color: var(--text-muted);
     cursor: pointer;
     border-radius: var(--radius-sm);
@@ -3070,12 +3118,12 @@ button.result-card {
 
 /* ===== Inpainting Legend ===== */
 .inpainting-legend {
-    margin-top: 8px;
-    padding: 8px 10px;
+    margin-top: var(--space-2);
+    padding: var(--space-2) var(--space-2-5);
     background: var(--bg-elevated);
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
-    font-size: 14px;
+    font-size: var(--text-base);
     color: var(--text-secondary);
 }
 
@@ -3086,8 +3134,8 @@ button.result-card {
 .legend-row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 2px 0;
+    gap: var(--space-1-5);
+    padding: var(--space-0-5) 0;
 }
 
 .legend-dot {
@@ -3102,13 +3150,13 @@ button.result-card {
 .viz-controls {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    margin-top: 10px;
+    gap: var(--space-2);
+    margin-top: var(--space-2-5);
 }
 
 /* Analysis section — hide viz-controls visibility managed by parent section */
 #analysis-section .viz-controls {
-    margin-top: 10px;
+    margin-top: var(--space-2-5);
 }
 
 /* ===== Modal Overlay ===== */
@@ -3175,16 +3223,16 @@ button.result-card {
 .modal-header {
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 16px 24px;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-6);
     border-bottom: 1px solid var(--border);
     background: var(--bg-elevated);
     flex-shrink: 0;
 }
 
 .modal-title {
-    font-size: 18px;
-    font-weight: 600;
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-semibold);
     color: var(--text-primary);
     margin: 0;
     white-space: nowrap;
@@ -3198,7 +3246,7 @@ button.result-card {
     border-radius: var(--radius-sm);
     width: 32px;
     height: 32px;
-    font-size: 19px;
+    font-size: var(--text-2xl);
     color: var(--text-muted);
     cursor: pointer;
     display: flex;
@@ -3215,7 +3263,7 @@ button.result-card {
 }
 
 .modal-body {
-    padding: 20px 24px;
+    padding: var(--space-5) var(--space-6);
     overflow-y: auto;
     flex: 1;
 }
@@ -3224,10 +3272,10 @@ button.result-card {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 12px;
-    padding: 60px 20px;
+    gap: var(--space-3);
+    padding: var(--space-15) var(--space-5);
     color: var(--text-muted);
-    font-size: 17px;
+    font-size: var(--text-xl);
 }
 
 .modal-loading.hidden {
@@ -3236,9 +3284,9 @@ button.result-card {
 
 .modal-error {
     text-align: center;
-    padding: 40px 20px;
+    padding: var(--space-10) var(--space-5);
     color: var(--error);
-    font-size: 17px;
+    font-size: var(--text-xl);
     grid-column: 1 / -1;
 }
 
@@ -3267,9 +3315,9 @@ button.result-card {
 }
 
 .method-btn {
-    padding: 6px 16px;
-    font-size: 16px;
-    font-weight: 500;
+    padding: var(--space-1-5) var(--space-4);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-medium);
     font-family: var(--font-mono);
     background: var(--bg-input);
     border: none;
@@ -3291,7 +3339,7 @@ button.result-card {
 .method-btn.active {
     background: var(--lavender);
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
 }
 
 /* ===== Chemical Space Plot ===== */
@@ -3304,7 +3352,7 @@ button.result-card {
 .propspace-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 16px;
+    gap: var(--space-4);
 }
 
 .propspace-cell {
@@ -3323,8 +3371,8 @@ button.result-card {
 .affinity-plot-container {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
-    gap: 16px;
-    padding: 4px 0;
+    gap: var(--space-4);
+    padding: var(--space-1) 0;
 }
 
 .affinity-plot-wrapper {
@@ -3337,9 +3385,9 @@ button.result-card {
 }
 
 .affinity-plot-title {
-    padding: 10px 14px 6px;
-    font-size: 0.88rem;
-    font-weight: 600;
+    padding: var(--space-2-5) var(--space-3-5) var(--space-1-5);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
     color: var(--text-primary);
     letter-spacing: 0.02em;
 }
@@ -3353,13 +3401,13 @@ button.result-card {
 .affinity-ref-banner {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
-    padding: 10px 14px;
+    gap: var(--space-2-5);
+    margin-bottom: var(--space-3-5);
+    padding: var(--space-2-5) var(--space-3-5);
     background: var(--chartreuse-bg);
     border: 1px solid var(--chartreuse-dark);
     border-radius: var(--radius-md);
-    font-size: 0.84rem;
+    font-size: var(--text-md);
     color: var(--text-primary);
 }
 
@@ -3369,13 +3417,13 @@ button.result-card {
 
 .affinity-ref-text {
     flex: 1;
-    line-height: 1.45;
+    line-height: var(--leading-text);
 }
 
 .affinity-ref-raw {
     display: block;
-    margin-top: 2px;
-    font-size: 0.78rem;
+    margin-top: var(--space-0-5);
+    font-size: var(--text-base);
     color: var(--text-muted);
     font-family: var(--font-mono);
 }
@@ -3383,10 +3431,10 @@ button.result-card {
 /* Ref-affinity badge shown inside ligand info card */
 .affinity-ref-badge {
     display: inline-block;
-    margin-left: 6px;
-    padding: 1px 7px;
-    font-size: 0.78rem;
-    font-weight: 600;
+    margin-left: var(--space-1-5);
+    padding: var(--space-px) var(--space-2);
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
     color: var(--chartreuse-dark);
     background: var(--chartreuse-bg);
     border: 1px solid var(--chartreuse-dark);
@@ -3397,9 +3445,9 @@ button.result-card {
 /* Affinity modal – empty state */
 .affinity-empty {
     text-align: center;
-    padding: 40px 20px;
+    padding: var(--space-10) var(--space-5);
     color: var(--text-muted);
-    font-size: 0.92rem;
+    font-size: var(--text-xl);
 }
 
 @media (max-width: 900px) {
@@ -3410,7 +3458,7 @@ button.result-card {
 
 /* ===== Properties Panel (2D Overlay Tab) ===== */
 .prop-table-container {
-    padding: 8px 4px;
+    padding: var(--space-2) var(--space-1);
     max-height: 340px;
     overflow-y: auto;
 }
@@ -3418,7 +3466,7 @@ button.result-card {
 .prop-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 14px;
+    font-size: var(--text-base);
 }
 
 .prop-table tr {
@@ -3430,9 +3478,9 @@ button.result-card {
 }
 
 .prop-group-header td {
-    padding: 8px 6px 4px;
-    font-size: 13px;
-    font-weight: 700;
+    padding: var(--space-2) var(--space-1-5) var(--space-1);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--text-muted);
@@ -3440,23 +3488,23 @@ button.result-card {
 }
 
 .prop-name {
-    padding: 5px 6px;
+    padding: var(--space-1-5) var(--space-1-5);
     color: var(--text-secondary);
     font-family: var(--font-sans);
     white-space: nowrap;
 }
 
 .prop-value {
-    padding: 5px 6px;
+    padding: var(--space-1-5) var(--space-1-5);
     text-align: right;
     font-family: var(--font-mono);
     color: var(--text-primary);
-    font-weight: 500;
+    font-weight: var(--weight-medium);
 }
 
 .prop-alert {
     color: var(--error);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
 }
 
 /* Properties-active overlay — wider to fit table */
@@ -3479,7 +3527,7 @@ button.result-card {
 @media (max-width: 900px) {
     .modal-content {
         max-height: 85vh;
-        margin: 16px;
+        margin: var(--space-4);
     }
 
     .modal-lg,
@@ -3507,14 +3555,14 @@ button.result-card {
 .affinity-panel-toggle {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-1-5);
     width: 100%;
-    padding: 8px 12px;
+    padding: var(--space-2) var(--space-3);
     background: none;
     border: none;
     color: var(--text-primary);
-    font-size: 14px;
-    font-weight: 600;
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
     font-family: var(--font-sans);
     cursor: pointer;
     transition: background 0.15s ease;
@@ -3531,7 +3579,7 @@ button.result-card {
 
 .affinity-panel-chevron {
     margin-left: auto;
-    font-size: 0.75rem;
+    font-size: var(--text-sm);
     color: var(--text-muted);
     transition: transform 0.2s ease;
 }
@@ -3541,12 +3589,12 @@ button.result-card {
 }
 
 .affinity-panel-body {
-    padding: 8px 12px 10px;
+    padding: var(--space-2) var(--space-3) var(--space-2-5);
     border-top: 1px solid var(--border);
 }
 
 .affinity-panel-body .rank-select-row {
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
 }
 
 .affinity-panel-body .rank-select-row:last-child {
@@ -3554,12 +3602,12 @@ button.result-card {
 }
 
 .affinity-dist-btn {
-    margin-bottom: 10px;
-    font-size: 0.82rem;
+    margin-bottom: var(--space-2-5);
+    font-size: var(--text-md);
 }
 
 .affinity-rank-section {
-    padding-top: 8px;
+    padding-top: var(--space-2);
     border-top: 1px solid var(--border);
 }
 
@@ -3570,8 +3618,8 @@ button.result-card {
 .rank-select-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
 }
 
 .rank-select-row .info-label {
@@ -3581,8 +3629,8 @@ button.result-card {
 
 .select-sm {
     flex: 1;
-    padding: 4px 8px;
-    font-size: 0.82rem;
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-md);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--bg-elevated);
@@ -3593,8 +3641,8 @@ button.result-card {
 .input-sm {
     width: 60px;
     flex: 0 0 60px;
-    padding: 4px 8px;
-    font-size: 0.82rem;
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-md);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--bg-elevated);
@@ -3604,10 +3652,10 @@ button.result-card {
 
 .affinity-badge {
     display: inline-block;
-    margin-left: 8px;
-    padding: 1px 6px;
-    font-size: 0.78rem;
-    font-weight: 600;
+    margin-left: var(--space-2);
+    padding: var(--space-px) var(--space-1-5);
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
     color: var(--chartreuse-dark);
     background: var(--chartreuse-bg);
     border: 1px solid var(--chartreuse-dark);
@@ -3623,65 +3671,65 @@ button.result-card {
 .model-card-current {
     display: flex;
     align-items: baseline;
-    gap: 8px;
-    margin-bottom: 12px;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
     flex-wrap: wrap;
 }
 
 .model-card-label {
-    font-size: 15px;
+    font-size: var(--text-md);
     color: var(--text-secondary);
     white-space: nowrap;
 }
 
 .model-card-name {
-    font-size: 15px;
+    font-size: var(--text-md);
     font-family: var(--font-mono);
     color: var(--text-primary);
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     word-break: break-all;
 }
 
 .model-card-actions {
     display: flex;
-    gap: 8px;
-    margin-bottom: 4px;
+    gap: var(--space-2);
+    margin-bottom: var(--space-1);
 }
 
 .model-card-btn {
     flex: 1;
-    font-size: 14px !important;
-    padding: 7px 14px !important;
+    font-size: var(--text-base) !important;
+    padding: var(--space-2) var(--space-3-5) !important;
     display: inline-flex !important;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: var(--space-1-5);
 }
 
 /* Inline save expansion */
 .model-save-expand {
-    margin-top: 10px;
-    padding-top: 10px;
+    margin-top: var(--space-2-5);
+    padding-top: var(--space-2-5);
     border-top: 1px solid var(--border);
 }
 
 .model-save-row {
     display: flex;
-    gap: 6px;
+    gap: var(--space-1-5);
     align-items: center;
 }
 
 .model-save-row .input-text {
     flex: 1;
-    font-size: 13px;
-    padding: 6px 10px;
+    font-size: var(--text-sm);
+    padding: var(--space-1-5) var(--space-2-5);
 }
 
 .model-save-status {
-    margin-top: 8px;
-    font-size: 13px;
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
     color: var(--lavender);
-    font-weight: 500;
+    font-weight: var(--weight-medium);
 }
 
 .model-save-status.error {
@@ -3690,34 +3738,34 @@ button.result-card {
 
 /* Inline load expansion */
 .model-load-expand {
-    margin-top: 10px;
-    padding-top: 10px;
+    margin-top: var(--space-2-5);
+    padding-top: var(--space-2-5);
     border-top: 1px solid var(--border);
 }
 
 .model-load-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--space-1);
     max-height: 220px;
     overflow-y: auto;
 }
 
 .model-load-group-title {
-    font-size: 11px;
-    font-weight: 600;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--text-muted);
-    padding: 6px 0 2px;
+    padding: var(--space-1-5) 0 var(--space-0-5);
 }
 
 .model-load-item {
     display: block;
     width: 100%;
     text-align: left;
-    padding: 9px 14px;
-    font-size: 14px;
+    padding: var(--space-2-5) var(--space-3-5);
+    font-size: var(--text-base);
     font-family: var(--font-mono);
     color: var(--text-primary);
     background: var(--bg-input);
@@ -3738,12 +3786,12 @@ button.result-card {
     background: var(--lavender-bg);
     color: #6a4d8a;
     cursor: default;
-    font-weight: 500;
+    font-weight: var(--weight-medium);
 }
 
 .model-load-loading {
     text-align: center;
-    padding: 16px;
+    padding: var(--space-4);
     color: var(--text-muted);
-    font-size: 13px;
+    font-size: var(--text-sm);
 }
