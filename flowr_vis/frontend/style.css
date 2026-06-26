@@ -929,15 +929,15 @@ body {
 .setting-group-stacked {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1-5);
-    margin-bottom: var(--space-3);
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
     min-width: 0;
 }
 
 .slider-row {
     display: flex;
     align-items: center;
-    gap: var(--space-2-5);
+    gap: var(--space-3);
     min-width: 0;
 }
 
@@ -947,7 +947,7 @@ body {
 
 .setting-label {
     font-size: var(--text-lg);
-    font-weight: var(--weight-regular);
+    font-weight: var(--weight-medium);
     color: var(--text-secondary);
     min-width: 120px;
     flex-shrink: 0;
@@ -957,41 +957,89 @@ body {
     flex: 1;
     -webkit-appearance: none;
     appearance: none;
-    height: 4px;
-    background: var(--bg-elevated);
-    border-radius: 2px;
+    height: 18px;
+    /* Generous hit target; the visible track (6px) is painted by the
+       browser-specific track pseudo-elements below. */
+    background: transparent;
     outline: none;
+    cursor: pointer;
+}
+
+/* WebKit/Blink: track carries a JS-driven gradient fill (--fill set per slider
+   in app.js) so the filled portion shows progress up to the thumb. */
+.slider::-webkit-slider-runnable-track {
+    height: 6px;
+    box-sizing: border-box;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: linear-gradient(to right,
+            var(--lavender-dark) 0 var(--fill, 0%),
+            var(--bg-elevated) var(--fill, 0%) 100%);
 }
 
 .slider::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
+    margin-top: -6px;
     border-radius: 50%;
-    background: var(--lavender-deeper);
+    background: #fff;
+    border: 2px solid var(--lavender-deeper);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 4px var(--lavender-glow);
     cursor: pointer;
-    border: 2px solid white;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, .2);
+    transition: transform .12s ease, box-shadow .12s ease;
+}
+
+/* Firefox: native track + progress give the fill without JS. */
+.slider::-moz-range-track {
+    height: 6px;
+    box-sizing: border-box;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+}
+
+.slider::-moz-range-progress {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--lavender-dark);
 }
 
 .slider::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
-    background: var(--lavender-deeper);
+    background: #fff;
+    border: 2px solid var(--lavender-deeper);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
     cursor: pointer;
-    border: 2px solid white;
+    transition: transform .12s ease;
+}
+
+.slider:hover::-webkit-slider-thumb,
+.slider:focus-visible::-webkit-slider-thumb {
+    transform: scale(1.12);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22), 0 0 0 6px var(--lavender-glow);
+}
+
+.slider:hover::-moz-range-thumb,
+.slider:focus-visible::-moz-range-thumb {
+    transform: scale(1.12);
 }
 
 .setting-value {
     font-family: var(--font-mono);
     font-size: var(--text-lg);
     color: var(--lavender-deeper);
-    min-width: 40px;
-    text-align: right;
+    min-width: 48px;
+    text-align: center;
     font-weight: var(--weight-semibold);
     flex-shrink: 0;
+    padding: var(--space-0-5) var(--space-2);
+    background: var(--lavender-glow);
+    border: 1px solid var(--lavender-light);
+    border-radius: var(--radius-sm);
 }
 
 /* ===== MODE SELECTOR ===== */

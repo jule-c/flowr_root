@@ -22,7 +22,7 @@
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
 
-    <link rel="stylesheet" href="/static/style.css?v=20260625c">
+    <link rel="stylesheet" href="/static/style.css?v=20260626b">
     <link rel="icon" type="image/svg+xml"
         href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='28' y2='28'%3E%3Cstop offset='0%25' stop-color='%23DFC6F6'/%3E%3Cstop offset='100%25' stop-color='%23D5D653'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='14' cy='14' r='13' stroke='url(%23g)' stroke-width='2' fill='none'/%3E%3Ccircle cx='14' cy='14' r='6' fill='url(%23g)'/%3E%3Ccircle cx='8' cy='8' r='2.5' fill='%23DFC6F6'/%3E%3Ccircle cx='20' cy='8' r='2.5' fill='%23c8b2dd'/%3E%3Ccircle cx='8' cy='20' r='2.5' fill='%23D5D653'/%3E%3Ccircle cx='20' cy='20' r='2.5' fill='%23ae9e66'/%3E%3C/svg%3E">
 </head>
@@ -642,11 +642,13 @@
                         </label>
                     </div>
 
-                    <div class="setting-group sub-option-inline" id="noise-scale-group">
-                        <label class="setting-label" style="min-width: 80px;" for="noise-scale">Scale</label>
-                        <input type="range" id="noise-scale" min="0" max="1" step="0.05" value="0.1" class="slider"
-                            oninput="document.getElementById('noise-scale-val').textContent = this.value">
-                        <span class="setting-value" id="noise-scale-val">0.1</span>
+                    <div class="setting-group-stacked sub-option-inline" id="noise-scale-group">
+                        <label class="setting-label" for="noise-scale">Scale</label>
+                        <div class="slider-row">
+                            <input type="range" id="noise-scale" min="0" max="1" step="0.05" value="0.1" class="slider"
+                                oninput="document.getElementById('noise-scale-val').textContent = this.value">
+                            <span class="setting-value" id="noise-scale-val">0.1</span>
+                        </div>
                     </div>
                 </div>
 
@@ -683,11 +685,13 @@
                         </label>
                     </div>
 
-                    <div class="setting-group sub-option-inline" id="diversity-threshold-group">
-                        <label class="setting-label" style="min-width: 80px;" for="diversity-threshold">Threshold</label>
-                        <input type="range" id="diversity-threshold" min="0.1" max="1.0" step="0.05" value="0.8"
-                            class="slider" oninput="document.getElementById('div-thresh-val').textContent = this.value">
-                        <span class="setting-value" id="div-thresh-val">0.8</span>
+                    <div class="setting-group-stacked sub-option-inline" id="diversity-threshold-group">
+                        <label class="setting-label" for="diversity-threshold">Threshold</label>
+                        <div class="slider-row">
+                            <input type="range" id="diversity-threshold" min="0.1" max="1.0" step="0.05" value="0.8"
+                                class="slider" oninput="document.getElementById('div-thresh-val').textContent = this.value">
+                            <span class="setting-value" id="div-thresh-val">0.8</span>
+                        </div>
                     </div>
 
                     <div class="setting-group sbdd-only" id="opt-full-group">
@@ -1492,7 +1496,7 @@
 
 
     <!-- ===== JAVASCRIPT ===== -->
-    <script src="/static/app.js?v=20260625a"></script>
+    <script src="/static/app.js?v=20260626b"></script>
     <script>
         (function () {
             var protArea = document.getElementById('protein-upload-area');

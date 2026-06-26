@@ -171,6 +171,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         e.preventDefault();
         el.click();
     });
+
+    // Filled-track sliders: paint each range slider's progress up to the thumb
+    // via a --fill % that the CSS track gradient reads (WebKit/Blink; Firefox
+    // uses native ::-moz-range-progress). Delegated input + an initial pass so
+    // sliders revealed later are correct too.
+    const _updateSliderFill = (el) => {
+        const min = parseFloat(el.min) || 0, max = parseFloat(el.max), v = parseFloat(el.value) || 0;
+        const pct = (isFinite(max) && max > min) ? ((v - min) / (max - min)) * 100 : 0;
+        el.style.setProperty('--fill', pct.toFixed(2) + '%');
+    };
+    document.querySelectorAll('input[type="range"].slider').forEach(_updateSliderFill);
+    document.addEventListener('input', (e) => {
+        const t = e.target;
+        if (t && t.matches && t.matches('input[type="range"].slider')) _updateSliderFill(t);
+    });
 });
 
 function initMainApp() {
