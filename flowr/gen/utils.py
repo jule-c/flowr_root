@@ -29,6 +29,7 @@ from flowr.data.interpolate import (
     ComplexInterpolant,
     GeometricInterpolant,
     GeometricNoiseSampler,
+    _sanitize_or_fix_aromaticity,
     extract_cores,
     extract_fragments,
     extract_linkers,
@@ -331,17 +332,60 @@ def check_substructure_match(
     if isinstance(expected_indices, int):
         expected_indices = [expected_indices]
 
-    # Create substructure molecule from reference
-    expected_submol = Chem.RWMol(ref_mol)
     atoms_to_remove = [
         i for i in range(ref_mol.GetNumAtoms()) if i not in expected_indices
     ]
-    for idx in sorted(atoms_to_remove, reverse=True):
-        expected_submol.RemoveAtom(idx)
-    expected_submol = expected_submol.GetMol()
 
-    # Check if generated molecule contains the substructure
-    return gen_mol.HasSubstructMatch(expected_submol)
+    def _carve(mol: Chem.Mol) -> Chem.Mol:
+        submol = Chem.RWMol(mol)
+        for idx in sorted(atoms_to_remove, reverse=True):
+            submol.RemoveAtom(idx)
+        return submol.GetMol()
+
+    # Check whether the generated molecule contains the required substructure.
+    #
+    # The generated molecules are sanitized (aromaticity perceived) upstream, so
+    # for a correct comparison the reference-derived query must be in the same
+    # representation. ``ref_mol`` (from ``_generate_ligs(sanitise=False)``) carries
+    # kekulé bonds without perceived aromaticity, so carving it directly and
+    # matching would be a bond-type mismatch against an aromatic generated ring.
+    #
+    # Strict path: sanitize a copy of the WHOLE reference first — its valences are
+    # intact (unlike a carved fragment, whose severed bonds and missing ring N–H
+    # make it unsanitizable / unkekulizable) — then carve the scaffold. The
+    # fragment inherits the whole-molecule aromatic perception, so ``HasSubstructMatch``
+    # requires the generated molecule to reproduce the scaffold with matching bond
+    # orders / aromaticity. A saturated analog of an aromatic scaffold is therefore
+    # correctly rejected.
+    ref_sanitized = Chem.Mol(ref_mol)
+    if _sanitize_or_fix_aromaticity(ref_sanitized):
+        strict_submol = _carve(ref_sanitized)
+        gen_for_match = gen_mol
+        # Perceive aromaticity on the generated molecule too, so both operands use
+        # the same aromatic model (gen mols are usually already sanitized, but this
+        # guards callers that pass unsanitized inputs).
+        if not any(b.GetIsAromatic() for b in gen_mol.GetBonds()):
+            gen_copy = Chem.Mol(gen_mol)
+            if _sanitize_or_fix_aromaticity(gen_copy):
+                gen_for_match = gen_copy
+        return gen_for_match.HasSubstructMatch(strict_submol)
+
+    # Fallback: the reference could not be sanitized (rare — malformed model
+    # output). Match on element + connectivity with a bond-order-generic query so
+    # the scaffold is still detected instead of crashing or silently failing.
+    # ``NoAdjustments()`` avoids any aromatize/kekulize step on the fragile
+    # fragment; ``adjustDegree=False`` keeps the query a subgraph so scaffold atoms
+    # that gained substituents in the elaborated molecule still match.
+    expected_submol = _carve(ref_mol)
+    try:
+        query_params = Chem.AdjustQueryParameters.NoAdjustments()
+        query_params.makeBondsGeneric = True
+        query_params.adjustDegree = False
+        query = Chem.AdjustQueryProperties(expected_submol, query_params)
+    except Exception:
+        query = expected_submol
+
+    return gen_mol.HasSubstructMatch(query)
 
 
 def split_list(data, num_chunks):
@@ -748,7 +792,15 @@ def load_data_from_pdb(
         chain_id=chain_id,
         **processing_params,
     )
-    system = system.remove_hs(include_ligand=remove_hs)
+    # Forward remove_aromaticity so the ligand is re-featurized in the SAME bond
+    # representation the model was trained on. remove_hs() re-runs mol_to_torch on
+    # the ligand; without remove_aromaticity it sanitizes to aromatic bonds
+    # (class 4), which the kekulé-trained pocket model never saw — making the
+    # inpaint prior out-of-distribution and the substructure query aromatic while
+    # the generated scaffold is kekulé (the 0% substructure-match bug).
+    system = system.remove_hs(
+        include_ligand=remove_hs, remove_aromaticity=remove_aromaticity
+    )
     return system
 
 
