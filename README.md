@@ -6,7 +6,7 @@
 
 This is a research repository introducing FLOWR.root.
 
-**⚠️ PLEASE NOTE:** This is an early release. Final weights with a fully converged model will be shared in a few months.
+**⚠️ PLEASE NOTE:** Due to computational constraints, the joint affinity and ligand generation model is not fully converged. As reported in the paper, it reaches state-of-the-art performance across benchmarks, and we expect substantially better results with extended training. The affinity head is accurate in-distribution; on out-of-distribution data, e.g. in-series compounds, it should be combined with LoRA adaptation (see paper). A fully converged, generation-only model trained on SpinDr (`flowr_root_spindr_base.ckpt`) is also provided and shows better or comparable, more creative ligand generation; see [Checkpoints](#checkpoints).
 
 ---
 
@@ -16,6 +16,7 @@ This is a research repository introducing FLOWR.root.
 - [FLOWR.ui](#flowrui)
 - [Tutorial](#tutorial)
 - [Getting Started](#getting-started)
+  - [Checkpoints](#checkpoints)
   - [Data](#data)
   - [Generating Molecules from PDB/CIF](#generating-molecules-from-pdbcif)
   - [Generating Molecules from SDF (Ligand-only)](#generating-molecules-from-sdf)
@@ -95,13 +96,21 @@ You can also run this on your MacBook - install the respective environment and y
 
 ## Getting Started
 
-We provide all datasets in PDB and SDF format, as well as a trained FLOWR.root model checkpoint.
+We provide all datasets in PDB and SDF format, as well as trained FLOWR.root checkpoints.
 For training and generation, we provide basic bash and SLURM scripts in the `scripts/` directory. These scripts are intended to be modified and adjusted according to your computational resources and experimental needs.
+
+### Checkpoints
+
+All checkpoints can be downloaded from [Google Drive](https://drive.google.com/drive/u/0/folders/1NWpzTY-BG_9C4zXZndWlKwdu7UJNCYj8):
+
+- `flowr_root_v2.2.ckpt` — latest joint ligand generation and affinity model.
+- `flowr_root_v2.ckpt` — original model behind most results in the paper; use it for reproduction.
+- `flowr_root_spindr_base.ckpt` — fully converged, generation-only model trained on SpinDr.
+- `flowr_root_v2_mol.ckpt` — ligand-only generation without protein context (see [Generating Molecules from SDF](#generating-molecules-from-sdf)).
 
 ### Data
 
-Download the datasets and the latest (02.06.2026: v2.1) FLOWR.root checkpoint here:
-[Google Drive](https://drive.google.com/drive/u/0/folders/1NWpzTY-BG_9C4zXZndWlKwdu7UJNCYj8).
+All datasets can be downloaded from [Google Drive](https://drive.google.com/drive/u/0/folders/1NWpzTY-BG_9C4zXZndWlKwdu7UJNCYj8).
 
 ### Generating Molecules from PDB/CIF
 
