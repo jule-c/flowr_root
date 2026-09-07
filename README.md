@@ -6,7 +6,7 @@
 
 This is a research repository introducing FLOWR.root.
 
-**⚠️ PLEASE NOTE:** Due to computational constraints, the joint affinity and ligand generation model is not fully converged. As reported in the paper, it reaches state-of-the-art performance across benchmarks, and we expect substantially better results with extended training. The affinity head is accurate in-distribution; on out-of-distribution data, e.g. in-series compounds, it should be combined with LoRA adaptation (see paper). A fully converged, generation-only model trained on SpinDr (`flowr_root_spindr_base.ckpt`) is also provided and shows better or comparable, more creative ligand generation; see [Checkpoints](#checkpoints).
+**⚠️ PLEASE NOTE:** Due to computational constraints, the joint affinity and ligand generation model is not fully converged. As shown in the paper, it nevertheless reaches state-of-the-art performance across benchmarks, but we'd expect substantially better results with extended training (we found, e.g., that clash count can be a problem on OOD data, while less so in the fully converged structure-only model - a fully converged, generation-only model trained on SPINDR is also provided; see [Checkpoints](#checkpoints)). Also note, the affinity head is accurate in-distribution; on out-of-distribution data, e.g. OOD in-series compounds, it should be combined with LoRA adaptation (as described in the paper and fully supported by the code in this repo). The FLOWR.ui provides almost all functionalities of the model accessible via browser - use Claude/Codex to set it up for you in a few minutes, no code needed.
 
 ---
 
@@ -40,7 +40,7 @@ This is a research repository introducing FLOWR.root.
 
 - **Installation time** Installation takes roughly 5 minutes on a normal computer.
 
-- **Package Manager**: [mamba](https://mamba.readthedocs.io)  
+- **Package Manager**: [mamba](https://mamba.readthedocs.io)
   Install via:
 
   ```bash
@@ -48,7 +48,7 @@ This is a research repository introducing FLOWR.root.
   bash Miniforge3-$(uname)-$(uname -m).sh
   ```
 
-1. **Create the Environment**  
+1. **Create the Environment**
    Install the required environment using [mamba](https://mamba.readthedocs.io):
 
    ```bash
@@ -61,13 +61,13 @@ This is a research repository introducing FLOWR.root.
    mamba env create -f environment_mac.yml
    ```
 
-2. **Activate the Environment**  
+2. **Activate the Environment**
 
    ```bash
    conda activate flowr_root
    ```
 
-3. **Set PYTHONPATH**  
+3. **Set PYTHONPATH**
    Ensure the repository directory is in your Python path:
 
    ```bash
@@ -105,7 +105,7 @@ All checkpoints can be downloaded from [Google Drive](https://drive.google.com/d
 
 - `flowr_root_v2.2.ckpt` — latest joint ligand generation and affinity model.
 - `flowr_root_v2.ckpt` — original model behind most results in the paper; use it for reproduction.
-- `flowr_root_spindr_base.ckpt` — fully converged, generation-only model trained on SpinDr.
+- `flowr_root_spindr_base.ckpt` — fully converged, generation-only model trained on SPINDR (shows slightly more creative ligand generation, less clashes OOD, best as ideation tool).
 - `flowr_root_v2_mol.ckpt` — ligand-only generation without protein context (see [Generating Molecules from SDF](#generating-molecules-from-sdf)).
 
 ### Data
@@ -298,7 +298,7 @@ This final step computes essential data distribution statistics required for tra
 - Place your `splits.npz` file (with keys idx_train, idx_val and idx_test containing indices) in the `final/` folder
 - Comment out `--val_size` and `--test_size` parameters in `data_statistics.sl`
 
-**Option B: Random Split**  
+**Option B: Random Split**
 
 - The script will automatically create train/val/test splits with the specified sizes
 - Modify `--val_size` and `--test_size` as needed
@@ -360,13 +360,13 @@ If you use FLOWR.root in your research, please cite it as follows:
 
 ```bibtex
 @misc{cremer2025flowrrootflowmatchingbased,
-      title={FLOWR.root: A flow matching based foundation model for joint multi-purpose structure-aware 3D ligand generation and affinity prediction}, 
+      title={FLOWR.root: A flow matching based foundation model for joint multi-purpose structure-aware 3D ligand generation and affinity prediction},
       author={Julian Cremer and Tuan Le and Mohammad M. Ghahremanpour and Emilia Sługocka and Filipe Menezes and Djork-Arné Clevert},
       year={2025},
       eprint={2510.02578},
       archivePrefix={arXiv},
       primaryClass={q-bio.BM},
-      url={https://arxiv.org/abs/2510.02578}, 
+      url={https://arxiv.org/abs/2510.02578},
 }
 ```
 
