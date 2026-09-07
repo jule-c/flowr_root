@@ -339,7 +339,9 @@ Contributions are welcome! If you have ideas, bug fixes, or improvements, please
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [MIT License](LICENSE), with one exception: the
+FLOWR.ui visualization app in `flowr_vis/` is distributed under its own
+source-available license (see [`flowr_vis/LICENSE`](flowr_vis/LICENSE)).
 
 ---
 
