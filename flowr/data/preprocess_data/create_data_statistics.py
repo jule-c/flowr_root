@@ -25,6 +25,29 @@ def save_pickle(array, path, exist_ok=True):
                 pickle.dump(array, f)
 
 
+def _split_size(value):
+    """Parse a split size that may be a fraction (< 1) or an absolute count (>= 1).
+
+    ``train_val_test_split`` already distinguishes the two by Python type: a ``float``
+    is treated as a fraction of the dataset, an ``int`` as a literal number of systems.
+    Argparse's ``type=int`` erased that distinction and made fractions unusable, so
+    small datasets had to fit whatever absolute default was shipped -- and the shipped
+    ``--val_size 10 --test_size 100`` blew up with a negative training split on anything
+    under ~110 systems.
+    """
+    number = float(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError(f"split size must be >= 0, got {value}")
+    if number >= 1:
+        if not number.is_integer():
+            raise argparse.ArgumentTypeError(
+                f"a split size >= 1 is an absolute number of systems and must be a "
+                f"whole number, got {value}"
+            )
+        return int(number)
+    return number  # fraction of the dataset
+
+
 def args():
     argparser = argparse.ArgumentParser()
     argparser.add_argument(
@@ -42,15 +65,22 @@ def args():
     )
     argparser.add_argument(
         "--val_size",
-        type=int,
-        help="Validation set size (as a fraction of the dataset)",
-        default=100,
+        type=_split_size,
+        help=(
+            "Validation set size. A value below 1 is a fraction of the dataset "
+            "(e.g. 0.1 = 10%%); a whole number >= 1 is an absolute count of systems. "
+            "Fractions are the safe choice for small custom datasets."
+        ),
+        default=0.1,
     )
     argparser.add_argument(
         "--test_size",
-        type=int,
-        help="Test set size (as a fraction of the dataset)",
-        default=225,
+        type=_split_size,
+        help=(
+            "Test set size. A value below 1 is a fraction of the dataset "
+            "(e.g. 0.1 = 10%%); a whole number >= 1 is an absolute count of systems."
+        ),
+        default=0.1,
     )
     argparser.add_argument(
         "--seed",
@@ -138,9 +168,16 @@ def get_statistics(args):
             splits_path = Path(args.data_path) / "splits.npz"
             if not splits_path.exists():
                 print(f"Creating random splits with seed {args.seed}...")
+                # train_size=None lets train_val_test_split take the remainder after
+                # val/test, which is what makes fractional sizes work: it converts each
+                # fraction to a count against dataset_len first. Computing the remainder
+                # here instead (the old "dataset_len - (val + test)") both forced integer
+                # sizes and, on any dataset smaller than val_size + test_size, produced a
+                # negative train split -- e.g. the shipped "--val_size 10 --test_size 100"
+                # on 12 systems gave "training (-98)".
                 idx_train, idx_val, idx_test = make_splits(
                     dataset_len=dataset_len,
-                    train_size=dataset_len - (args.val_size + args.test_size),
+                    train_size=None,
                     val_size=args.val_size,
                     test_size=args.test_size,
                     seed=args.seed,

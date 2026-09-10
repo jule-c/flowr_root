@@ -1245,7 +1245,7 @@ class LigandPocketCFM(pl.LightningModule):
             }
             for metric, value in metrics.items():
                 # Show main validity and individual critical metrics in progress bar
-                progbar = metric in ["pb_validity"]
+                progbar = metric in ["pb-validity"]
                 if isinstance(value, dict):
                     for k, v in value.items():
                         self.log(
@@ -2567,12 +2567,25 @@ class LigandPocketCFM(pl.LightningModule):
     def configure_optimizers(self):
         """Configure optimizers and learning rate schedulers for the model."""
 
-        # Get all model parameters
-        params = list(self.gen.parameters())
+        # Only hand the optimizer parameters it is allowed to update. LoRA and
+        # --freeze_layers set requires_grad=False on most of the generator, and an
+        # unfiltered list made the optimizer carry those frozen tensors anyway (observed:
+        # 1624 tensors, 774 trainable). Harmless today -- frozen params keep grad=None, so
+        # AdamW skips them -- but it is pointless bookkeeping and would start applying
+        # weight decay to frozen weights if optimizer semantics ever changed.
+        params = [p for p in self.gen.parameters() if p.requires_grad]
 
         # Add confidence module parameters if training confidence
         if self.train_confidence and self.confidence_module is not None:
-            params.extend(list(self.confidence_module.parameters()))
+            params.extend(
+                p for p in self.confidence_module.parameters() if p.requires_grad
+            )
+
+        if not params:
+            raise ValueError(
+                "No trainable parameters: every parameter has requires_grad=False. "
+                "Check --freeze_layers / LoRA settings."
+            )
 
         # Initialize optimizer and learning rate scheduler
         opt = torch.optim.AdamW(

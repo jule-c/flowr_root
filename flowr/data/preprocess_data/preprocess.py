@@ -21,6 +21,36 @@ from flowr.data.preprocess_pdbs import (
 )
 
 
+def split_into_chunks(system_ids, num_jobs):
+    """Split ``system_ids`` into exactly ``num_jobs`` chunks (numpy array_split semantics).
+
+    The first ``len(system_ids) % num_jobs`` chunks get one extra element; when
+    ``num_jobs > len(system_ids)`` the surplus chunks are simply empty.
+
+    The previous scheme sliced by ``ceil(n / num_jobs)``, so ``len(chunks)`` was whatever
+    fell out of the division -- usually *fewer* than ``num_jobs`` -- and two bugs followed:
+
+    * a SLURM ``--array`` smaller than ``len(chunks)`` silently skipped systems (n=12,
+      num_jobs=40 gave 12 chunks but ``--array=1-10`` ran only 10 of them), and
+    * ``chunks[job_index - 1]`` raised ``IndexError`` whenever ``job_index`` ran past the
+      end (n=12, num_jobs=5 gave only 4 chunks, so array task 5 crashed).
+
+    Returning exactly ``num_jobs`` chunks makes "one array task per job" correct by
+    construction, so ``--array=1-$num_jobs`` always covers the dataset exactly once.
+    """
+    if num_jobs < 1:
+        raise ValueError(f"--num_jobs must be >= 1, got {num_jobs}")
+
+    base, extra = divmod(len(system_ids), num_jobs)
+    chunks = []
+    start = 0
+    for i in range(num_jobs):
+        size = base + (1 if i < extra else 0)
+        chunks.append(system_ids[start : start + size])
+        start += size
+    return chunks
+
+
 def main():
     parser = argparse.ArgumentParser(description="Process data complexes in chunks")
     parser.add_argument(
@@ -133,20 +163,36 @@ def main():
 
     # Find all PDB or CIF files and get system IDs
     pdb_files = list(data_path.glob(f"*.{args.file_type}"))
-    system_ids = [f.stem for f in pdb_files]
+    # Sort: every array task globs independently, and glob order is filesystem-dependent.
+    # Without a deterministic order two tasks can disagree about the partition, which
+    # duplicates some systems and drops others.
+    system_ids = sorted(f.stem for f in pdb_files)
 
     print(f"Found {len(system_ids)} total systems")
 
-    # Chunk the systems
-    chunk_size = (len(system_ids) + args.num_jobs - 1) // args.num_jobs
-    chunks = [
-        system_ids[i : i + chunk_size] for i in range(0, len(system_ids), chunk_size)
-    ]
+    # Chunk the systems into exactly one chunk per job, so a SLURM --array=1-$num_jobs
+    # covers the dataset exactly once with nothing skipped and nothing out of range.
+    if not 1 <= args.job_index <= args.num_jobs:
+        raise SystemExit(
+            f"--job_index must be between 1 and --num_jobs ({args.num_jobs}), got "
+            f"{args.job_index}. Set the SLURM '--array' range to 1-{args.num_jobs} so "
+            "it matches num_jobs exactly."
+        )
+    chunks = split_into_chunks(system_ids, args.num_jobs)
     chunk_systems = chunks[args.job_index - 1]  # 1-indexed
 
     print(
         f"Job {args.job_index}/{args.num_jobs}: Processing {len(chunk_systems)} systems"
     )
+
+    if not chunk_systems:
+        # More jobs than systems: this task has nothing to do. Exit cleanly (and without
+        # creating an empty LMDB that the merge step would then have to skip).
+        print(
+            f"No systems assigned to job {args.job_index} "
+            f"({len(system_ids)} systems across {args.num_jobs} jobs). Nothing to do."
+        )
+        return
 
     # Create LMDB database for this chunk
     lmdb_path = save_dir / f"chunk_{args.job_index:04d}"

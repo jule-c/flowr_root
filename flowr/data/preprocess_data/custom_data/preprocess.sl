@@ -6,6 +6,7 @@
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=gpu
+# The array bound MUST equal num_jobs below: one array task per chunk.
 #SBATCH --array=1-10
 #SBATCH --output=./preprocess_data/lmdb_%j.out
 #SBATCH --error=./preprocess_data/lmdb_%j.err
@@ -14,7 +15,11 @@
 export PATH="$HOME/.local/bin:$PATH"
 cd YOUR_CODE_PATH/flowr_root
 
-num_jobs=40
+# Number of parallel chunks. This MUST match the '#SBATCH --array=1-N' bound above:
+# SLURM reads the #SBATCH directives before this variable exists, so the two are kept in
+# sync by hand. Fewer array tasks than num_jobs silently leaves chunks unprocessed.
+# Pick a value no larger than your number of systems (extra jobs just exit as no-ops).
+num_jobs=10
 
 uv run --no-sync python -m flowr.data.preprocess_data.preprocess \
     --data_dir ./data \

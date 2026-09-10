@@ -313,7 +313,12 @@ This script parallelizes the preprocessing across multiple jobs, creating N LMDB
    - Your compute environment (partition, memory, time limits)
    - Your folder structure (paths to `data/` directory)
    - Number of parallel jobs via `num_jobs` parameter (e.g., `num_jobs=100` for larger, `num_jobs=10` for smaller datasets)
-   - SLURM array size (`--array=1-N` where N ≥ num_jobs)
+   - SLURM array size, which **must equal** `num_jobs` (`--array=1-N` with `N == num_jobs`)
+
+   > The dataset is split into exactly `num_jobs` chunks, one per array task. A smaller
+   > array leaves the trailing chunks unprocessed with no warning, so those systems never
+   > make it into the LMDB. `num_jobs` larger than your number of systems is fine: the
+   > surplus tasks are assigned an empty chunk and exit immediately.
 
 2. Submit the job:
 
@@ -354,7 +359,12 @@ This final step computes essential data distribution statistics required for tra
 **Option B: Random Split**
 
 - The script will automatically create train/val/test splits with the specified sizes
-- Modify `--val_size` and `--test_size` as needed
+- Modify `--val_size` and `--test_size` as needed. A value **below 1 is a fraction** of the
+  dataset (the shipped default is `0.1`, i.e. 10% each for val and test); a **whole number
+  >= 1 is an absolute count** of systems. Training gets whatever is left over.
+- Use fractions on small datasets. Absolute sizes that exceed the dataset abort the run
+  with `AssertionError: One of training (-98), validation (10) or testing (100) splits
+  ended up with a negative size.`
 - Adjust `--seed` for reproducibility
 
 1. Output: Statistics saved alongside the final LMDB database
@@ -390,6 +400,26 @@ Before fine-tuning, ensure you have:
 
    ```bash
    sbatch scripts/finetune_lora.sl
+
+### Tuning EMA for small datasets
+
+Both fine-tuning scripts train with an exponential moving average of the weights
+(`--use_ema`, `--ema_decay 0.998`) and **validate the EMA weights, not the live ones**.
+The EMA has a horizon of roughly `1 / (1 - ema_decay)` optimizer steps — about 500 steps
+at the default `0.998`.
+
+On a small custom dataset that is a lot of epochs. With, say, 8 training systems and 2
+optimizer steps per epoch, a few hundred steps of fine-tuning leaves the EMA weights
+still essentially the pretrained ones, so validation metrics and the `save_top_k`
+selection reflect the base model rather than your fine-tune.
+
+Rules of thumb:
+
+- Aim for `ema_decay` such that `1 / (1 - ema_decay)` is well under your total step count.
+  For a few hundred total steps, `--ema_decay 0.99` (~100 steps) or `0.95` (~20 steps) is
+  far more informative than the default.
+- Or switch it off entirely with `--no-use_ema`, which validates and checkpoints the live
+  weights. (`--use_ema` is on by default; `--no-use_ema` is the way to disable it.)
 
 ---
 

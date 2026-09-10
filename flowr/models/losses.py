@@ -370,8 +370,21 @@ class LossComputer:
             smooth_distance_loss_weight_lig_pocket
         )
         self.plddt_confidence_loss_weight = plddt_confidence_loss_weight
-        self.affinity_loss_weight = affinity_loss_weight
-        self.docking_loss_weight = docking_loss_weight
+        # Normalise "not supplied" to a real number. The affinity/docking *heads* are
+        # baked into the checkpoint architecture (predict_affinity comes from hparams),
+        # so compute_affinity_loss / compute_docking_loss run whenever a batch contains a
+        # labelled system -- even if the user never passed --affinity_loss_weight. Leaving
+        # these at None made that multiplication raise
+        #   TypeError: unsupported operand type(s) for *: 'Tensor' and 'NoneType'
+        # as an intermittent crash, since it only fired once a labelled system showed up.
+        # 0.0 keeps the head in the autograd graph (matching the dummy-loss pattern used
+        # for empty batches, which DDP needs) while contributing nothing to the total.
+        self.affinity_loss_weight = (
+            0.0 if affinity_loss_weight is None else affinity_loss_weight
+        )
+        self.docking_loss_weight = (
+            0.0 if docking_loss_weight is None else docking_loss_weight
+        )
         self.bond_angle_loss_weight = bond_angle_loss_weight
         self.bond_angle_huber_delta = bond_angle_huber_delta
         self.bond_length_loss_weight = bond_length_loss_weight

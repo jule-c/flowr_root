@@ -600,6 +600,60 @@ def _merge_lora(mod: torch.nn.Module):
             _merge_lora(child)
 
 
+def load_pretrained_generator(gen: torch.nn.Module, ckpt_path: str):
+    """Load the generator weights out of a FlowR training checkpoint into ``gen``.
+
+    A Lightning checkpoint stores the generator nested under the CFM module, so its
+    keys read ``gen.pocket_enc...``. The load target here *is* the generator, which
+    expects ``pocket_enc...``. Handing the raw state dict to ``load_state_dict`` with
+    ``strict=False`` therefore matched nothing at all: every checkpoint key was
+    "unexpected", every parameter kept its random init, and the pretrained weights were
+    silently discarded. Strip the prefix, and keep only ``gen.*`` keys so siblings such
+    as ``confidence_module.*`` do not turn up as unexpected.
+
+    Returns the ``(missing_keys, unexpected_keys)`` pair from the underlying load.
+    """
+    pretrained_state_dict = torch.load(ckpt_path, map_location=get_map_location())[
+        "state_dict"
+    ]
+    gen_state_dict = {
+        k[len("gen.") :]: v
+        for k, v in pretrained_state_dict.items()
+        if k.startswith("gen.")
+    }
+    if not gen_state_dict:
+        raise ValueError(
+            f"No 'gen.*' weights found in {ckpt_path}: the checkpoint holds "
+            f"{len(pretrained_state_dict)} key(s), none of which belong to the "
+            "generator. This is not a FlowR training checkpoint."
+        )
+
+    # ``strict=False`` stays, but only to tolerate *missing* keys: a head the pretrained
+    # run did not have (e.g. the affinity head under --predict_affinity) legitimately has
+    # nothing to restore. Unexpected keys always mean the checkpoint does not match this
+    # architecture, so fail loudly rather than repeating the silent no-op above.
+    missing_keys, unexpected_keys = gen.load_state_dict(gen_state_dict, strict=False)
+    if unexpected_keys:
+        raise RuntimeError(
+            f"Refusing to load {ckpt_path}: {len(unexpected_keys)} checkpoint key(s) "
+            f"have no counterpart in the model, e.g. {list(unexpected_keys)[:5]}. The "
+            "checkpoint architecture does not match the one requested on the command "
+            "line."
+        )
+
+    loaded = len(gen_state_dict) - len(missing_keys)
+    print(
+        f"Loaded {loaded}/{len(gen.state_dict())} pretrained generator tensors "
+        f"from {ckpt_path}"
+    )
+    if missing_keys:
+        print(
+            f"  WARNING: {len(missing_keys)} model parameter(s) had no pretrained "
+            f"weights and keep their random init, e.g. {list(missing_keys)[:5]}"
+        )
+    return missing_keys, unexpected_keys
+
+
 def _report_lora_trainable(fm_model: torch.nn.Module):
     """Print the LoRA trainable/total split over the *whole* LightningModule.
 
@@ -650,8 +704,47 @@ def _report_lora_trainable(fm_model: torch.nn.Module):
 # *****************************************************************************
 
 
+def _configure_mlflow_tracking(save_dir) -> Optional[str]:
+    """Resolve the MLflow tracking URI, defaulting to a file store under ``save_dir``.
+
+    Two things are handled here so that a fresh clone trains with **zero** environment
+    variables set by the user -- which is the failure mode this guards against:
+
+    1. With ``MLFLOW_TRACKING_URI`` unset, MLflow falls back to ``./mlruns`` relative to
+       the *current working directory*. For a SLURM job that is wherever the script
+       happened to ``cd``, so runs scatter. We default it to ``<save_dir>/mlruns``
+       instead, next to the checkpoints the run produces.
+    2. mlflow >= 3.8 refuses to open a filesystem tracking backend at all unless
+       ``MLFLOW_ALLOW_FILE_STORE`` is set, raising ``MlflowException`` before step 0
+       ("The filesystem tracking backend ... is in maintenance mode"). We opt in on the
+       user's behalf, but only when the backend actually is a file store -- a database
+       backend is left untouched.
+
+    Anything the user exports wins: an existing ``MLFLOW_TRACKING_URI`` is used as-is and
+    an existing ``MLFLOW_ALLOW_FILE_STORE`` is never overwritten. The resolved URI is
+    written back into the environment so that DDP worker processes, which Lightning
+    re-launches with the inherited environment, all log to the same place.
+    """
+    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+
+    if not tracking_uri:
+        mlruns_dir = Path(save_dir).expanduser().resolve() / "mlruns"
+        mlruns_dir.mkdir(parents=True, exist_ok=True)
+        tracking_uri = mlruns_dir.as_uri()
+        os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
+        print(f"MLFLOW_TRACKING_URI not set, logging to {tracking_uri}")
+
+    # Only a filesystem backend needs the opt-out flag. A URI with a scheme other than
+    # ``file:`` (sqlite:, postgresql:, http:, ...) is a database/server backend.
+    is_file_store = tracking_uri.startswith("file:") or "://" not in tracking_uri
+    if is_file_store:
+        os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+
+    return tracking_uri
+
+
 def build_trainer(
-    args, model=None, monitor_metric="val-pb_validity", save_top_k: int = 3
+    args, model=None, monitor_metric="val-pb-validity", save_top_k: int = 3
 ):
     epochs = 1 if args.trial_run else args.epochs
 
@@ -662,7 +755,7 @@ def build_trainer(
     lr_logger = LearningRateMonitor(logging_interval="step")
     mllogger = MLFlowLogger(
         experiment_name=args.dataset + "_" + args.exp_name,
-        tracking_uri=os.environ.get("MLFLOW_TRACKING_URI"),
+        tracking_uri=_configure_mlflow_tracking(args.save_dir),
         run_id=os.environ.get("MLFLOW_RUN_ID"),
         run_name=args.run_name if args.run_name else None,
         log_model="best",
@@ -951,12 +1044,7 @@ def build_model(
             pocket_enc=pocket_enc,
         )
     if getattr(args, "load_pretrained_ckpt", None):
-        gen.load_state_dict(
-            torch.load(args.load_pretrained_ckpt, map_location=get_map_location())[
-                "state_dict"
-            ],
-            strict=False,
-        )
+        load_pretrained_generator(gen, args.load_pretrained_ckpt)
 
     # Coordinate scaling
     coord_scale = 1.0  # defaults to 1.0 for pocket models

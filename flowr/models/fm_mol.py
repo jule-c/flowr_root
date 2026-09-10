@@ -825,8 +825,16 @@ class LigandCFM(pl.LightningModule):
     def configure_optimizers(self):
         """Configure optimizers and learning rate schedulers for the model."""
 
+        # Filter on requires_grad so the optimizer never carries frozen tensors
+        # (mirrors fm_pocket.configure_optimizers).
+        params = [p for p in self.gen.parameters() if p.requires_grad]
+        if not params:
+            raise ValueError(
+                "No trainable parameters: every parameter has requires_grad=False."
+            )
+
         opt = torch.optim.AdamW(
-            self.gen.parameters(),
+            params,
             lr=self.lr,
             amsgrad=True,
             foreach=True,
