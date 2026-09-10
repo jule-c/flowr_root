@@ -247,19 +247,11 @@ def evaluate(args):
 
     # Finalize sampling
     run_time = time.time() - start
-    if num_ligands == 0:
-        raise (
-            f"Reached {args.max_sample_iter} sampling iterations, but could not find any ligands."
-        )
-    elif num_ligands < args.sample_n_molecules_per_target:
-        print(
-            f"FYI: Reached {args.max_sample_iter} sampling iterations, but could only find {num_ligands} ligands."
-        )
-    elif num_ligands > args.sample_n_molecules_per_target:
-        all_gen_ligs = all_gen_ligs[: args.sample_n_molecules_per_target]
-        if all_gen_pdbs:
-            all_gen_pdbs = all_gen_pdbs[: args.sample_n_molecules_per_target]
 
+    # Sanitize *before* counting. With --filter_valid_unique off nothing had removed the
+    # unparseable molecules yet, so num_ligands counted raw samples: the "no ligands"
+    # guard below could not fire even when every molecule was dropped here, and the run
+    # reported "for 0 molecules" and exited 0 after writing an empty SDF.
     if not args.filter_valid_unique:
         # Remove all Nones from the generated ligands
         if gen_pdbs:
@@ -276,6 +268,29 @@ def evaluate(args):
                 filter_uniqueness=False,
                 sanitize=True,
             )
+
+    num_sampled_ligands = num_ligands
+    num_ligands = len(all_gen_ligs)
+    if num_ligands == 0:
+        lost = (
+            f" ({num_sampled_ligands} were sampled but none survived sanitization)"
+            if num_sampled_ligands
+            else ""
+        )
+        # NB: `raise <str>` here raised TypeError: exceptions must derive from
+        # BaseException, destroying the diagnostic it was written to deliver.
+        raise RuntimeError(
+            f"Reached {args.max_sample_iter} sampling iterations, but could not find "
+            f"any ligands{lost}."
+        )
+    elif num_ligands < args.sample_n_molecules_per_target:
+        print(
+            f"FYI: Reached {args.max_sample_iter} sampling iterations, but could only find {num_ligands} ligands."
+        )
+    elif num_ligands > args.sample_n_molecules_per_target:
+        all_gen_ligs = all_gen_ligs[: args.sample_n_molecules_per_target]
+        if all_gen_pdbs:
+            all_gen_pdbs = all_gen_pdbs[: args.sample_n_molecules_per_target]
 
     # Retrieve reference ligand and pdb
     ref_lig_with_hs = model.retrieve_ligs_with_hs(data, save_idx=0)

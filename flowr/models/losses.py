@@ -411,6 +411,19 @@ class LossComputer:
             if use_t_loss_weights
             else None
         )
+        # Bookkeeping only -- never used by the loss maths. compute_affinity_loss falls
+        # back to a zero dummy loss when a batch carries no usable affinity target, which
+        # is silent by design; these counters let a callback notice when that has been
+        # true for a whole epoch and say so. See scriptutil.AffinityLabelMonitor.
+        self.reset_affinity_label_stats()
+
+    def reset_affinity_label_stats(self):
+        """Zero the per-epoch affinity-label bookkeeping."""
+        self.affinity_label_stats = {"batches": 0, "valid_labels": 0}
+
+    def _record_affinity_label_stats(self, n_valid_labels: int):
+        self.affinity_label_stats["batches"] += 1
+        self.affinity_label_stats["valid_labels"] += int(n_valid_labels)
 
     def _compute_velocity_from_data(
         self,
@@ -1796,6 +1809,7 @@ class LossComputer:
 
         affinity_losses = {}
         affinity_types = ["pic50", "pkd", "pki", "pec50"]
+        n_valid_labels = 0
 
         for affinity_type in affinity_types:
 
@@ -1804,8 +1818,12 @@ class LossComputer:
 
             # Create mask for valid affinity values (non-NaN, non-negative for log affinity values)
             valid_mask = torch.isfinite(true_values) & (true_values >= 0)
+            # One device sync instead of two: `if valid_mask.sum() == 0` already forced
+            # one, so reuse the count rather than adding a second.
+            n_valid = int(valid_mask.sum())
+            n_valid_labels += n_valid
 
-            if valid_mask.sum() == 0:
+            if n_valid == 0:
                 # No valid values for this affinity type, but process to avoid unused parameters
                 dummy_loss = (pred_values * 0.0).sum()
                 affinity_losses[f"{affinity_type}_loss"] = dummy_loss
@@ -1828,6 +1846,10 @@ class LossComputer:
             affinity_losses[f"{affinity_type}_loss"] = (
                 huber_loss.mean() * self.affinity_loss_weight
             )
+
+        # This batch ran the affinity heads; remember how many usable targets it had so
+        # a run that never sees one can be reported instead of silently training nothing.
+        self._record_affinity_label_stats(n_valid_labels)
 
         return affinity_losses
 

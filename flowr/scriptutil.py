@@ -24,6 +24,7 @@ from lightning.pytorch.callbacks import (
 )
 from lightning.pytorch.loggers import MLFlowLogger, WandbLogger
 from lightning.pytorch.strategies import DDPStrategy
+from lightning.pytorch.utilities import rank_zero_info
 from rdkit import Chem, RDLogger
 from torch.utils.data import ConcatDataset
 from torchmetrics import MetricCollection
@@ -412,10 +413,15 @@ def calc_train_steps(dm, epochs, acc_batches, gpus=1, num_nodes=1):
 
     In DDP, each GPU processes (total_batches / world_size) batches per epoch.
     world_size = gpus * num_nodes
+
+    ``--gpus 0`` selects CPU training, which ``build_trainer`` runs as a single device
+    (``accelerator="cpu", devices=1``). Taking ``gpus * num_nodes`` literally there
+    gives world_size 0 and a ZeroDivisionError before step 0, so clamp to at least one
+    process: this must agree with the trainer it feeds.
     """
     dm.setup("train")
     total_batches = len(dm.train_dataloader())
-    world_size = gpus * num_nodes
+    world_size = max(1, gpus * num_nodes)
     steps_per_epoch = math.ceil(total_batches / (acc_batches * world_size))
     return steps_per_epoch * epochs
 
@@ -743,6 +749,188 @@ def _configure_mlflow_tracking(save_dir) -> Optional[str]:
     return tracking_uri
 
 
+class _AlwaysSaveLastMixin:
+    """Keep ``last.ckpt`` pinned to the newest weights, not to the newest *top-k save*.
+
+    Lightning's ``ModelCheckpoint`` only refreshes ``last.ckpt`` when a top-k save
+    actually fired at the same step: both ``on_train_epoch_end`` and
+    ``on_validation_end`` guard the call with
+    ``if self._last_global_step_saved == trainer.global_step``. Top-k membership is
+    decided by ``check_monitor_top_k``, which compares with ``torch.gt``/``torch.lt``,
+    so a *tied* score never displaces the k-th best -- ``0.0 > 0.0`` is False.
+
+    Those two facts together silently freeze ``last.ckpt``. On a from-scratch run
+    ``val-pb-validity`` sits at 0.0 for a long time; once ``save_top_k`` checkpoints are
+    banked at 0.0 nothing is ever written again, and ``on_train_end`` does not rescue it
+    (it only writes when ``last.ckpt`` was *never* saved). Measured on a 20-epoch run:
+    training ended at epoch 19 / step 40 while ``last.ckpt`` still held epoch 14 /
+    step 30, so the final six epochs of training were unrecoverable. Any run whose
+    monitored metric plateaus near the end loses its tail the same way.
+
+    This mixin repeats the "save last" step after each of those hooks, unconditionally.
+    ``_should_skip_saving_checkpoint`` already returns True when the current step has
+    been saved, so a step that *did* produce a top-k save is not written twice, and
+    sanity checking / non-fit stages stay excluded. Top-k selection itself is untouched.
+
+    Keeping this in the one existing callback -- rather than adding a second, unmonitored
+    ``ModelCheckpoint(save_top_k=0, save_last=True)`` -- keeps a single owner for
+    ``last.ckpt``. Two callbacks writing that same filename race over ``last_model_path``
+    and delete each other's files; and because ``MLFlowLogger`` remembers only whichever
+    callback saved most recently, the end-of-run upload would then drop the top-k
+    checkpoints entirely (verified: artifacts contained ``last.ckpt`` alone).
+    """
+
+    # ``Checkpoint.state_key`` is f"{self.__class__.__qualname__}{repr(kwargs)}", i.e. the
+    # class name is part of the key Lightning looks up when restoring callback state.
+    # Subclassing would therefore change it, so resuming a run whose checkpoints were
+    # written by the stock callback would find no match and silently start again with an
+    # empty ``best_k_models``. Keep the base class's key.
+    _state_key_qualname: str = "ModelCheckpoint"
+
+    @property
+    def state_key(self) -> str:
+        key = super().state_key
+        prefix = type(self).__qualname__
+        if key.startswith(prefix):
+            key = self._state_key_qualname + key[len(prefix) :]
+        return key
+
+    def _save_current_state_as_last(self, trainer: "pl.Trainer") -> None:
+        if not self.save_last or self._should_skip_saving_checkpoint(trainer):
+            return
+        self._save_last_checkpoint(trainer, self._monitor_candidates(trainer))
+
+    def on_train_epoch_end(self, trainer, pl_module) -> None:
+        super().on_train_epoch_end(trainer, pl_module)
+        self._save_current_state_as_last(trainer)
+
+    def on_validation_end(self, trainer, pl_module) -> None:
+        super().on_validation_end(trainer, pl_module)
+        self._save_current_state_as_last(trainer)
+
+    def on_train_end(self, trainer, pl_module) -> None:
+        super().on_train_end(trainer, pl_module)
+        self._save_current_state_as_last(trainer)
+
+
+class LastAwareModelCheckpoint(_AlwaysSaveLastMixin, ModelCheckpoint):
+    """``ModelCheckpoint`` whose ``last.ckpt`` really is the last training state."""
+
+
+class LastAwareEMAModelCheckpoint(_AlwaysSaveLastMixin, EMAModelCheckpoint):
+    """``EMAModelCheckpoint`` whose ``last.ckpt``/``last-EMA.ckpt`` are the last state."""
+
+    _state_key_qualname = "EMAModelCheckpoint"
+
+
+class AffinityLabelMonitor(pl.Callback):
+    """Warn when an affinity-predicting run never sees a usable affinity label.
+
+    ``LossComputer.compute_affinity_loss`` masks out non-finite / negative targets and
+    falls back to ``(pred_values * 0.0).sum()`` when a batch has none. That is correct:
+    it keeps the affinity heads in the autograd graph (DDP requires every parameter to
+    receive a gradient) and never poisons the total loss with NaN. But on a dataset
+    with no affinity measurements at all it means the affinity heads receive *exactly
+    zero* gradient for the entire run, while the checkpoints that run writes still
+    record ``predict_affinity=True`` -- which is precisely the flag ``load_model``
+    checks before accepting an affinity request.
+
+    Granularity is deliberately **per epoch, warned once per run**. A single label-free
+    batch proves nothing: unlabelled systems inside a partly-labelled dataset are
+    legitimate and must keep training, so the check needs a full pass over the data
+    before it can honestly claim the run has no labels. Warning per batch would drown
+    the log; waiting for the end of the run would report it too late to act on. It is
+    never an error, for the same reason.
+    """
+
+    def __init__(self, weights_restored_from: Optional[str] = None):
+        super().__init__()
+        self._weights_restored_from = weights_restored_from
+        self._warned = False
+
+    @staticmethod
+    def _loss_computer(pl_module):
+        return getattr(pl_module, "loss_computer", None)
+
+    def on_train_epoch_start(self, trainer, pl_module) -> None:
+        loss_computer = self._loss_computer(pl_module)
+        if loss_computer is not None:
+            loss_computer.reset_affinity_label_stats()
+
+    def on_train_epoch_end(self, trainer, pl_module) -> None:
+        if self._warned:
+            return
+        loss_computer = self._loss_computer(pl_module)
+        stats = getattr(loss_computer, "affinity_label_stats", None) or {
+            "batches": 0,
+            "valid_labels": 0,
+        }
+
+        # Both reductions run on every rank, unconditionally and in the same order: the
+        # decision (and therefore ``self._warned``) has to come out identical everywhere,
+        # or a later epoch would have some ranks entering a collective the others skip.
+        saw_head = trainer.strategy.reduce_boolean_decision(
+            bool(stats["batches"] > 0), all=False  # any rank ran the affinity heads
+        )
+        no_labels = trainer.strategy.reduce_boolean_decision(
+            bool(stats["valid_labels"] == 0), all=True  # every rank saw no label
+        )
+        if not no_labels:
+            return
+
+        self._warned = True
+        rule = "=" * 79
+        lines = ["", rule]
+        if saw_head:
+            lines += [
+                "  WARNING -- AFFINITY OBJECTIVE IS A NO-OP: no valid affinity label",
+                f"  was seen in epoch {trainer.current_epoch}.",
+                f"  {stats['batches']} batch(es) produced affinity predictions and",
+                "  not one carried a finite, non-negative target, so every affinity",
+                "  parameter received exactly zero gradient this epoch.",
+            ]
+        else:
+            lines += [
+                "  WARNING -- AFFINITY OBJECTIVE IS A NO-OP: the affinity loss never ran",
+                f"  in epoch {trainer.current_epoch}.",
+                "  No batch carried affinity data at all, so no affinity parameter received",
+                "  any gradient this epoch.",
+            ]
+        if self._weights_restored_from:
+            # Fine-tuning: the heads keep whatever they were loaded with. That is only a
+            # real problem if the source checkpoint's affinity head was itself untrained.
+            lines += [
+                "  The affinity heads therefore still hold exactly the values loaded from",
+                f"    {self._weights_restored_from}",
+                "  If that checkpoint's affinity head was already trained on labelled data",
+                "  (e.g. the released joint generation + affinity model) this run is a",
+                "  harmless no-op for affinity: the head keeps its pretrained weights and",
+                "  only the affinity forward pass is wasted -- though any LoRA adapters on",
+                "  those modules stay at zero and cannot learn. If it was not trained on",
+                "  labels, the head is still at its initial random values.",
+            ]
+        else:
+            # From scratch: nothing has ever trained these heads.
+            lines += [
+                "  The affinity heads were initialised fresh for this run, so they are still",
+                "  at RANDOM INITIALISATION and will stay there. Affinity numbers produced",
+                "  from this run's checkpoints are noise.",
+            ]
+        lines += [
+            "  Either way, the checkpoints this run writes record",
+            "  hyper_parameters['predict_affinity'] = True -- exactly the flag load_model",
+            "  checks -- so downstream affinity requests against them are accepted and",
+            "  answered with whatever those weights currently encode.",
+            "  Drop --predict_affinity / --affinity_loss_weight if this dataset carries no",
+            "  affinity measurements, or check that the labels are really being loaded.",
+            rule,
+        ]
+        # NOT rank_zero_warn: both flowr.train and flowr.finetune call
+        # warnings.filterwarnings("ignore", category=UserWarning) at import time, which
+        # swallows it whole. rank_zero_info goes through Lightning's logger and survives.
+        rank_zero_info("\n".join(lines))
+
+
 def build_trainer(
     args, model=None, monitor_metric="val-pb-validity", save_top_k: int = 3
 ):
@@ -758,7 +946,12 @@ def build_trainer(
         tracking_uri=_configure_mlflow_tracking(args.save_dir),
         run_id=os.environ.get("MLFLOW_RUN_ID"),
         run_name=args.run_name if args.run_name else None,
-        log_model="best",
+        # Lightning types this ``Literal[True, False, "all"]``. MLFlowLogger.
+        # after_save_checkpoint tests ``== "all"`` and ``is True``, so the string "best"
+        # matched neither branch: ``_checkpoint_callback`` was never set and finalize()
+        # uploaded nothing, leaving artifacts/ empty on every completed run.
+        # True == upload the tracked checkpoints when the run finishes.
+        log_model=True,
     )
     if args.wandb:
         wdblogger = WandbLogger(project=project_name, log_model="all", offline=True)
@@ -776,7 +969,7 @@ def build_trainer(
             save_ema_weights_in_callback_state=True,
             evaluate_ema_weights_instead=True,
         )
-        checkpoint_callback = EMAModelCheckpoint(
+        checkpoint_callback = LastAwareEMAModelCheckpoint(
             dirpath=args.save_dir,
             save_top_k=save_top_k,
             # monitor="val-fc-validity",
@@ -785,7 +978,7 @@ def build_trainer(
             save_last=True,
         )
     else:
-        checkpoint_callback = ModelCheckpoint(
+        checkpoint_callback = LastAwareModelCheckpoint(
             dirpath=args.save_dir,
             save_top_k=save_top_k,
             # monitor="val-fc-validity",
@@ -803,6 +996,18 @@ def build_trainer(
     if args.use_ema:
         callbacks.append(ema_callback)
 
+    # An affinity objective that never sees a label trains nothing, yet still stamps the
+    # checkpoint as affinity-capable. See AffinityLabelMonitor.
+    if getattr(args, "predict_affinity", False) or (
+        getattr(args, "affinity_loss_weight", None) or 0.0
+    ) > 0:
+        callbacks.append(
+            AffinityLabelMonitor(
+                weights_restored_from=getattr(args, "ckpt_path", None)
+                or getattr(args, "load_ckpt", None)
+            )
+        )
+
     # When to do validation ckpt
     if args.val_check_epochs is None:
         val_check_epochs = 1
@@ -818,8 +1023,11 @@ def build_trainer(
 
     backbone = getattr(args, "backbone", "semla")
     find_unused = (backbone == "e3nn") or getattr(args, "find_unused_parameters", False)
+    # Same gpus-as-a-scale-factor assumption as calc_train_steps had: ``args.gpus`` is a
+    # device *count*, so --gpus 0 (the CPU path selected two lines below) turned this
+    # into a zero-second collective timeout.
     strategy = DDPStrategy(
-        timeout=datetime.timedelta(seconds=1800 * args.gpus),
+        timeout=datetime.timedelta(seconds=1800 * max(1, args.gpus)),
         find_unused_parameters=find_unused,
     )  # "ddp" if args.gpus > 1 else "auto"
     trainer = pl.Trainer(
