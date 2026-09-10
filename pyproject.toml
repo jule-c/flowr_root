@@ -109,33 +109,63 @@ eval = [
   "useful-rdkit-utils>=0.7",
 ]
 
+# --- PLINDER dataset preprocessing -----------------------------------------
+# Used by flowr/data/preprocess.py, flowr/util/apo.py, flowr/util/plinder.py.
+# plinder depends on the upstream PyPI `posebusters`; see the
+# `exclude-dependencies` note under [tool.uv] for why that is filtered out in
+# favour of the fork vendored in this repo.
+plinder = ["plinder>=0.2"]
+
 # ---------------------------------------------------------------------------
-# NOT PACKAGED HERE -- optional tools that are not installable from PyPI
+# NOT PACKAGED HERE -- deliberately undeclared, with the reason for each
 # ---------------------------------------------------------------------------
-# The following were in the old conda environment files but have no usable
-# PyPI distribution. None of them is imported at module scope by `flowr`, so
-# the package installs and runs without them; they are only needed by specific
-# opt-in code paths, which raise ImportError if the tool is missing.
+# These appeared in the old conda environment files, or are imported by
+# individual `flowr` modules, but cannot be installed from PyPI. Every one of
+# them is imported lazily (inside the function that needs it), so the package
+# installs and every entrypoint imports without them; only the specific opt-in
+# code path raises ImportError. Each entry below was verified, not assumed.
 #
-#   pymol           `pymol-open-source` on PyPI is a 3.2.0a0 pre-release with
-#                   NO linux-aarch64 wheel at all, and its macOS-arm64 wheel is
-#                   mis-linked (its _cmd.so hardcodes an rpath into the wheel
-#                   author's private mamba prefix and fails to dlopen libpng).
-#                   Verified broken -- install PyMOL separately (system package
-#                   manager or an upstream installer) if you need
-#                   `flowr.gen.utils` PDB-merging or `flowr.util.pocket`
-#                   PyMOL helpers.
-#   ambertools      no PyPI distribution.
-#   openff-toolkit  on PyPI but unusable without ambertools/openeye backends.
-#   openmmforcefields  sdist-only and requires ambertools at runtime.
-#   openeye-toolkits   proprietary; needs OpenEye's own index + a licence file.
-#                      Only used by the leaf module flowr/util/sampling/openeye.py.
-#   reduce          an external binary (Richardson lab), optionally shelled out
-#                   to by the vendored `posecheck`.
-#   xtb / vina      external CLI binaries shelled out to by
-#                   flowr/eval/evaluate_xtb.py and the docking helpers; their
-#                   PyPI packages are sdist-only Fortran/C++ builds and provide
-#                   Python bindings rather than the CLI these call.
+#   openff-toolkit     YANKED on PyPI. The only release there (0.18.0) was
+#                      uploaded by a non-maintainer and has been yanked by the
+#                      OpenFF maintainers, so `uv lock` fails outright -- on
+#                      every platform, not just linux-aarch64. There is no
+#                      environment marker that makes this installable.
+#   openmmforcefields  Resolves from PyPI on its own (sdist, no declared deps)
+#                      but is useless without openff-toolkit + ambertools at
+#                      runtime, so there is no coherent `minimize` extra to
+#                      offer. Both are needed by flowr/util/minimize_energy.py;
+#                      if you need energy minimisation, install them into
+#                      .venv yourself from a source that carries working
+#                      builds (they are not on PyPI in a usable state).
+#   ambertools         No PyPI distribution at all.
+#   ase, fairchem-core Every fairchem-core release pins torch to a narrow
+#                      window (<=2.7.1 -> torch 2.6.x, <=2.21 -> torch 2.8.x,
+#                      2.22 -> torch 2.13.x). None of them admits the
+#                      torch==2.11.* required for CUDA 13 / GB10, so declaring
+#                      it would break GPU support. Only used by the otherwise
+#                      unreferenced flowr/util/ase_util.py.
+#   oddt               sdist-only, and the sdist fails to build: it imports
+#                      `six` at build time without declaring it. Also needs
+#                      Open Babel's Python bindings under a different name.
+#                      Only used by flowr/util/sampling/ifp.py.
+#   openeye-toolkits   Proprietary; needs OpenEye's own index plus a licence
+#                      file. flowr/util/sampling/openeye.py is un-importable
+#                      by design.
+#   pymol              `pymol-open-source` on PyPI is a 3.2.0a0 pre-release
+#                      with NO linux-aarch64 wheel at all, and its macOS-arm64
+#                      wheel is mis-linked: _cmd.so hardcodes an rpath into
+#                      the wheel author's private mamba prefix and dies with
+#                      `Library not loaded: @rpath/libpng16.16.dylib`.
+#                      Installed and tested here -- it does not work. Install
+#                      PyMOL from your system package manager or an upstream
+#                      installer if you need the PyMOL code paths in
+#                      flowr/gen/utils.py or flowr/util/pocket.py.
+#   reduce             External binary (Richardson lab), optionally shelled
+#                      out to by the vendored `posecheck`.
+#   xtb, vina          External CLI binaries shelled out to by
+#                      flowr/eval/evaluate_xtb.py and the docking helpers.
+#                      Their PyPI packages are sdist-only Fortran/C++ builds
+#                      that provide Python bindings, not the CLI these call.
 
 [build-system]
 requires = ["hatchling"]
@@ -187,3 +217,11 @@ torch = [
 
 [tool.uv]
 conflicts = [[{ extra = "cpu" }, { extra = "gpu" }]]
+
+# `posebusters` and `posecheck` ship in THIS repo as locally modified forks
+# (see [tool.hatch.build.targets.wheel] above). Excluding them here makes it
+# impossible for a transitive dependency to pull the upstream PyPI
+# distributions into site-packages, where they would shadow -- or be shadowed
+# by -- the vendored copies. `plinder` depends on `posebusters` and would
+# otherwise do exactly that; it gets the vendored fork instead.
+exclude-dependencies = ["posebusters", "posecheck"]
