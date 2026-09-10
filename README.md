@@ -99,6 +99,25 @@ This is a research repository introducing FLOWR.root.
    **No `PYTHONPATH` setup is required.** FLOWR.root is installed into the
    environment as a package, so `python -m flowr.<module>` works from anywhere.
 
+3. **Device selection**
+
+   Generation and prediction entrypoints pick the device themselves: CUDA when the
+   machine has it, CPU otherwise. `--gpus` is a device *count*, so `--gpus 0` pins a run
+   to CPU even on a CUDA box. No flag or code change is needed to run the CPU/macOS
+   install above - just expect CPU inference to take minutes rather than seconds.
+
+   Apple's MPS backend is **not** selected automatically. It is considerably faster than
+   CPU on the default `semla` backbone, but it is not a supported configuration - the
+   `e3nn` backbone needs float64, which MPS cannot represent - so it is opt-in and
+   unvalidated:
+
+   ```bash
+   FLOWR_DEVICE=mps uv run --no-sync python -m flowr.predict.predict_from_pdb ...
+   ```
+
+   Note that results are not reproducible across devices: a fixed `--seed` gives
+   different samples on CPU, MPS and CUDA, because each backend has its own RNG stream.
+
 <details>
 <summary><b>Optional external toolkits</b></summary>
 
@@ -186,7 +205,7 @@ sbatch scripts/generate_pdb.sl
 - `--compute_interactions`: Needed for interaction_conditional (using ProLIF to extract interactions)
 - `--filter_cond_substructure`: Filter to ensure inpainting constraint is satisfied
 
-**⚠️ Diversity filtering starves inpainting runs:** `scripts/generate_pdb.sl` ships with `--filter_diversity --diversity_threshold 0.7`, which is a poor fit for the modes above: constrained outputs are similar by construction - every molecule keeps the same fixed core - so nearly all pairs exceed 0.7 Tanimoto and get discarded. Measured on 1iep, substructure inpainting produced 20 valid, fully substructure-matching molecules per iteration yet finished with 2 ligands after 11 iterations, versus 8-20 molecules in a third of the time without the filter. When inpainting, drop `--filter_diversity` or raise `--diversity_threshold` well above the default.
+**⚠️ Diversity filtering starves inpainting runs:** diversity filtering is a poor fit for the modes above: constrained outputs are similar by construction - every molecule keeps the same fixed core - so nearly all pairs exceed the Tanimoto threshold and get discarded. Measured on 1iep with the `--diversity_threshold 0.7` that `scripts/generate_pdb.sl` used to ship, substructure inpainting produced 20 valid, fully substructure-matching molecules per iteration yet finished with 2 ligands after 11 iterations (411 s), versus 8-20 molecules in a third of the time without the filter. That script now ships `--diversity_threshold 0.95`, which only drops near-duplicates and is safe for the de-novo run it performs by default. **When you enable any inpainting mode, delete the `--filter_diversity` and `--diversity_threshold` lines from the command entirely.**
 
 **Prior Options:**
 
@@ -198,7 +217,7 @@ sbatch scripts/generate_pdb.sl
 
 - `--filter_valid_unique`: Filter for valid and unique molecules
 - `--filter_diversity`: Apply diversity filtering
-- `--diversity_threshold`: Tanimoto similarity threshold for diversity (default: 0.9; `scripts/generate_pdb.sl` sets 0.7 for stricter filtering)
+- `--diversity_threshold`: Tanimoto similarity threshold for diversity (CLI default: 0.9; `scripts/generate_pdb.sl` sets 0.95 - see the warning above before using either with an inpainting mode)
 - `--optimize_gen_ligs`: Optimize geometries in-pocket (using RDKit)
 - `--optimize_gen_ligs_hs`: Optimize ligand hydrogens in-pocket (using RDKit)
 - `--filter_cond_substructure`: Filter to ensure inpainting constraint is satisfied
@@ -275,6 +294,59 @@ bash scripts/train.sh
 ```
 
 - **Output**: Checkpoints will be saved at the specified location (save_dir).
+
+#### Warm-starting from a released checkpoint
+
+`--load_pretrained_ckpt <ckpt>` starts training from released weights instead of from
+scratch. The architecture flags on the command line must match the architecture that was
+trained, because they are what builds the model the weights are loaded into - nothing is
+read back from the checkpoint. **The flags in `scripts/train.sh` as shipped do not match
+`flowr_root_v2.2.ckpt`**; they match `flowr_root_spindr.ckpt`.
+
+A mismatch fails loudly, before any training happens, with a message naming the tensor:
+
+```text
+size mismatch for ligand_dec.inv_emb.atom_emb.0.weight: copying a param with
+shape torch.Size([512, 271]) from checkpoint, the shape in current model is
+torch.Size([384, 271]).
+```
+
+The flags that differ between the released checkpoints (values read from each
+checkpoint's `hyper_parameters` and confirmed against its tensor shapes):
+
+| Flag | `flowr_root_v2.2` / `v2.1` | `flowr_root_spindr` / `v2_mol` |
+| --- | --- | --- |
+| `--d_model` | **512** | 384 |
+| `--use_crossproducts` | **omit** | pass it |
+| `--predict_affinity` | pass it | omit |
+
+Note that `--use_crossproducts` and `--predict_affinity` are anti-correlated across the
+released models: the joint affinity models (`v2.2`, `v2.1`) have no cross-products, and
+the generation-only models (`spindr`, `v2_mol`) have cross-products and no affinity head.
+
+So to warm-start from `flowr_root_v2.2.ckpt`, take `scripts/train.sh` and change
+`--d_model 384` to `--d_model 512`, delete the `--use_crossproducts` line, keep
+`--predict_affinity`, and add `--load_pretrained_ckpt /path/to/flowr_root_v2.2.ckpt`.
+Every other architecture flag `scripts/train.sh` passes is already correct for v2.2. The
+full set that must be in effect:
+
+```text
+--arch pocket  --pocket_noise fix
+--d_model 512  --n_coord_sets 128  --d_edge 128  --emb_size 64  --n_layers 12
+--d_message 64  --d_message_hidden 96  --n_attn_heads 32
+--pocket_d_model 256  --pocket_n_layers 4
+--use_distances  --use_rbf  --use_lig_pocket_rbf  --use_fourier_time_embed
+--self_condition  --remove_hs  --remove_aromaticity  --predict_affinity
+```
+
+`--pocket_n_layers 4` and `--d_model 512` both differ from the argparse defaults (6 and
+384), so they have to be passed explicitly. `--use_sphcs`, `--add_feats` and
+`--predict_docking_score` must stay off - none of the released checkpoints use them.
+For `flowr_root_v2_mol.ckpt` (ligand-only, trained with `flowr/train_mol.py`) use
+`--d_model 384 --use_crossproducts` and no `--use_lig_pocket_rbf`.
+
+To *resume* an interrupted run of your own rather than warm-start a new one, use
+`--load_ckpt`, which restores optimizer and scheduler state as well.
 
 ---
 
@@ -449,6 +521,23 @@ Rules of thumb:
   far more informative than the default.
 - Or switch it off entirely with `--no-use_ema`, which validates and checkpoints the live
   weights. (`--use_ema` is on by default; `--no-use_ema` is the way to disable it.)
+
+Two more things bite on small datasets and short runs:
+
+- **Checkpoint selection is close to random when the validation split is tiny.** The
+  `ModelCheckpoint` monitors `val-pb-validity` with `mode="max"`, and with a
+  single-system validation split that metric is effectively a coin flip - three
+  identical 6-epoch runs measured `0.0/0.0/1.0`, `0.0/1.0/0.0` and `0.0/1.0/1.0` - so
+  `save_top_k` keeps an arbitrary epoch rather than the best one. This compounds the EMA
+  caveat above: the metric that picks the checkpoint is noise, and (at the default
+  `ema_decay`) it is measured on weights that have barely moved. Prefer `last.ckpt`, or
+  hold out enough validation systems for the metric to mean something.
+- **Runs shorter than 50 optimizer steps log no training metrics at all.**
+  `log_every_n_steps` is never set, so Lightning's default of 50 applies and a run with
+  fewer optimizer steps than that flushes no `train-*` metrics to MLflow - the losses
+  exist only in the tqdm stream. Logging is not broken; there was simply never a flush.
+  There is no CLI flag for this - judge short smoke runs from the console output, or run
+  past 50 steps if you need the logged curves.
 
 ---
 

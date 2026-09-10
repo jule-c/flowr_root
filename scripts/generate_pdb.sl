@@ -67,6 +67,20 @@ save_dir="$data_path/processed$conditional_generation$sample_mol_sizes$noise_inj
 # BATCH SIZE
 batch_cost=20
 
+# DIVERSITY FILTERING
+# --filter_diversity discards a generated molecule whose Tanimoto similarity to an
+# already-kept one exceeds --diversity_threshold. This script used to ship 0.7, which
+# is stricter than the 0.9 CLI default and far too strict for any of the conditional
+# modes commented out below: inpainted outputs are similar by construction - they all
+# keep the same fixed core - so nearly every pair trips the threshold and the run
+# starves. Measured on 1iep, substructure inpainting produced 20 valid, fully
+# substructure-matching molecules per iteration yet finished with 2 ligands after 11
+# iterations (411 s), against 8-20 molecules in a third of the time with the filter off.
+# 0.95 only drops near-duplicates. When you enable an inpainting mode below, delete the
+# --filter_diversity and --diversity_threshold lines from the command entirely.
+# NOTE: keep comments out of the command itself - a comment inside a `\` continuation
+# truncates it, and the next flag is then run as a command.
+
 uv run --no-sync python -m flowr.gen.generate_from_pdb \
     --pdb_file "$data_path/YOUR_PROTEIN.pdb" \
     --ligand_file "$data_path/YOUR_LIGAND.sdf" \
@@ -86,7 +100,7 @@ uv run --no-sync python -m flowr.gen.generate_from_pdb \
     --ode_sampling_strategy "$sampling_strategy" \
     --filter_valid_unique \
     --filter_diversity \
-    --diversity_threshold 0.7 \
+    --diversity_threshold 0.95 \
     # --sample_mol_sizes \
     # --scaffold_hopping \
     # --scaffold_elaboration \

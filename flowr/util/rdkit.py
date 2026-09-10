@@ -894,12 +894,25 @@ def generate_conformer(mol: Chem.rdchem.Mol, explicit_hs=True) -> Chem.rdchem.Mo
 
 
 def write_sdf_file(sdf_path, molecules, name="mol"):
+    """Write ``molecules`` to an SDF, skipping any ``None`` entries.
+
+    ``None`` is a normal element of the lists that reach here - a molecule that failed
+    to build or sanitise - so it is skipped rather than treated as an error. The skip
+    has to come *before* ``SetProp``, otherwise naming (which is on by default) raises
+    ``AttributeError: 'NoneType' object has no attribute 'SetProp'`` and takes the whole
+    run down after the sampling work is already done.
+
+    The index in the generated name is the position in ``molecules``, so a gap in the
+    numbering marks a dropped entry and the names of the surviving molecules do not
+    shift. Pass ``name=False`` to leave existing ``_Name`` properties untouched.
+    """
     w = Chem.SDWriter(str(sdf_path))
     for i, m in enumerate(molecules):
+        if m is None:
+            continue
         if name:
             m.SetProp("_Name", f"{name}_{i}")
-        if m is not None:
-            w.write(m)
+        w.write(m)
     w.close()
 
 

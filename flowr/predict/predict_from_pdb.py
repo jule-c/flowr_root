@@ -19,6 +19,7 @@ from flowr.predict.predict import predict_affinity_batch
 from flowr.scriptutil import (
     load_model,
 )
+from flowr.util.device import resolve_device
 from flowr.util.pocket import PocketComplexBatch
 
 warnings.filterwarnings(
@@ -69,7 +70,13 @@ def predict(args):
     ) = load_model(
         args,
     )
-    model = model.to("cuda")
+    # Device placement. `--gpus` is a device *count*, so `--gpus 0` selects CPU even on
+    # a CUDA machine; otherwise CUDA is used when present and CPU everywhere else.
+    # Apple's MPS backend is deliberately NOT auto-selected: it is opt-in via
+    # FLOWR_DEVICE=mps (see the CPU/macOS note in the README).
+    device = resolve_device(args)
+    print(f"Using device: {device}")
+    model = model.to(device)
     model.eval()
     print("Model complete.")
 
@@ -128,6 +135,7 @@ def predict(args):
                 posterior=posterior,
                 noise_scale=args.coord_noise_scale,
                 eps=1e-4,
+                device=device,
             )
             gen_lig_with_aff.extend(batch_ligs)
         print(f"Scored {len(gen_lig_with_aff)} / {n_ligands} ligands")
@@ -142,6 +150,7 @@ def predict(args):
             noise_scale=args.coord_noise_scale,
             eps=1e-4,
             seed=args.seed,
+            device=device,
         )
 
     # Total run time

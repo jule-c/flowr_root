@@ -18,6 +18,7 @@ from flowr.predict.predict import predict_affinity_batch
 from flowr.scriptutil import (
     load_model,
 )
+from flowr.util.device import resolve_device
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -64,7 +65,13 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to("cuda")
+    # Device placement. `--gpus` is a device *count*, so `--gpus 0` selects CPU even on
+    # a CUDA machine; otherwise CUDA is used when present and CPU everywhere else.
+    # Apple's MPS backend is deliberately NOT auto-selected: it is opt-in via
+    # FLOWR_DEVICE=mps (see the CPU/macOS note in the README).
+    device = resolve_device(args)
+    print(f"Using device: {device}")
+    model = model.to(device)
     model.eval()
     print("Model complete.")
 
@@ -98,6 +105,7 @@ def evaluate(args):
     dataloader = get_dataloader(args, dataset, interpolant)
     for i, batch in tqdm(enumerate(dataloader), desc="Predicting affinity..."):
         prior, posterior, _, _ = batch
+        batch_start = time.time()
         gen_ligs_with_aff = predict_affinity_batch(
             args,
             model=model,
@@ -106,7 +114,9 @@ def evaluate(args):
             noise_scale=args.coord_noise_scale,
             eps=1e-4,
             seed=args.seed + i,
+            device=device,
         )
+        times.append(time.time() - batch_start)
 
         # Sanity check on the scored ligands. These are the *input* ligands (affinity
         # prediction scores what it is given, it does not generate molecules), so this
@@ -124,7 +134,10 @@ def evaluate(args):
     print(
         f"\n Mean run time={round(global_run_time, 2)}s for {len(all_gen_ligs_with_aff)} molecules"
     )
-    print(f"Mean time per batch={np.mean(times):.3f} \\pm {np.std(times):.2f} seconds")
+    if times:
+        print(
+            f"Mean time per batch={np.mean(times):.3f} \\pm {np.std(times):.2f} seconds"
+        )
     print(f"Validity of scored ligands: {np.mean(validities):.3f}\n")
 
     # Save ligands as SDF
