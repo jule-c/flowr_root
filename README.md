@@ -278,6 +278,27 @@ data/
 ├── system_2.pdb
 └── ...
 
+#### Binding affinity labels (optional)
+
+Affinity labels are **optional**. If you supply none, preprocessing still succeeds and every
+affinity field is stored as `NaN` — that is the normal case for structures you have no
+measurements for. Only add `--predict_affinity` to your training/fine-tuning command if a
+meaningful fraction of your systems is labelled.
+
+There are two ways to attach labels, and they are mutually exclusive:
+
+1. **SD properties on the ligand** (default, no extra flag). Set a property named `pIC50`,
+   `pKi`, `pKd` or `pEC50` on the molecule in the SDF. Matching is case-insensitive, and the
+   values are expected on the p-scale (`p = -log10(value in molar)`), so `IC50 = 150 nM`
+   becomes `pIC50 = 6.824`.
+
+2. **A metadata CSV**, passed as `--metadata_file`. The CSV is looked up by system identifier
+   and may carry raw values with units (e.g. `IC50_value` / `IC50_unit`), which are converted
+   to the p-scale for you.
+
+Systems may be labelled with different assay types, and a mix of labelled and unlabelled
+systems in one dataset is supported.
+
 ---
 
 ### 🔄 Preprocessing Workflow
