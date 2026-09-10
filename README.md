@@ -197,6 +197,15 @@ Modify `scripts/generate_pdb.sl` according to your requirements, then submit the
 sbatch scripts/generate_pdb.sl
 ```
 
+**Input Selection Options:**
+
+- `--ligand_idx`: Index of the ligand to use when the reference SDF holds several (default: 0)
+- `--chain_id`: Restrict the structure to a single chain before the pocket is cut. Useful for
+  multimers where the same site appears in several copies -- on a homodimer such as 1HSG,
+  `--chain_id A` and `--chain_id B` yield different pockets, and omitting the flag keeps
+  every chain. Errors out naming the available chains if the chain is absent, or if it
+  contains no copy of the ligand.
+
 **Conditional Generation Options:**
 
 **⚠️ NOTE:** Inpainting modes slightly changed with push from 02.06.2026; see below:
@@ -234,6 +243,13 @@ sbatch scripts/generate_pdb.sl
 - `--calculate_pb_valid`: Calculate PoseBusters validity for generated molecules (using PoseBusters)
 - `--calculate_strain_energies`: Calculate strain energies for generated molecules (using RDKit)
 - `--compute_interaction_recovery`: Calculate interaction recovery (using ProLIF)
+- `--property_filter`: Keep only molecules whose computed property falls in a range, as
+  `"name:min:max"` (e.g. `"molwt:200:500"`). Repeatable. Sampling continues until enough
+  molecules pass, so an unsatisfiable range ends the run with an error rather than quietly
+  writing unfiltered output.
+- `--adme_filter`: Same syntax plus a model path (`"name:min:max:model_path"`). The ADME
+  model loader is an integration point rather than a shipped model -- it warns and raises
+  unless you override `ADMEFilter._load_model()` with your own loader.
 
 - **Output**: Generated ligands are saved as an SDF file at the specified location (save_dir) alongside the extracted pockets. The SDF file also contains predicted affinity values (pIC50, pKi, pKd, pEC50)
 - **Runtime**: Depends on system size, hardware specs. and batch size, but roughly 15s for 100 ligands on an H100 GPU.
