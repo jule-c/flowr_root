@@ -189,39 +189,31 @@ class dotdict(dict):
 
 
 def get_conditional_mode(args):
-    return (
-        "scaffold_hopping"
-        if args.scaffold_hopping
-        else (
-            "scaffold_elaboration"
-            if args.scaffold_elaboration
-            else (
-                "linker_inpainting"
-                if args.linker_inpainting
-                else (
-                    "core_growing"
-                    if args.core_growing
-                    else (
-                        "fragment_growing"
-                        if getattr(args, "fragment_growing", False)
-                        else (
-                            "fragment_inpainting"
-                            if args.fragment_inpainting
-                            else (
-                                "substructure_inpainting"
-                                if args.substructure_inpainting
-                                else (
-                                    "interaction_conditional"
-                                    if args.interaction_conditional
-                                    else None
-                                )
-                            )
-                        )
-                    )
-                )
-            )
-        )
-    )
+    """Return the conditional-generation mode selected on the command line.
+
+    Every flag is read through ``getattr`` with a default because the generation
+    entrypoints do not all define the same set: ``generate_from_sdf_mol`` has no
+    ``--interaction_conditional``. That flag is only reached when no other mode is
+    set, so an unguarded read crashed *every unconditional* ligand-only run with
+    ``AttributeError: 'Namespace' object has no attribute 'interaction_conditional'``
+    while conditional runs passed -- which is why the shipped generate_sdf.sl, which
+    hardcodes --substructure_inpainting, masked it.
+
+    The order below is the original precedence and must be preserved.
+    """
+    for mode in (
+        "scaffold_hopping",
+        "scaffold_elaboration",
+        "linker_inpainting",
+        "core_growing",
+        "fragment_growing",
+        "fragment_inpainting",
+        "substructure_inpainting",
+        "interaction_conditional",
+    ):
+        if getattr(args, mode, False):
+            return mode
+    return None
 
 
 def filter_substructure(
