@@ -118,6 +118,15 @@ This is a research repository introducing FLOWR.root.
    Note that results are not reproducible across devices: a fixed `--seed` gives
    different samples on CPU, MPS and CUDA, because each backend has its own RNG stream.
 
+4. **macOS: use `--num_workers 0`**
+
+   On macOS, any run with `--num_workers` greater than 0 fails with
+   `TypeError: cannot pickle '_thread.lock' object`. This is a platform difference, not a
+   configuration error: macOS multiprocessing defaults to *spawn*, which pickles the
+   dataset to reach each worker, while Linux uses *fork* and never pickles it. The open
+   LMDB handle cannot be pickled. Linux is unaffected, so `--num_workers 12` remains the
+   right setting on a cluster or workstation.
+
 <details>
 <summary><b>Optional external toolkits</b></summary>
 
