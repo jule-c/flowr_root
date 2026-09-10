@@ -34,7 +34,12 @@ def _tree_apparent_size(path: Path) -> int:
                 total += entry.stat(follow_symlinks=False).st_size
                 if entry.is_dir(follow_symlinks=False):
                     stack.append(Path(entry.path))
-    # du counts the directory inode itself too.
+    # Add the top-level directory inode as a small deliberate over-estimate. Sizing the
+    # LMDB map slightly high is free -- map_size is a virtual reservation, not an
+    # allocation -- whereas sizing it low is the failure this function exists to prevent
+    # (the previous `du -sb` call raised on non-GNU systems, was swallowed, and left the
+    # estimate at 0, so the map fell back to LMDB's ~10 MB default and merges died with
+    # MDB_MAP_FULL).
     return total + path.stat().st_size
 
 
