@@ -13,7 +13,7 @@ from posecheck.utils.interactions import generate_interaction_df
 from posecheck.utils.loading import (get_ids_to_pockets, get_pdbqt_mol,
                                load_mols_from_sdf, load_protein_from_pdb,
                                read_pdbqt)
-from posecheck.utils.strain import get_strain_energy
+from posecheck.utils.strain import calculate_strain_energy as get_strain_energy
 
 # get directory of this file
 DIR = os.path.dirname(os.path.abspath(__file__))

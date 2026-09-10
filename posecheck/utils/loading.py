@@ -91,25 +91,31 @@ def load_protein_from_pdb(pdb_path: str, reduce_path: str = REDUCE_PATH):
     return prot
 
 
-# def get_pdbqt_mol(pdbqt_block: str) -> Chem.Mol:
-#     """Convert pdbqt block to rdkit mol by converting with openbabel"""
-#     # write pdbqt file
-#     with open("test_pdbqt.pdbqt", "w") as f:
-#         f.write(pdbqt_block)
+def get_pdbqt_mol(pdbqt_block: str) -> Chem.Mol:
+    """Convert a pdbqt block to an rdkit mol by converting with openbabel.
 
-#     # read pdbqt file from autodock
-#     mol = ob.OBMol()
-#     obConversion = ob.OBConversion()
-#     obConversion.SetInAndOutFormats("pdbqt", "pdb")
-#     obConversion.ReadFile(mol, "test_pdbqt.pdbqt")
+    openbabel is imported lazily so that importing this module does not require
+    it; only the PDBQT/AutoDock path does.
+    """
+    from openbabel import openbabel as ob
 
-#     # convert to RDKIT
-#     mol = Chem.MolFromPDBBlock(obConversion.WriteString(mol))
+    # AutoDock's pdbqt has to go through a file: openbabel's pdbqt reader does
+    # not accept a string. Use a private temp file rather than a fixed name in
+    # the working directory, so concurrent callers cannot clobber each other.
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".pdbqt", delete=False
+    ) as tmp:
+        tmp.write(pdbqt_block)
+        tmp_path = tmp.name
 
-#     # remove tmp file
-#     os.remove("test_pdbqt.pdbqt")
-
-#     return mol
+    try:
+        mol = ob.OBMol()
+        conv = ob.OBConversion()
+        conv.SetInAndOutFormats("pdbqt", "pdb")
+        conv.ReadFile(mol, tmp_path)
+        return Chem.MolFromPDBBlock(conv.WriteString(mol))
+    finally:
+        os.remove(tmp_path)
 
 
 def read_pdbqt(pdbqt_file: str) -> Chem.Mol:
