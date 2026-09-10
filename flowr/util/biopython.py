@@ -92,23 +92,3 @@ def remove_connect_lines(pdb_path):
             if line.startswith("CONECT"):
                 continue
             f.write(line)
-
-
-if __name__ == "__main__":
-    # import temp path
-    import tempfile
-
-    from posecheck.utils.constants import EXAMPLE_PDB_PATH
-
-    structure = load_biopython_structure(EXAMPLE_PDB_PATH)
-
-    print(ids_scriptly_increasing(structure))
-
-    reordered_structure = reorder_ids(structure)
-
-    print(ids_scriptly_increasing(reordered_structure))
-
-    with tempfile.NamedTemporaryFile(suffix=".pdb") as temp:
-        print(temp.name)
-        save_biopython_structure(reordered_structure, temp.name)
-        print(load_biopython_structure(temp.name))

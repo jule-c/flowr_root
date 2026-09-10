@@ -116,6 +116,7 @@ eval = [
 # favour of the fork vendored in this repo.
 plinder = ["plinder>=0.2"]
 
+
 # ---------------------------------------------------------------------------
 # NOT PACKAGED HERE -- deliberately undeclared, with the reason for each
 # ---------------------------------------------------------------------------
@@ -160,8 +161,13 @@ plinder = ["plinder>=0.2"]
 #                      PyMOL from your system package manager or an upstream
 #                      installer if you need the PyMOL code paths in
 #                      flowr/gen/utils.py or flowr/util/pocket.py.
-#   reduce             External binary (Richardson lab), optionally shelled
-#                      out to by the vendored `posecheck`.
+#   posecheck, reduce  posecheck pins pandas==2.0.0, which has no cp312 wheel
+#                      and fails to build, so declaring it as an extra drags
+#                      the whole lock to an uninstallable pandas. It is used
+#                      only by two lazy imports (evaluate_posecheck and the
+#                      unused PoseCheckStrainEnergy); install it yourself with
+#                      `uv pip install posecheck` plus the `reduce` binary if
+#                      you need them.
 #   xtb, vina          External CLI binaries shelled out to by
 #                      flowr/eval/evaluate_xtb.py and the docking helpers.
 #                      Their PyPI packages are sdist-only Fortran/C++ builds
@@ -172,13 +178,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# Three top-level packages. `posebusters` and `posecheck` are *vendored,
-# locally modified* forks -- they must always come from this source tree and
-# never from PyPI.
-packages = ["flowr", "posebusters", "posecheck"]
+# `posebusters` is a *vendored, locally modified* fork -- it must always come
+# from this source tree and never from PyPI.
+packages = ["flowr", "posebusters"]
 
 [tool.hatch.build.targets.sdist]
-include = ["flowr", "posebusters", "posecheck", "README.md", "LICENSE"]
+include = ["flowr", "posebusters", "README.md", "LICENSE"]
 
 # ---------------------------------------------------------------------------
 # uv configuration
@@ -218,10 +223,12 @@ torch = [
 [tool.uv]
 conflicts = [[{ extra = "cpu" }, { extra = "gpu" }]]
 
-# `posebusters` and `posecheck` ship in THIS repo as locally modified forks
-# (see [tool.hatch.build.targets.wheel] above). Excluding them here makes it
+# `posebusters` ships in THIS repo as a locally modified fork (see
+# [tool.hatch.build.targets.wheel] above). Excluding it here makes it
 # impossible for a transitive dependency to pull the upstream PyPI
-# distributions into site-packages, where they would shadow -- or be shadowed
-# by -- the vendored copies. `plinder` depends on `posebusters` and would
+# distribution into site-packages, where it would shadow -- or be shadowed
+# by -- the vendored copy. `plinder` depends on `posebusters` and would
 # otherwise do exactly that; it gets the vendored fork instead.
-exclude-dependencies = ["posebusters", "posecheck"]
+# `posecheck` is deliberately NOT excluded: it is no longer vendored and is
+# installed from PyPI by the optional `posecheck` extra.
+exclude-dependencies = ["posebusters"]

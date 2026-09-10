@@ -32,7 +32,7 @@ from flowr.util.pocket import (
     ProteinPocket,
 )
 from flowr.util.rdkit import write_sdf_file
-from posecheck.utils.biopython import (
+from flowr.util.biopython import (
     ids_scriptly_increasing,
     load_biopython_structure,
     remove_connect_lines,

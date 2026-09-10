@@ -52,7 +52,6 @@ from flowr.util.sampling.utils import (
     valency_distance,
 )
 from posebusters import PoseBusters
-from posecheck import PoseCheck
 
 sys.path.append(os.path.join(RDConfig.RDContribDir, "SA_Score"))
 import sascorer
@@ -1483,6 +1482,18 @@ def evaluate_posecheck(
 ):
     if isinstance(gen_ligs, Chem.Mol):
         gen_ligs = [gen_ligs]
+
+    # posecheck is not a declared dependency (it pins pandas==2.0.0, which will not
+    # install on py3.12) and it also needs the `reduce` binary on PATH. Imported here
+    # so the rest of this module works without it.
+    try:
+        from posecheck import PoseCheck
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "evaluate_posecheck requires the optional 'posecheck' package. "
+            "Install it with `uv pip install posecheck` and make sure the `reduce` "
+            "binary is on PATH (https://github.com/rlabduke/reduce)."
+        ) from exc
 
     pc = PoseCheck()
     pc.load_protein_from_pdb(pdb_file)

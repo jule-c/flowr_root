@@ -12,7 +12,6 @@ from flowr.constants import CORE_ATOMS as ATOM_NAMES
 from flowr.util.pylogger import RankedLogger
 from flowr.util.rdkit import calc_energy, largest_component, mol_is_valid, optimise_mol
 from posebusters import PoseBusters
-from posecheck.utils.strain import calculate_strain_energy
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
@@ -561,6 +560,8 @@ class PoseCheckStrainEnergy(Metric):
 
         for mol in valid_molecules:
             try:
+                from posecheck.utils.strain import calculate_strain_energy
+
                 energy = calculate_strain_energy(mol, num_confs=self.num_confs)
                 if energy is None:
                     log.warning("Strain energy calculation returned None for molecule.")
