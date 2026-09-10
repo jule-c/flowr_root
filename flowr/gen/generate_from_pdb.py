@@ -28,6 +28,7 @@ from flowr.util.metrics import (
     evaluate_pb_validity,
     evaluate_strain,
 )
+from flowr.util.device import resolve_device
 from flowr.util.pocket import PocketComplexBatch
 from flowr.util.rdkit import write_sdf_file
 
@@ -79,7 +80,13 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to("cuda")
+    # Device placement. `--gpus` is a device *count*, so `--gpus 0` selects CPU even on
+    # a CUDA machine; otherwise CUDA is used when present and CPU everywhere else.
+    # Apple's MPS backend is deliberately NOT auto-selected: it is opt-in via
+    # FLOWR_DEVICE=mps (see the CPU/macOS note in the README).
+    device = resolve_device(args)
+    print(f"Using device: {device}")
+    model = model.to(device)
     model.eval()
 
     print("Model complete.")
@@ -156,6 +163,7 @@ def evaluate(args):
                     save_traj=args.save_traj,
                     iter=f"{k}_{i}",
                     guidance_params=guidance_params,
+                    device=device,
                 )
             else:
                 gen_ligs = generate_ligands_per_target(
@@ -167,6 +175,7 @@ def evaluate(args):
                     save_traj=args.save_traj,
                     iter=f"{k}_{i}",
                     guidance_params=guidance_params,
+                    device=device,
                 )
 
             # Filter by validity and uniqueness

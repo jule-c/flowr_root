@@ -21,6 +21,7 @@ from flowr.data.interpolate import (
 )
 from flowr.gen.generate import generate_ligands_per_target
 from flowr.scriptutil import load_model
+from flowr.util.device import clear_cache, resolve_device
 from flowr.util.pocket import PROLIF_INTERACTIONS, PocketComplexBatch
 from flowr.util.rdkit import ConformerGenerator
 
@@ -229,7 +230,13 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to("cuda")
+    # Device placement. `--gpus` is a device *count*, so `--gpus 0` selects CPU even on
+    # a CUDA machine; otherwise CUDA is used when present and CPU everywhere else.
+    # Apple's MPS backend is deliberately NOT auto-selected: it is opt-in via
+    # FLOWR_DEVICE=mps (see the CPU/macOS note in the README).
+    device = resolve_device(args)
+    print(f"Using device: {device}")
+    model = model.to(device)
     model.eval()
     print("Model complete.")
 
@@ -247,7 +254,9 @@ def evaluate(args):
     data_path = Path(args.data_path) / f"{args.dataset_split}.smol"
     bytes_data = data_path.read_bytes()
     systems = PocketComplexBatch.from_bytes(bytes_data, remove_hs=hparams["remove_hs"])
-    systems = split_list(systems, args.gpus)[args.mp_index - 1]
+    # ``--gpus`` is a device *count* and ``--gpus 0`` selects CPU, so taking it
+    # literally as a shard count raises ZeroDivisionError. CPU is one shard.
+    systems = split_list(systems, max(1, args.gpus))[args.mp_index - 1]
 
     print("\nStarting sampling...\n")
     out_dict = defaultdict(list)
@@ -286,6 +295,7 @@ def evaluate(args):
                     prior=prior,
                     posterior=data,
                     pocket_noise=args.pocket_noise,
+                    device=device,
                 )
 
                 # Get the time for one batch iteration
@@ -312,8 +322,11 @@ def evaluate(args):
         time_per_complex = np.mean(times)
         global_run_time = time.time() - global_start
         if num_ligands == 0:
-            raise (
-                f"Reached {args.max_sample_iter} sampling iterations, but could not find any ligands."
+            # NB: `raise <str>` here raised TypeError: exceptions must derive from
+            # BaseException, destroying the diagnostic it was written to deliver.
+            raise RuntimeError(
+                f"Reached {args.max_sample_iter} sampling iterations, but could not "
+                "find any ligands."
             )
         elif num_ligands < args.sample_n_molecules_per_target:
             print(
@@ -335,7 +348,7 @@ def evaluate(args):
         )
 
         # Empty the cache
-        torch.cuda.empty_cache()
+        clear_cache()
 
         # Save the generated ligands
         out_dict["gen_ligs"].append(all_gen_ligs)

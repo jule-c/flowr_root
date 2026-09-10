@@ -18,6 +18,7 @@ from flowr.gen.utils import (
 from flowr.scriptutil import (
     load_mol_model,
 )
+from flowr.util.device import clear_cache, resolve_device
 from flowr.util.molrepr import GeometricMolBatch
 
 warnings.filterwarnings(
@@ -64,7 +65,13 @@ def evaluate(args):
     ) = load_mol_model(
         args,
     )
-    model = model.to("cuda")
+    # Device placement. `--gpus` is a device *count*, so `--gpus 0` selects CPU even on
+    # a CUDA machine; otherwise CUDA is used when present and CPU everywhere else.
+    # Apple's MPS backend is deliberately NOT auto-selected: it is opt-in via
+    # FLOWR_DEVICE=mps (see the CPU/macOS note in the README).
+    device = resolve_device(args)
+    print(f"Using device: {device}")
+    model = model.to(device)
     model.eval()
     print("Model complete.")
 
@@ -101,7 +108,9 @@ def evaluate(args):
     # Sampling loop
     print("\nStarting sampling...\n")
     ## Determine the number of molecules to sample given GPU count
-    sample_n_molecules = args.sample_n_molecules // args.gpus
+    # ``--gpus`` is a device *count* and ``--gpus 0`` selects CPU, so dividing by it
+    # literally raises ZeroDivisionError. CPU samples the whole request in one go.
+    sample_n_molecules = args.sample_n_molecules // max(1, args.gpus)
     while num_molecules < sample_n_molecules and k <= args.max_sample_iter:
         print(
             f"...Sampling iteration {k + 1}...",
@@ -115,6 +124,7 @@ def evaluate(args):
                 args,
                 model=model,
                 prior=prior,
+                device=device,
             )
 
             # Get the time for one batch iteration
@@ -142,8 +152,11 @@ def evaluate(args):
 
         # Check how many molecules were generated
         if num_molecules == 0:
-            raise (
-                f"Reached {args.max_sample_iter} sampling iterations, but could not find any molecules."
+            # NB: `raise <str>` here raised TypeError: exceptions must derive from
+            # BaseException, destroying the diagnostic it was written to deliver.
+            raise RuntimeError(
+                f"Reached {args.max_sample_iter} sampling iterations, but could not "
+                "find any molecules."
             )
         elif num_molecules < sample_n_molecules:
             print(
@@ -164,7 +177,7 @@ def evaluate(args):
         print(f"Validity of generated molecules: {np.mean(validities):.3f}\n")
 
         # Empty the cache
-        torch.cuda.empty_cache()
+        clear_cache()
 
     # Save out_dict as pickle file
     if args.filter_valid_unique:

@@ -1,4 +1,5 @@
 import argparse
+import os
 import pickle
 import re
 import shutil
@@ -16,24 +17,59 @@ from flowr.data.preprocess_data.preprocess_util import (
 from flowr.util.pocket import PocketComplex
 
 
+def _tree_apparent_size(path: Path) -> int:
+    """Sum the apparent size of everything under ``path``, like ``du -sb``.
+
+    Apparent size (``st_size``), not allocated blocks: LMDB's ``data.mdb`` is sparse,
+    so block usage would under-report it badly and we would size the output map from a
+    number far smaller than the data about to be copied in.
+    """
+    total = 0
+    stack = [path]
+    while stack:
+        current = stack.pop()
+        with os.scandir(current) as entries:
+            for entry in entries:
+                # follow_symlinks=False matches du, which measures the link not the target.
+                total += entry.stat(follow_symlinks=False).st_size
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(Path(entry.path))
+    # du counts the directory inode itself too.
+    return total + path.stat().st_size
+
+
 def estimate_required_size(chunks_dir):
-    """Estimate the actual size needed by checking existing chunks"""
+    """Estimate the actual size needed by checking existing chunks
+
+    This measurement used to shell out to ``du -sb``. ``-b`` is a GNU extension that
+    BSD/macOS ``du`` does not have, so on macOS the call raised, the bare ``except``
+    below swallowed it, and the estimate silently stayed 0 -- which left ``lmdb.open``
+    on its ~10 MB default and killed the merge with ``MDB_MAP_FULL`` on any real
+    dataset. Measuring in Python is portable and needs no subprocess.
+    """
     chunks_dir = Path(chunks_dir)
     chunk_dirs = sorted(chunks_dir.glob("chunk_*"))
 
     total_size = 0
     for chunk_dir in chunk_dirs:
         try:
-            result = subprocess.run(
-                ["du", "-sb", str(chunk_dir)],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            chunk_size = int(result.stdout.split()[0])
-            total_size += chunk_size
-        except Exception:
-            continue
+            total_size += _tree_apparent_size(chunk_dir)
+        except OSError as err:
+            # Was ``except Exception: continue``. Skipping a chunk here does not skip it
+            # during the merge -- it is still copied in -- so a swallowed error means we
+            # size the map for less data than we then write and LMDB fails later with an
+            # opaque MDB_MAP_FULL. Be loud instead.
+            raise RuntimeError(
+                f"Could not measure chunk '{chunk_dir}' while sizing the output "
+                f"database: {err}"
+            ) from err
+
+    if total_size == 0:
+        raise RuntimeError(
+            f"Measured 0 bytes across {len(chunk_dirs)} chunk database(s) under "
+            f"'{chunks_dir}'. Sizing the output map from this would leave LMDB on its "
+            f"~10 MB default and fail with MDB_MAP_FULL part-way through the merge."
+        )
 
     # Add 50% buffer for safety
     estimated_size = int(total_size * 1.5)

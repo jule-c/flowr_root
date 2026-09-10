@@ -15,6 +15,7 @@ from flowr.gen.generate import generate_molecules
 from flowr.scriptutil import (
     load_mol_model,
 )
+from flowr.util.device import clear_cache, resolve_device
 from flowr.util.metrics import evaluate_pb_validity_mol, evaluate_strain
 from flowr.util.molrepr import GeometricMolBatch
 from flowr.util.rdkit import write_sdf_file
@@ -63,7 +64,13 @@ def evaluate(args):
     ) = load_mol_model(
         args,
     )
-    model = model.to("cuda")
+    # Device placement. `--gpus` is a device *count*, so `--gpus 0` selects CPU even on
+    # a CUDA machine; otherwise CUDA is used when present and CPU everywhere else.
+    # Apple's MPS backend is deliberately NOT auto-selected: it is opt-in via
+    # FLOWR_DEVICE=mps (see the CPU/macOS note in the README).
+    device = resolve_device(args)
+    print(f"Using device: {device}")
+    model = model.to(device)
     model.eval()
     print("Model complete.")
 
@@ -115,6 +122,7 @@ def evaluate(args):
                 args,
                 model=model,
                 prior=prior,
+                device=device,
             )
             num_sampled = len(gen_mols)
 
@@ -185,12 +193,15 @@ def evaluate(args):
         )
 
         # Empty the cache
-        torch.cuda.empty_cache()
+        clear_cache()
 
     # Check how many molecules were generated
     if num_molecules == 0:
-        raise (
-            f"Reached {args.max_sample_iter} sampling iterations, but could not find any molecules."
+        # NB: `raise <str>` here raised TypeError: exceptions must derive from
+        # BaseException, destroying the diagnostic it was written to deliver.
+        raise RuntimeError(
+            f"Reached {args.max_sample_iter} sampling iterations, but could not "
+            "find any molecules."
         )
     elif num_molecules < sample_n_molecules:
         print(

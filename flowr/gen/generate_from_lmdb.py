@@ -17,6 +17,7 @@ from flowr.gen.generate import generate_ligands_per_target
 from flowr.scriptutil import (
     load_model,
 )
+from flowr.util.device import clear_cache, resolve_device
 from flowr.util.pocket import PocketComplexBatch
 
 warnings.filterwarnings(
@@ -64,7 +65,13 @@ def evaluate(args):
     ) = load_model(
         args,
     )
-    model = model.to("cuda")
+    # Device placement. `--gpus` is a device *count*, so `--gpus 0` selects CPU even on
+    # a CUDA machine; otherwise CUDA is used when present and CPU everywhere else.
+    # Apple's MPS backend is deliberately NOT auto-selected: it is opt-in via
+    # FLOWR_DEVICE=mps (see the CPU/macOS note in the README).
+    device = resolve_device(args)
+    print(f"Using device: {device}")
+    model = model.to(device)
     model.eval()
 
     print("Model complete.")
@@ -126,6 +133,7 @@ def evaluate(args):
                     posterior=posterior,
                     pocket_noise=args.pocket_noise,
                     guidance_params=guidance_params,
+                    device=device,
                 )
 
                 # Get the time for one batch iteration
@@ -177,8 +185,11 @@ def evaluate(args):
 
         # Check how many ligands were generated
         if num_ligands == 0:
-            raise (
-                f"Reached {args.max_sample_iter} sampling iterations, but could not find any ligands."
+            # NB: `raise <str>` here raised TypeError: exceptions must derive from
+            # BaseException, destroying the diagnostic it was written to deliver.
+            raise RuntimeError(
+                f"Reached {args.max_sample_iter} sampling iterations, but could not "
+                "find any ligands."
             )
         elif num_ligands < args.sample_n_molecules_per_target:
             print(
@@ -239,7 +250,7 @@ def evaluate(args):
         print(f"Validity of generated ligands: {np.mean(validities):.3f}\n")
 
         # Empty the cache
-        torch.cuda.empty_cache()
+        clear_cache()
 
     # Save out_dict as pickle file
     if args.filter_valid_unique:

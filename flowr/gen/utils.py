@@ -755,7 +755,9 @@ def load_data_from_lmdb(
     # Split the dataset for multi-processing via job arrays
     if hasattr(args, "mp_index"):
         systems = [system for system in dataset if system is not None]
-        systems = split_list(systems, args.gpus)[args.mp_index - 1]
+        # ``--gpus`` is a device *count* and ``--gpus 0`` selects CPU, so taking it
+        # literally as a shard count raises ZeroDivisionError. CPU is one shard.
+        systems = split_list(systems, max(1, args.gpus))[args.mp_index - 1]
         return systems
 
     return dataset
@@ -864,7 +866,9 @@ def load_data_from_lmdb_mol(
         f"Dataset split is set to {args.dataset_split}. Number of molecules: {len(dataset)}"
     )
     molecules = [molecule for molecule in dataset if molecule is not None]
-    molecules = split_list(molecules, args.gpus)[args.mp_index - 1]
+    # ``--gpus`` is a device *count* and ``--gpus 0`` selects CPU, so taking it
+    # literally as a shard count raises ZeroDivisionError. CPU is one shard.
+    molecules = split_list(molecules, max(1, args.gpus))[args.mp_index - 1]
     return molecules
 
 
@@ -910,7 +914,9 @@ def load_data_from_sdf_mol(
 
     print(f"Number of molecules: {len(dataset)}")
     molecules = [molecule for molecule in dataset if molecule is not None]
-    molecules = split_list(molecules, args.gpus)[args.mp_index - 1]
+    # ``--gpus`` is a device *count* and ``--gpus 0`` selects CPU, so taking it
+    # literally as a shard count raises ZeroDivisionError. CPU is one shard.
+    molecules = split_list(molecules, max(1, args.gpus))[args.mp_index - 1]
     return molecules
 
 
