@@ -229,6 +229,8 @@ conflicts = [[{ extra = "cpu" }, { extra = "gpu" }]]
 # distribution into site-packages, where it would shadow -- or be shadowed
 # by -- the vendored copy. `plinder` depends on `posebusters` and would
 # otherwise do exactly that; it gets the vendored fork instead.
-# `posecheck` is deliberately NOT excluded: it is no longer vendored and is
-# installed from PyPI by the optional `posecheck` extra.
+# `posecheck` is deliberately NOT excluded: it is no longer vendored, and it is
+# not an extra either -- it pins `pandas==2.0.0`, which has no cp312 wheel and
+# fails to build from sdist (see the note on it above). Install it yourself with
+# `uv pip install posecheck` if you need the PoseCheck code paths.
 exclude-dependencies = ["posebusters"]

@@ -77,10 +77,10 @@ This is a research repository introducing FLOWR.root.
 
 2. **Run commands**
 
-   Prefix any command with `uv run`:
+   Prefix any command with `uv run --no-sync`:
 
    ```bash
-   uv run python -m flowr.gen.generate_from_pdb --help
+   uv run --no-sync python -m flowr.gen.generate_from_pdb --help
    ```
 
    or activate the environment once and drop the prefix:
@@ -88,6 +88,11 @@ This is a research repository introducing FLOWR.root.
    ```bash
    source .venv/bin/activate
    ```
+
+   `--no-sync` runs the command against the `.venv` exactly as `uv sync` built it.
+   Without the flag, uv re-resolves the project to its default, no-extra dependency
+   set on every invocation, which replaces your CUDA `torch` build with the plain
+   PyPI wheel. After changing extras, re-run `uv sync` rather than dropping the flag.
 
    **No `PYTHONPATH` setup is required.** FLOWR.root is installed into the
    environment as a package, so `python -m flowr.<module>` works from anywhere.
@@ -101,7 +106,7 @@ runs without them — only the specific feature is unavailable.
 | Toolkit | Needed for | Notes |
 | --- | --- | --- |
 | **OpenEye** | shape-based alignment and conformer utilities (`flowr/util/sampling/openeye.py`, `flowr_vis/oe_conformer.py`) | Commercial licence. Install the `OpenEye-toolkits` wheel from OpenEye's own package index and point `OE_LICENSE` at your licence file. |
-| **PyMOL** | one alternative PDB-writing path in `flowr/util/pocket.py` | `uv sync --extra pymol`. No `linux-aarch64` wheel exists upstream, so this extra is a no-op on ARM Linux (e.g. DGX Spark / GB10); the code falls back to the OpenBabel path. |
+| **PyMOL** | the PyMOL PDB-writing paths in `flowr/util/pocket.py` and `flowr/gen/utils.py` | There is no `pymol` extra: the only PyPI distribution is a broken `pymol-open-source` 3.2.0a0 pre-release, so install PyMOL from your system package manager or an upstream installer if you need these paths. Without it there is no automatic fallback — `PocketComplex.write_complex_pdb()` raises `ImportError` unless its caller passes `obabel=True` to select the Open Babel branch, and `write_ligand_pocket_complex_pdb()` has no Open Babel branch at all. |
 | **`reduce`** | protonation for the PoseCheck interaction metrics | Build from [rlabduke/reduce](https://github.com/rlabduke/reduce) and put it on `PATH`. |
 
 </details>
