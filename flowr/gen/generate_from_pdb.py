@@ -101,6 +101,7 @@ def evaluate(args):
         args,
         remove_hs=hparams["remove_hs"],
         remove_aromaticity=hparams["remove_aromaticity"],
+        ligand_idx=args.ligand_idx,
         canonicalize_conformer=args.canonicalize_conformer,
     )
     dataset = get_dataset(system, transform, vocab, interpolant, args, hparams)
@@ -203,6 +204,7 @@ def evaluate(args):
                     inpainting_mode=inpainting_mode,
                     substructure_query=args.substructure,
                     max_fragment_cuts=3,
+                    ring_system_index=getattr(interpolant, "ring_system_index", 0),
                     canonicalize_conformer=args.canonicalize_conformer,
                 )
                 print(
@@ -534,6 +536,7 @@ def get_args():
     parser.add_argument('--ligand_id', type=str, default=None)
     parser.add_argument('--pdb_file', type=str, default=None)
     parser.add_argument('--ligand_file', type=str, default=None)
+    parser.add_argument('--ligand_idx', type=int, default=0, help="Index of the ligand in the sdf file to be used for generation")
     parser.add_argument('--res_txt_file', type=str, default=None)
     parser.add_argument('--chain_id', type=str, default=None)
     parser.add_argument('--canonicalize_conformer', action='store_true')
@@ -634,7 +637,8 @@ def get_args():
     )
     parser.add_argument("--max_fragment_cuts", type=int, default=3)
     parser.add_argument("--core_growing", action="store_true")
-    parser.add_argument("--ring_system_indexing", default=0, type=int)
+    parser.add_argument("--ring_system_index", "--ring_system_indexing", default=0, type=int,
+                        help="Index of the ring system to keep as the core when using --core_growing (0-indexed; use flowr.data.interpolate.get_num_ring_systems to see how many exist)")
     parser.add_argument("--substructure_inpainting", action="store_true")
     parser.add_argument(
         "--substructure", 

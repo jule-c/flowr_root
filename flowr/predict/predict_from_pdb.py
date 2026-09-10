@@ -251,7 +251,8 @@ def get_args():
         help="SMILES/SMARTS string or space-separated atom indices (e.g., '10 11 12 13' or 'c1ccccc1')"
     )
     parser.add_argument("--core_growing", action="store_true")
-    parser.add_argument("--ring_system_indexing", default=0, type=int)
+    parser.add_argument("--ring_system_index", "--ring_system_indexing", default=0, type=int,
+                        help="Index of the ring system to keep as the core when using --core_growing (0-indexed; use flowr.data.interpolate.get_num_ring_systems to see how many exist)")
     parser.add_argument(
         "--graph_inpainting",
         default=None,

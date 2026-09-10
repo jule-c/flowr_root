@@ -230,6 +230,7 @@ def filter_substructure(
     inpainting_mode: str,
     substructure_query: Optional[str] = None,
     max_fragment_cuts: int = 3,
+    ring_system_index: int = 0,
     canonicalize_conformer: Optional[bool] = False,
 ):
     """
@@ -243,6 +244,9 @@ def filter_substructure(
                         'interaction_conditional']
         substructure_query: SMILES/SMARTS string for substructure mode or list of atom IDs
         max_fragment_cuts: Maximum cuts for fragment mode
+        ring_system_index: Which ring system is kept as the core in 'core_growing'
+                        mode (0-indexed). Must match the index used to build the
+                        inpainting prior, otherwise nothing will match.
     Returns:
         Filtered list of generated molecules
     """
@@ -254,6 +258,7 @@ def filter_substructure(
             inpainting_mode,
             substructure_query=substructure_query,
             max_fragment_cuts=max_fragment_cuts,
+            ring_system_index=ring_system_index,
             canonicalize_conformer=canonicalize_conformer,
         ):
             filtered_ligs.append(gen_mol)
@@ -266,6 +271,7 @@ def check_substructure_match(
     inpainting_mode: str,
     substructure_query: Optional[str] = None,
     max_fragment_cuts: int = 3,
+    ring_system_index: int = 0,
     canonicalize_conformer: Optional[bool] = False,
 ) -> bool:
     """
@@ -279,6 +285,9 @@ def check_substructure_match(
                         'interaction_conditional']
         substructure_query: SMILES/SMARTS string for substructure mode or list of atom IDs
         max_fragment_cuts: Maximum cuts for fragment mode
+        ring_system_index: Which ring system is kept as the core in 'core_growing'
+                        mode (0-indexed). Must match the index used to build the
+                        inpainting prior, otherwise nothing will match.
 
     Returns:
         True if the generated molecule contains the required substructure, False otherwise
@@ -297,7 +306,9 @@ def check_substructure_match(
     elif inpainting_mode == "linker_inpainting":
         expected_mask = extract_linkers([ref_mol], invert_mask=True)[0]
     elif inpainting_mode == "core_growing":
-        expected_mask = extract_cores([ref_mol])[0]
+        expected_mask = extract_cores(
+            [ref_mol], ring_system_index=ring_system_index
+        )[0]
     elif inpainting_mode == "fragment_inpainting":
         expected_mask = extract_fragments([ref_mol], maxCuts=max_fragment_cuts)[0]
     elif inpainting_mode == "substructure_inpainting":
