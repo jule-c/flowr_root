@@ -20,10 +20,7 @@ from flowr.data.interpolate import (
     GeometricNoiseSampler,
 )
 from flowr.gen.generate import generate_ligands_per_target
-from flowr.models.fm_pocket import LigandPocketCFM
-from flowr.models.integrator import Integrator
-from flowr.models.pocket import LigandGenerator, PocketEncoder
-from flowr.util.device import get_map_location
+from flowr.scriptutil import load_model
 from flowr.util.pocket import PROLIF_INTERACTIONS, PocketComplexBatch
 from flowr.util.rdkit import ConformerGenerator
 
@@ -40,14 +37,6 @@ DEFAULT_ODE_SAMPLING_STRATEGY = "linear"
 DEFAULT_CATEGORICAL_STRATEGY = "uniform-sample"
 
 
-class dotdict(dict):
-    """dot.notation access to dictionary attributes"""
-
-    __getattr__ = dict.get
-    __setattr__ = dict.__setitem__
-    __delattr__ = dict.__delitem__
-
-
 def split_list(data, num_chunks):
     chunk_size = len(data) // num_chunks
     remainder = len(data) % num_chunks
@@ -58,178 +47,6 @@ def split_list(data, num_chunks):
         chunks.append(data[start:chunk_end])
         start = chunk_end
     return chunks
-
-
-def load_model(args):
-    checkpoint = torch.load(args.ckpt_path, map_location=get_map_location())
-    hparams = dotdict(checkpoint["hyper_parameters"])
-    hparams["compile_model"] = False
-    hparams["integration-steps"] = args.integration_steps
-    hparams["sampling_strategy"] = args.ode_sampling_strategy
-    hparams["interaction_conditional"] = args.interaction_conditional
-    hparams["scaffold_hopping"] = args.scaffold_hopping
-    hparams["scaffold_elaboration"] = args.scaffold_elaboration
-    hparams["linker_inpainting"] = args.linker_inpainting
-    hparams["data_path"] = args.data_path
-    hparams["save_dir"] = args.save_dir
-    hparams["predict_affinity"] = hparams.get("predict_affinity", False)
-    hparams["predict_docking_score"] = hparams.get("predict_docking_score", False)
-
-    # Number of corrector iterations
-    if args.corrector_iters > 0:
-        assert (
-            args.categorical_strategy == "velocity-sample"
-        ), "Only velocity sampling supported for corrector iterations."
-        hparams["corrector_iters"] = args.corrector_iters
-
-    # Propagate virtual atom settings from checkpoint hparams
-    if not hasattr(args, "virtual_atom_p"):
-        args.virtual_atom_p = hparams.get("virtual_atom_p", 0.0)
-    if not hasattr(args, "virtual_atom_noise_std"):
-        args.virtual_atom_noise_std = hparams.get("virtual_atom_noise_std", 0.5)
-
-    print("Building model vocabs...")
-    # vocab = util.build_vocab(remove_hs=args.remove_hs)
-    vocab = util._build_vocab(virtual_nodes=hparams.get("virtual_atom_p", 0.0) > 0)
-    vocab_charges = util._build_vocab_charges()
-    vocab_pocket_atoms = util._build_vocab_pocket_atoms()
-    vocab_pocket_res = util._build_vocab_pocket_res()
-    if hparams["add_feats"]:
-        print("Including hybridization features...")
-        vocab_hybridization = util._build_vocab_hybridization()
-        vocab_aromatic = None  # util._build_vocab_aromatic()
-    else:
-        vocab_hybridization = None
-        vocab_aromatic = None
-    print("Vocabs complete.")
-
-    n_atom_types = vocab.size
-    n_bond_types = util.get_n_bond_types(args.categorical_strategy)
-    n_charge_types = vocab_charges.size
-    n_hybridization_types = (
-        vocab_hybridization.size if vocab_hybridization is not None else 0
-    )
-    n_aromatic_types = vocab_aromatic.size if vocab_aromatic is not None else 0
-    n_interaction_types = (
-        len(PROLIF_INTERACTIONS) + 1
-        if hparams["flow_interactions"] or hparams["predict_interactions"]
-        else None
-    )
-
-    fixed_equi = hparams["pocket-fixed_equi"]
-    pocket_enc = PocketEncoder(
-        hparams["pocket-d_equi"],
-        hparams["pocket-d_inv"],
-        hparams["d_message"],
-        hparams["pocket-n_layers"],
-        hparams["n_attn_heads"],
-        hparams["d_message_ff"],
-        hparams["d_edge"],
-        vocab_pocket_atoms.size,
-        n_bond_types,
-        vocab_pocket_res.size,
-        fixed_equi=fixed_equi,
-    )
-
-    egnn_gen = LigandGenerator(
-        hparams["d_equi"],
-        hparams["d_inv"],
-        hparams["d_message"],
-        hparams["n_layers"],
-        hparams["n_attn_heads"],
-        hparams["d_message_ff"],
-        hparams["d_edge"],
-        emb_size=hparams["emb_size"],
-        n_atom_types=n_atom_types,
-        n_charge_types=n_charge_types,
-        n_bond_types=n_bond_types,
-        n_extra_atom_feats=(
-            n_hybridization_types + n_aromatic_types if hparams["add_feats"] else 0
-        ),
-        predict_interactions=hparams["predict_interactions"],
-        flow_interactions=hparams["flow_interactions"],
-        predict_affinity=hparams["predict_affinity"],
-        predict_docking_score=hparams["predict_docking_score"],
-        use_lig_pocket_rbf=hparams["use_lig_pocket_rbf"],
-        use_rbf=hparams["use_rbf"],
-        use_sphcs=hparams["use_sphcs"],
-        n_interaction_types=n_interaction_types,
-        self_cond=hparams["self_cond"],
-        pocket_enc=pocket_enc,
-        coord_skip_connect=hparams["coord_skip_connect"],
-    )
-
-    if args.lora_finetuned:
-        from flowr.models.lora import LinearWithLoRA
-        from flowr.models.pocket import SemlaCondAttention
-
-        lora_rank, lora_alpha = 8, 16
-
-        def _inject_lora(mod):
-            for name, child in mod.named_children():
-                # skip the entire cross-attention blocks
-                if isinstance(child, SemlaCondAttention):
-                    continue
-                # wrap any pure Linear
-                if isinstance(child, torch.nn.Linear):
-                    setattr(
-                        mod,
-                        name,
-                        LinearWithLoRA(child, rank=lora_rank, alpha=lora_alpha),
-                    )
-                else:
-                    _inject_lora(child)
-
-        # inject LoRA into the ligand generator
-        _inject_lora(egnn_gen.ligand_dec)
-
-    CFM = LigandPocketCFM
-    type_mask_index = None
-    bond_mask_index = None
-    # Backward/forward-compat: guarantee pocket_noise is present (see load_model in
-    # scriptutil.py). Checkpoint value first, then the per-split key, then the CLI arg.
-    hparams["pocket_noise"] = (
-        hparams.get("pocket_noise")
-        or hparams.get("train-pocket-noise")
-        or getattr(args, "pocket_noise", "fix")
-        or "fix"
-    )
-    integrator = Integrator(
-        args.integration_steps,
-        use_sde_simulation=args.use_sde_simulation,
-        type_strategy=args.categorical_strategy,
-        bond_strategy=args.categorical_strategy,
-        coord_strategy="continuous",
-        pocket_noise=hparams["pocket_noise"],
-        cat_noise_level=args.cat_sampling_noise_level,
-        coord_noise_std=args.coord_noise_scale,
-        type_mask_index=type_mask_index,
-        bond_mask_index=bond_mask_index,
-        use_cosine_scheduler=args.use_cosine_scheduler,
-    )
-    fm_model = CFM.load_from_checkpoint(
-        args.ckpt_path,
-        gen=egnn_gen,
-        vocab=vocab,
-        vocab_charges=vocab_charges,
-        vocab_hybridization=vocab_hybridization,
-        vocab_aromatic=vocab_aromatic,
-        integrator=integrator,
-        type_mask_index=type_mask_index,
-        bond_mask_index=bond_mask_index,
-        graph_inpainting=args.graph_inpainting is not None,
-        **hparams,
-    )
-    return (
-        fm_model,
-        hparams,
-        vocab,
-        vocab_charges,
-        vocab_hybridization,
-        vocab_aromatic,
-        vocab_pocket_atoms,
-        vocab_pocket_res,
-    )
 
 
 def load_util(
@@ -562,7 +379,8 @@ def get_args():
     parser.add_argument('--mp_index', default=0, type=int)
     parser.add_argument("--gpus", default=8, type=int)
     parser.add_argument("--num_workers", type=int, default=24)
-    parser.add_argument("--arch", type=str, choices=["pocket", "semla"], required=True)
+    parser.add_argument("--arch", type=str, choices=["pocket", "pocket_flex"], required=True)
+    parser.add_argument("--pocket_type", type=str, choices=["holo", "apo"], default="holo")
     parser.add_argument(
         "--pocket_noise", type=str, choices=["fix", "random", "apo"], required=True
     )
@@ -571,7 +389,6 @@ def get_args():
         help="Standard deviation of the pocket coordinate noise"
     )
     parser.add_argument("--ckpt_path", type=str)
-    parser.add_argument("--lora_finetuned", action="store_true")
     parser.add_argument("--data_path", type=str)
     parser.add_argument("--dataset", type=str)
     parser.add_argument("--save_dir", type=str)

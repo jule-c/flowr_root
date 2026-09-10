@@ -6,6 +6,7 @@ import math
 import os
 import pickle
 import resource
+import warnings
 from argparse import Namespace
 from functools import partial
 from pathlib import Path
@@ -575,6 +576,65 @@ def _inject_lora(lora_rank: int, lora_alpha: float, mod: torch.nn.Module):
             _inject_lora(lora_rank, lora_alpha, child)
 
 
+def _merge_lora(mod: torch.nn.Module):
+    """Merge LoRA weights back into base Linear layers and strip LoRA wrappers.
+
+    Must be called before re-injecting LoRA on a model that was already
+    LoRA-finetuned, to avoid nested LinearWithLoRA(LinearWithLoRA(...)).
+
+    LoRA forward: y = W x + (alpha/rank) * x @ A @ B, with A:(in,rank), B:(rank,out).
+    nn.Linear stores weight as (out, in) and computes x @ W.T, so the merged
+    delta to add to ``linear.weight`` is ((alpha/rank) * A @ B).T = (alpha/rank) * B.T @ A.T.
+    """
+    from flowr.models.lora import LinearWithLoRA
+
+    for name, child in mod.named_children():
+        if isinstance(child, LinearWithLoRA):
+            with torch.no_grad():
+                child.linear.weight.add_(
+                    (child.lora.alpha / child.lora.rank)
+                    * (child.lora.B.t() @ child.lora.A.t())
+                )
+            setattr(mod, name, child.linear)
+        else:
+            _merge_lora(child)
+
+
+def _report_lora_trainable(fm_model: torch.nn.Module):
+    """Print the LoRA trainable/total split over the *whole* LightningModule.
+
+    LoRA is injected into ``gen`` only, but sibling modules (notably
+    ``confidence_module``, which fm_pocket creates next to ``gen`` and adds to the
+    optimizer in ``configure_optimizers``) are trained in full during a nominally
+    LoRA run. Counting only the modules LoRA touched would understate the trainable
+    fraction, so report over everything and name anything left trainable outside the
+    LoRA scope. Nothing is frozen here: that would change training semantics.
+    """
+    total_params = sum(p.numel() for p in fm_model.parameters())
+    trainable_params = sum(p.numel() for p in fm_model.parameters() if p.requires_grad)
+    print(
+        f"LoRA: {trainable_params}/{total_params} parameters trainable "
+        f"({100 * trainable_params / total_params:.2f}%) over the full model"
+    )
+
+    outside = []
+    for name, module in fm_model.named_children():
+        if name == "gen":
+            continue
+        n_trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
+        if n_trainable > 0:
+            outside.append((name, n_trainable))
+    if outside:
+        detail = ", ".join(f"{n} ({c:,} params)" for n, c in outside)
+        warnings.warn(
+            f"LoRA finetuning: the following top-level module(s) are outside the "
+            f"LoRA scope and remain fully trainable: {detail}. They will be trained "
+            f"in full, not via LoRA adapters.",
+            stacklevel=2,
+        )
+        print(f"  WARNING: fully trainable outside the LoRA scope: {detail}")
+
+
 # *****************************************************************************
 # *****************************************************************************
 # *****************************************************************************
@@ -890,7 +950,7 @@ def build_model(
             use_is_fixed_embed=getattr(args, "use_is_fixed_embed", False),
             pocket_enc=pocket_enc,
         )
-    if args.load_pretrained_ckpt:
+    if getattr(args, "load_pretrained_ckpt", None):
         gen.load_state_dict(
             torch.load(args.load_pretrained_ckpt, map_location=get_map_location())[
                 "state_dict"
@@ -1038,7 +1098,10 @@ def build_model(
         mixed_uncond_inpaint=args.mixed_uncond_inpaint,
         use_t_loss_weights=args.use_t_loss_weights,
         corrector_iters=args.corrector_iters,
-        pretrained_weights=args.load_pretrained_ckpt is not None,
+        # ``load_pretrained_ckpt`` is a path (train.py / train_mol.py) or absent.
+        # ``is not None`` would read False (an unset store_true flag) as "supplied",
+        # so test truthiness instead and tolerate the arg being missing entirely.
+        pretrained_weights=bool(getattr(args, "load_pretrained_ckpt", None)),
         use_is_fixed_embed=getattr(args, "use_is_fixed_embed", False),
         mask_fixed_discrete_loss=getattr(args, "mask_fixed_discrete_loss", False),
         **hparams,
@@ -1152,6 +1215,34 @@ def load_model(
     hparams["energy_loss_weight"] = getattr(args, "energy_loss_weight", None)
     hparams["energy_loss_weighting"] = getattr(args, "energy_loss_weighting", None)
     hparams["energy_loss_decay_rate"] = getattr(args, "energy_loss_decay_rate", None)
+
+    # The affinity head is baked into the checkpoint architecture: the generator is
+    # built with predict_affinity from *hparams* (the checkpoint), while the loss
+    # weight comes from *args*. Passing --predict_affinity / --affinity_loss_weight
+    # against a checkpoint trained without the head therefore does nothing at all --
+    # the model emits no "affinity" prediction, so compute_affinity_loss() returns {}
+    # and the objective is silently dropped. Turning the head on here instead would
+    # mean training a randomly-initialised head, which is worse. Fail loudly.
+    _ckpt_predict_affinity = bool(hparams.get("predict_affinity", False))
+    _args_predict_affinity = bool(getattr(args, "predict_affinity", False))
+    _affinity_loss_weight = getattr(args, "affinity_loss_weight", None) or 0.0
+    if not _ckpt_predict_affinity and (
+        _args_predict_affinity or _affinity_loss_weight > 0
+    ):
+        raise ValueError(
+            "Affinity objective requested but the checkpoint has no affinity head.\n"
+            f"  checkpoint hyper_parameters['predict_affinity'] = {_ckpt_predict_affinity}\n"
+            f"  --predict_affinity                              = {_args_predict_affinity}\n"
+            f"  --affinity_loss_weight                          = "
+            f"{getattr(args, 'affinity_loss_weight', None)}\n"
+            f"  checkpoint                                      = "
+            f"{ckpt_path if ckpt_path is not None else getattr(args, 'ckpt_path', None)}\n"
+            "predict_affinity is an architecture flag: it is fixed when the model is "
+            "first trained and cannot be switched on when loading. Either drop "
+            "--predict_affinity and --affinity_loss_weight, or start from a checkpoint "
+            "that was trained with the affinity head (the joint generation + affinity "
+            "model, e.g. flowr_root_v2.2.ckpt)."
+        )
 
     # Self-conditioning defaults
     hparams["self_condition_mode"] = hparams.get("self_condition_mode", "stacking")
@@ -1349,16 +1440,30 @@ def load_model(
         _hparams["lora_alpha"] = args.lora_alpha
 
         # Load the pretrained weights
-        state_dict = torch.load(args.ckpt_path, map_location=get_map_location())[
-            "state_dict"
-        ]
-        state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
+        # Reuse the checkpoint already loaded at the top of this function: avoids a
+        # second ~1 GB disk read and, crucially, uses the *requested* checkpoint
+        # (``ckpt_path`` when given) rather than ``args.ckpt_path``.
+        # Strip the leading "gen." prefix only, and drop every non-"gen." key
+        # (e.g. ``confidence_module.*`` under --train_confidence) so the strict
+        # load below does not choke on unexpected keys.
+        state_dict = {
+            k[len("gen.") :]: v
+            for k, v in checkpoint["state_dict"].items()
+            if k.startswith("gen.")
+        }
         egnn = copy.deepcopy(egnn_gen)
         egnn.load_state_dict(state_dict, strict=True)
         assert (
             not args.affinity_finetuning
         ), "Cannot use both LoRA and affinity_finetune."
         assert not args.freeze_layers, "Cannot use both LoRA and freeze_layers."
+
+        # If the loaded ckpt already had LoRA, fold its delta into the base
+        # weights and strip wrappers so re-injection does not nest LoRA layers.
+        # No-op when starting from a non-LoRA base ckpt (round 0).
+        _merge_lora(egnn.ligand_dec)
+        if egnn.pocket_enc is not None:
+            _merge_lora(egnn.pocket_enc)
 
         # Apply LoRA to ligand decoder
         _inject_lora(
@@ -1372,41 +1477,37 @@ def load_model(
                 mod=egnn.pocket_enc,
             )
 
-        # Freeze all parameters except LoRA
-        trainable_params = 0
-        total_params = 0
-
+        # Freeze everything in the LoRA scope except the adapters themselves
         for n, p in egnn.ligand_dec.named_parameters():
-            total_params += p.numel()
-            if "lora" in n:
-                p.requires_grad = True
-                trainable_params += p.numel()
-            else:
-                p.requires_grad = False
+            p.requires_grad = "lora" in n
 
-        # Keep pocket encoder trainable if exists
+        # Same for the pocket encoder if it exists (it is *not* kept trainable:
+        # only its LoRA adapters are)
         if egnn.pocket_enc is not None:
             for n, p in egnn.pocket_enc.named_parameters():
-                total_params += p.numel()
-                if "lora" in n:
-                    p.requires_grad = True
-                    trainable_params += p.numel()
-                else:
-                    p.requires_grad = False
+                p.requires_grad = "lora" in n
 
-        print(
-            f"LoRA: {trainable_params}/{total_params} parameters trainable ({100*trainable_params/total_params:.2f}%)"
-        )
-        # Set the modified generator back to the model
+        # Set the modified generator back to the model before reporting, so the
+        # numbers below cover the whole LightningModule rather than just the two
+        # modules LoRA was injected into.
         fm_model.gen = egnn
         fm_model.save_hyperparameters(_hparams)
 
+        _report_lora_trainable(fm_model)
+
     elif getattr(args, "freeze_layers", None):
         print("Applying freeze_layers finetuning...")
-        state_dict = torch.load(args.ckpt_path, map_location=get_map_location())[
-            "state_dict"
-        ]
-        state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
+        # Reuse the checkpoint already loaded at the top of this function: avoids a
+        # second ~1 GB disk read and, crucially, uses the *requested* checkpoint
+        # (``ckpt_path`` when given) rather than ``args.ckpt_path``.
+        # Strip the leading "gen." prefix only, and drop every non-"gen." key
+        # (e.g. ``confidence_module.*`` under --train_confidence) so the strict
+        # load below does not choke on unexpected keys.
+        state_dict = {
+            k[len("gen.") :]: v
+            for k, v in checkpoint["state_dict"].items()
+            if k.startswith("gen.")
+        }
         egnn = copy.deepcopy(egnn_gen)
         egnn.load_state_dict(state_dict, strict=True)
         assert (
@@ -1517,10 +1618,17 @@ def load_model(
 
     elif getattr(args, "affinity_finetuning", None):
         print("Applying affinity_finetuning...")
-        state_dict = torch.load(args.ckpt_path, map_location=get_map_location())[
-            "state_dict"
-        ]
-        state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
+        # Reuse the checkpoint already loaded at the top of this function: avoids a
+        # second ~1 GB disk read and, crucially, uses the *requested* checkpoint
+        # (``ckpt_path`` when given) rather than ``args.ckpt_path``.
+        # Strip the leading "gen." prefix only, and drop every non-"gen." key
+        # (e.g. ``confidence_module.*`` under --train_confidence) so the strict
+        # load below does not choke on unexpected keys.
+        state_dict = {
+            k[len("gen.") :]: v
+            for k, v in checkpoint["state_dict"].items()
+            if k.startswith("gen.")
+        }
         egnn = copy.deepcopy(egnn_gen)
         egnn.load_state_dict(state_dict, strict=True)
         assert (
@@ -1789,10 +1897,17 @@ def load_mol_model(
         _hparams["lora_alpha"] = args.lora_alpha
 
         # Load the pretrained weights
-        state_dict = torch.load(args.ckpt_path, map_location=get_map_location())[
-            "state_dict"
-        ]
-        state_dict = {k.replace("gen.", ""): v for k, v in state_dict.items()}
+        # Reuse the checkpoint already loaded at the top of this function: avoids a
+        # second ~1 GB disk read and, crucially, uses the *requested* checkpoint
+        # (``ckpt_path`` when given) rather than ``args.ckpt_path``.
+        # Strip the leading "gen." prefix only, and drop every non-"gen." key
+        # (e.g. ``confidence_module.*`` under --train_confidence) so the strict
+        # load below does not choke on unexpected keys.
+        state_dict = {
+            k[len("gen.") :]: v
+            for k, v in checkpoint["state_dict"].items()
+            if k.startswith("gen.")
+        }
         egnn = copy.deepcopy(gen)
         egnn.load_state_dict(state_dict, strict=True)
         assert (
@@ -1800,29 +1915,26 @@ def load_mol_model(
         ), "Cannot use both LoRA and affinity_finetune."
         assert not args.freeze_layers, "Cannot use both LoRA and freeze_layers."
 
+        # If the loaded ckpt already had LoRA, fold its delta into the base
+        # weights and strip wrappers so re-injection does not nest LoRA layers.
+        # No-op when starting from a non-LoRA base ckpt (round 0).
+        _merge_lora(egnn.ligand_dec)
+
         # Apply LoRA to ligand decoder
         _inject_lora(
             lora_rank=args.lora_rank, lora_alpha=args.lora_alpha, mod=egnn.ligand_dec
         )
 
-        # Freeze all parameters except LoRA
-        trainable_params = 0
-        total_params = 0
-
+        # Freeze everything in the LoRA scope except the adapters themselves
         for n, p in egnn.ligand_dec.named_parameters():
-            total_params += p.numel()
-            if "lora" in n:
-                p.requires_grad = True
-                trainable_params += p.numel()
-            else:
-                p.requires_grad = False
+            p.requires_grad = "lora" in n
 
-        print(
-            f"LoRA: {trainable_params}/{total_params} parameters trainable ({100*trainable_params/total_params:.2f}%)"
-        )
-        # Set the modified generator back to the model
+        # Set the modified generator back to the model before reporting, so the
+        # numbers below cover the whole LightningModule (see load_model).
         fm_model.gen = egnn
         fm_model.save_hyperparameters(_hparams)
+
+        _report_lora_trainable(fm_model)
 
     if return_info:
         return (
@@ -2018,7 +2130,10 @@ def build_mol_model(
         mixed_uncond_inpaint=args.mixed_uncond_inpaint,
         use_t_loss_weights=args.use_t_loss_weights,
         corrector_iters=args.corrector_iters,
-        pretrained_weights=args.load_pretrained_ckpt is not None,
+        # ``load_pretrained_ckpt`` is a path (train.py / train_mol.py) or absent.
+        # ``is not None`` would read False (an unset store_true flag) as "supplied",
+        # so test truthiness instead and tolerate the arg being missing entirely.
+        pretrained_weights=bool(getattr(args, "load_pretrained_ckpt", None)),
         inpaint_self_condition=getattr(args, "inpaint_self_condition", False),
         use_is_fixed_embed=getattr(args, "use_is_fixed_embed", False),
         mask_fixed_discrete_loss=getattr(args, "mask_fixed_discrete_loss", False),
@@ -2232,7 +2347,10 @@ def build_mol_mean_flow_model(
         mixed_uncond_inpaint=args.mixed_uncond_inpaint,
         use_t_loss_weights=args.use_t_loss_weights,
         corrector_iters=args.corrector_iters,
-        pretrained_weights=args.load_pretrained_ckpt is not None,
+        # ``load_pretrained_ckpt`` is a path (train.py / train_mol.py) or absent.
+        # ``is not None`` would read False (an unset store_true flag) as "supplied",
+        # so test truthiness instead and tolerate the arg being missing entirely.
+        pretrained_weights=bool(getattr(args, "load_pretrained_ckpt", None)),
         inpaint_self_condition=getattr(args, "inpaint_self_condition", False),
         use_is_fixed_embed=getattr(args, "use_is_fixed_embed", False),
         mask_fixed_discrete_loss=getattr(args, "mask_fixed_discrete_loss", False),

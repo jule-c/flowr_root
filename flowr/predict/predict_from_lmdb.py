@@ -167,7 +167,6 @@ def get_args():
         help="Standard deviation of the pocket coordinate noise"
     )
     parser.add_argument("--ckpt_path", type=str)
-    parser.add_argument("--lora_finetuned", action="store_true")
     parser.add_argument("--data_path", type=str)
     parser.add_argument("--splits_path", type=str, default=None)
     parser.add_argument("--dataset", type=str)

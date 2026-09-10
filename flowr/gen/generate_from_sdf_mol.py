@@ -390,7 +390,6 @@ def get_args():
 
     # Model paths
     parser.add_argument("--ckpt_path", type=str)
-    parser.add_argument("--lora_finetuned", action="store_true")
 
     # Sampling parameters
     parser.add_argument("--max_sample_iter", type=int, default=5)

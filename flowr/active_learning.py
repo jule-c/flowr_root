@@ -490,7 +490,6 @@ def _build_al_args(
         num_workers=2,
         load_ckpt=None,
         ckpt_path=ckpt_path,
-        load_pretrained_ckpt=True,
         save_dir=save_dir,
         val_check_epochs=epochs + 1,  # Never validate (will exceed max_epochs)
         val_check_interval=None,

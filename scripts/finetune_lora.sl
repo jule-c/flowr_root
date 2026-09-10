@@ -63,7 +63,6 @@ uv run --no-sync python -m flowr.finetune \
     --exp_name "$exp_name" \
     --run_name "$run_name" \
     --ckpt_path "$ckpt" \
-    --load_pretrained_ckpt \
     --lora_finetuning \
     --lora_rank "$lora_rank" \
     --lora_alpha "$lora_alpha" \

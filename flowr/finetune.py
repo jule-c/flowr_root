@@ -152,7 +152,6 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--load_ckpt", type=str, default=None)
     parser.add_argument("--ckpt_path", type=str, default=None)
-    parser.add_argument("--load_pretrained_ckpt", action="store_true")
     parser.add_argument("--save_dir", type=str, default="./flowr_logs")
     parser.add_argument("--val_check_epochs", type=int, default=None)
     parser.add_argument("--val_check_interval", type=float, default=0.5)

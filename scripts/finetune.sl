@@ -59,7 +59,6 @@ uv run --no-sync python -m flowr.finetune \
     --exp_name "$exp_name" \
     --run_name "$run_name" \
     --ckpt_path "$ckpt" \
-    --load_pretrained_ckpt \
     --gpus "$num_gpus" \
     --num_workers "$num_workers" \
     --batch_cost "$batch_cost" \

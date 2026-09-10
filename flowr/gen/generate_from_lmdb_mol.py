@@ -188,7 +188,6 @@ def get_args():
     parser.add_argument("--arch", type=str, choices=["flowr", "transformer"], required=True)
 
     parser.add_argument("--ckpt_path", type=str)
-    parser.add_argument("--lora_finetuned", action="store_true")
     parser.add_argument("--data_path", type=str)
     parser.add_argument("--dataset", type=str)
     parser.add_argument("--save_dir", type=str)
