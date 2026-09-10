@@ -999,6 +999,9 @@ class Statistics:
             f"{split}_dihedrals_{h}.npy",
         ]
         processed_paths = [f"{path}/{p}" for p in processed_paths]
+        # Everything below reads processed_paths[1:] (index 0 is neither written by
+        # create_data_statistics nor read here), so only those have to exist.
+        Statistics._check_statistics_exist(path, split, remove_hs, processed_paths[1:])
         statistics = Statistics(
             num_nodes=load_pickle(processed_paths[1]),
             atom_types=torch.from_numpy(np.load(processed_paths[2])),
@@ -1016,6 +1019,51 @@ class Statistics:
         )
 
         return statistics
+
+    @staticmethod
+    def _check_statistics_exist(path, split, remove_hs, required_paths):
+        """Fail with an actionable message when the statistics files are missing.
+
+        The ``_noh`` / ``_h`` filename suffix is picked from ``remove_hs`` both when the
+        statistics are written (``create_data_statistics``) and when they are read here,
+        so a run whose ``--remove_hs`` disagrees with the one used to generate them died
+        on a bare ``FileNotFoundError`` naming a file the user has never heard of, with
+        nothing pointing at the flag that chose the name.
+        """
+        missing = [p for p in required_paths if not os.path.exists(p)]
+        if not missing:
+            return
+
+        h = "noh" if remove_hs else "h"
+        other_h = "h" if remove_hs else "noh"
+        counterpart = f"{path}/{split}_n_{other_h}.pickle"
+        if os.path.exists(counterpart):
+            hint = (
+                f"Statistics for remove_hs={not remove_hs} (the '_{other_h}' files) ARE "
+                "present in that directory, so --remove_hs most likely disagrees "
+                "with the value used to generate the statistics: "
+                + ("drop --remove_hs" if remove_hs else "add --remove_hs")
+                + " to use the existing ones."
+            )
+        else:
+            hint = (
+                f"Statistics for remove_hs={not remove_hs} (the '_{other_h}' files) are "
+                "not there either, so no statistics have been generated for this "
+                "dataset yet."
+            )
+
+        raise FileNotFoundError(
+            f"Dataset statistics for split '{split}' with remove_hs={remove_hs} were not "
+            f"found in '{path}' ({len(missing)} of {len(required_paths)} required files "
+            f"are missing, e.g. '{os.path.basename(missing[0])}' -- the '_{h}' suffix "
+            f"comes from remove_hs={remove_hs}).\n"
+            f"{hint}\n"
+            "To generate statistics for this setting instead, run for each of "
+            "train/val/test:\n"
+            "  python -m flowr.data.preprocess_data.create_data_statistics "
+            f"--data_path <merged lmdb dir> --from_lmdb --state {split}"
+            + (" --remove_hs" if remove_hs else "")
+        )
 
 
 x_map = {

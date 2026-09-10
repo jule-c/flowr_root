@@ -1,5 +1,6 @@
 import argparse
 import pickle
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -48,6 +49,151 @@ def format_bytes(bytes_size):
     return f"{bytes_size:.2f} PB"
 
 
+def _chunk_index(chunk_dir):
+    """Return the 1-based job index encoded in a ``chunk_<index>`` directory name.
+
+    ``None`` for anything that does not follow the scheme ``preprocess.py`` writes
+    (``chunk_{job_index:04d}``).
+    """
+    match = re.fullmatch(r"chunk_(\d+)", chunk_dir.name)
+    return int(match.group(1)) if match is not None else None
+
+
+def _read_chunk_system_ids(chunk_dir):
+    """Read only the ``system_ids`` metadata key of a chunk LMDB.
+
+    Cheap enough to run over every chunk before any data is copied, so an inconsistent
+    set of chunks is rejected before a corrupt database is written.
+    """
+    env = lmdb.open(str(chunk_dir), readonly=True, lock=False)
+    try:
+        with env.begin() as txn:
+            data = txn.get(b"system_ids")
+    finally:
+        env.close()
+    return pickle.loads(data) if data else None
+
+
+def _format_indices(indices):
+    """Render a sorted index list compactly, e.g. [1,2,3,5,6,9] -> '1-3, 5-6, 9'."""
+    indices = sorted(indices)
+    if not indices:
+        return "none"
+    groups = []
+    start = prev = indices[0]
+    for index in indices[1:]:
+        if index == prev + 1:
+            prev = index
+            continue
+        groups.append((start, prev))
+        start = prev = index
+    groups.append((start, prev))
+    return ", ".join(str(lo) if lo == hi else f"{lo}-{hi}" for lo, hi in groups)
+
+
+def check_chunks_consistent(chunks_dir, chunk_dirs):
+    """Refuse to fuse a set of chunk databases that cannot come from one clean run.
+
+    ``fuse_lmdb_chunks`` globs ``chunk_*`` unconditionally, so re-running preprocessing
+    with a *smaller* ``--num_jobs`` into the same ``--save_path`` leaves the previous
+    run's higher-numbered chunks on disk and merges them in as well. That is not merely
+    a wrong entry count: the duplicated systems are handed to the random train/val/test
+    split as independent entries, so the same complex can land in train *and* in
+    val/test -- silent train/test leakage that quietly invalidates the results.
+
+    Two things are checked, both before a single entry is copied:
+
+    * no ``system_id`` may appear in more than one chunk (hard failure -- this is never
+      legitimate), and
+    * the chunk indices must run ``1..N`` with no holes. Only *trailing* jobs may be
+      missing, which is the legitimate oversized-array case: with ``--num_jobs 20`` on
+      12 systems, jobs 13-20 are assigned an empty chunk and exit without creating a
+      directory at all, so a short contiguous ``1..12`` is valid and is not flagged.
+    """
+    chunks_dir = Path(chunks_dir)
+
+    # --- chunk indices must be contiguous from 1 -----------------------------------
+    indices = {}
+    for chunk_dir in chunk_dirs:
+        index = _chunk_index(chunk_dir)
+        if index is None:
+            print(
+                f"WARNING: '{chunk_dir.name}' does not follow the 'chunk_<job_index>' "
+                "naming scheme, skipping the chunk-index contiguity check."
+            )
+            indices = None
+            break
+        indices[index] = chunk_dir.name
+
+    if indices:
+        missing = sorted(set(range(1, len(indices) + 1)) - set(indices))
+        if missing:
+            raise ValueError(
+                f"Missing chunk databases in {chunks_dir}.\n"
+                f"  Chunk indices found:   {_format_indices(indices)}\n"
+                f"  Chunk indices missing: {_format_indices(missing)}\n"
+                "Each preprocessing job writes chunk_<job_index>, so the indices must run "
+                "1..N without gaps. Only the trailing jobs may be absent: when --num_jobs "
+                "exceeds the number of systems the surplus jobs are assigned an empty "
+                "chunk and exit without creating a directory. A gap in the middle means "
+                "one of the array tasks never finished, and the systems assigned to it "
+                "would be silently missing from the merged database.\n"
+                "Re-run the missing job index(es) (sbatch --array=<missing indices>) "
+                "before merging, or point --chunks_dir at a directory holding only the "
+                "chunks you intend to merge."
+            )
+
+    # --- no system_id may appear in more than one chunk ----------------------------
+    seen = {}
+    for chunk_dir in chunk_dirs:
+        try:
+            system_ids = _read_chunk_system_ids(chunk_dir)
+        except Exception as e:
+            print(
+                f"WARNING: could not read system_ids from {chunk_dir.name} ({e}), "
+                "skipping it in the duplicate check."
+            )
+            continue
+        if system_ids is None:
+            print(
+                f"WARNING: {chunk_dir.name} stores no 'system_ids' metadata, skipping "
+                "it in the duplicate check."
+            )
+            continue
+        for system_id in system_ids:
+            seen.setdefault(system_id, []).append(chunk_dir.name)
+
+    duplicates = {
+        system_id: names for system_id, names in seen.items() if len(names) > 1
+    }
+    if duplicates:
+        shown = sorted(duplicates)[:20]
+        listing = "\n".join(
+            f"    {system_id}: {', '.join(duplicates[system_id])}" for system_id in shown
+        )
+        if len(duplicates) > len(shown):
+            listing += f"\n    ... and {len(duplicates) - len(shown)} more"
+        raise ValueError(
+            f"Duplicate system_ids across the chunk databases in {chunks_dir}: "
+            f"{len(duplicates)} system id(s) appear in more than one chunk.\n"
+            f"{listing}\n"
+            "This almost always means the directory still holds chunk_* directories from "
+            "an earlier preprocessing run that used a different --num_jobs. A re-run only "
+            "overwrites chunk_0001..chunk_<num_jobs>; every higher-numbered chunk of the "
+            "previous run is left behind and merged in as well, because the merge globs "
+            "chunk_* unconditionally.\n"
+            "Merging them would store each of those complexes several times, and the "
+            "random train/val/test split treats the copies as independent systems -- so "
+            "the same complex can end up in train AND in val/test (train/test leakage).\n"
+            "Fix it by either:\n"
+            "  * removing the stale chunks and re-running preprocessing "
+            f"(rm -rf {chunks_dir}/chunk_*, then re-submit the array with the --num_jobs "
+            "you actually want), or\n"
+            "  * pointing --chunks_dir at a directory that contains the chunks of a "
+            "single run only."
+        )
+
+
 def fuse_lmdb_chunks(chunks_dir, output_path, remove_chunks=False):
     """
     Fuse multiple LMDB chunk databases into a single LMDB database.
@@ -60,6 +206,22 @@ def fuse_lmdb_chunks(chunks_dir, output_path, remove_chunks=False):
 
     chunks_dir = Path(chunks_dir)
     output_path = Path(output_path)
+
+    # Find all chunk LMDB databases
+    chunk_pattern = "chunk_*"
+    chunk_dirs = sorted(chunks_dir.glob(chunk_pattern))
+
+    if not chunk_dirs:
+        raise ValueError(f"No chunk databases found matching pattern: {chunk_pattern}")
+
+    print(f"Found {len(chunk_dirs)} chunk databases to fuse")
+
+    # Reject stale/incomplete chunk sets before touching the output directory: see
+    # check_chunks_consistent for why merging them silently corrupts the dataset.
+    # Validating first also means a failed check leaves any previously fused database
+    # intact instead of deleting it on the way to an abort.
+    check_chunks_consistent(chunks_dir, chunk_dirs)
+
     output_path.mkdir(parents=True, exist_ok=True)
 
     # If the lmdb files in output directory exist, remove them
@@ -70,15 +232,6 @@ def fuse_lmdb_chunks(chunks_dir, output_path, remove_chunks=False):
         lmdb_file.unlink()
     if lock_file.exists():
         lock_file.unlink()
-
-    # Find all chunk LMDB databases
-    chunk_pattern = "chunk_*"
-    chunk_dirs = sorted(chunks_dir.glob(chunk_pattern))
-
-    if not chunk_dirs:
-        raise ValueError(f"No chunk databases found matching pattern: {chunk_pattern}")
-
-    print(f"Found {len(chunk_dirs)} chunk databases to fuse")
 
     # Estimate required size
     print("Estimating required size...")

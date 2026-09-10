@@ -172,6 +172,16 @@ def main():
 
     # Chunk the systems into exactly one chunk per job, so a SLURM --array=1-$num_jobs
     # covers the dataset exactly once with nothing skipped and nothing out of range.
+    #
+    # num_jobs is validated FIRST: with num_jobs < 1 the job_index check below can never
+    # pass, and it used to fire on the way past with the self-contradictory advice to set
+    # the array range to "1-0" (split_into_chunks' own ValueError was unreachable).
+    if args.num_jobs < 1:
+        raise SystemExit(
+            f"--num_jobs must be >= 1, got {args.num_jobs}. It is the number of chunks "
+            "the dataset is split into (one per SLURM array task), so set it to the "
+            "number of parallel jobs you want and submit with '--array=1-<num_jobs>'."
+        )
     if not 1 <= args.job_index <= args.num_jobs:
         raise SystemExit(
             f"--job_index must be between 1 and --num_jobs ({args.num_jobs}), got "
