@@ -103,6 +103,14 @@ notebooks = [
   "py3Dmol>=2.4",
 ]
 
+# --- test suite (flowr/gen/tests/) ------------------------------------------
+# The repository ships tests but nothing depended on a runner, so a fresh
+# `uv sync` left them un-runnable: `pytest` was not installed and not declared.
+#   uv sync --extra gpu --extra dev && uv run --no-sync pytest flowr/gen/tests/
+dev = [
+  "pytest>=8",
+]
+
 # --- extended evaluation metrics (flowr/eval/evaluate_util.py) --------------
 eval = [
   "fcd>=1.2",
