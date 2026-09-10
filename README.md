@@ -48,7 +48,19 @@ This is a research repository introducing FLOWR.root.
   curl -LsSf https://astral.sh/uv/install.sh | sh
   ```
 
-1. **Create the Environment**
+  FLOWR.root requires **Python 3.12**. You do not need to install it yourself -- uv
+  reads the pin from `pyproject.toml` and fetches a matching interpreter on first sync.
+
+1. **Get the code**
+
+   ```bash
+   git clone https://github.com/jule-c/flowr_root.git
+   cd flowr_root
+   ```
+
+   Every command below is run from this directory.
+
+2. **Create the Environment**
 
    On Linux with a CUDA GPU:
 
@@ -77,7 +89,7 @@ This is a research repository introducing FLOWR.root.
    uv sync --extra gpu --extra plinder      # + PLINDER dataset tooling
    ```
 
-2. **Run commands**
+3. **Run commands**
 
    Prefix any command with `uv run --no-sync`:
 
@@ -99,7 +111,7 @@ This is a research repository introducing FLOWR.root.
    **No `PYTHONPATH` setup is required.** FLOWR.root is installed into the
    environment as a package, so `python -m flowr.<module>` works from anywhere.
 
-3. **Device selection**
+4. **Device selection**
 
    Generation and prediction entrypoints pick the device themselves: CUDA when the
    machine has it, CPU otherwise. `--gpus` is a device *count*, so `--gpus 0` pins a run
@@ -118,7 +130,7 @@ This is a research repository introducing FLOWR.root.
    Note that results are not reproducible across devices: a fixed `--seed` gives
    different samples on CPU, MPS and CUDA, because each backend has its own RNG stream.
 
-4. **macOS: use `--num_workers 0`**
+5. **macOS: use `--num_workers 0`**
 
    On macOS, any run with `--num_workers` greater than 0 fails with
    `TypeError: cannot pickle '_thread.lock' object`. This is a platform difference, not a
@@ -126,6 +138,34 @@ This is a research repository introducing FLOWR.root.
    dataset to reach each worker, while Linux uses *fork* and never pickles it. The open
    LMDB handle cannot be pickled. Linux is unaffected, so `--num_workers 12` remains the
    right setting on a cluster or workstation.
+
+<details>
+<summary><b>Upgrading from the conda-based version?</b></summary>
+
+FLOWR.root no longer uses conda. `environment.yml`, `environment_mac.yml`,
+`environment_docker.yml` and `flowr_vis/requirements*.txt` have been removed and replaced
+by a single `pyproject.toml` plus a committed `uv.lock`, so everyone resolves to exactly
+the same dependency versions.
+
+To migrate, just follow the steps above — there is nothing to carry over from the old
+environment. Afterwards you can delete the stale conda env:
+
+```bash
+conda env remove -n flowr_root      # or whatever you named it
+```
+
+Two habits to unlearn:
+
+- **Do not `conda activate` anything.** Either prefix commands with `uv run --no-sync`,
+  or `source .venv/bin/activate` once.
+- **Do not set `PYTHONPATH`.** The old setup needed it; this one installs FLOWR.root as a
+  package, so `python -m flowr.<module>` works from any directory. If something only runs
+  with `PYTHONPATH` set, that is a bug worth reporting.
+
+The shipped SLURM scripts have already been converted — they `export PATH="$HOME/.local/bin:$PATH"`
+and call `uv run --no-sync`, with no conda module loads.
+
+</details>
 
 <details>
 <summary><b>Optional external toolkits</b></summary>
