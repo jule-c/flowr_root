@@ -23,7 +23,8 @@ num_workers=12
 
 # MAIN PATH
 dataset="YOUR_PROTEIN_NAME"
-data_path="YOUR_MAIN_PATH/$dataset"
+main_path="YOUR_MAIN_PATH"
+data_path="$main_path/$dataset"
 
 # CKPT PATH
 ckpt_path="YOUR_CKPT_PATH"

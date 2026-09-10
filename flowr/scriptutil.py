@@ -1303,6 +1303,10 @@ def load_model(
     hparams["energy_loss_weight"] = getattr(args, "energy_loss_weight", None)
     hparams["energy_loss_weighting"] = getattr(args, "energy_loss_weighting", None)
     hparams["energy_loss_decay_rate"] = getattr(args, "energy_loss_decay_rate", None)
+    # Carried over for provenance only -- every consumer reads args.use_ema directly.
+    # Without this the saved hparams inherit the pretrained checkpoint's value, so a
+    # run launched with --no-use_ema would still record use_ema: True.
+    hparams["use_ema"] = bool(getattr(args, "use_ema", hparams.get("use_ema", True)))
 
     # The affinity head is baked into the checkpoint architecture: the generator is
     # built with predict_affinity from *hparams* (the checkpoint), while the loss
@@ -1858,6 +1862,10 @@ def load_mol_model(
     hparams["energy_loss_weight"] = getattr(args, "energy_loss_weight", None)
     hparams["energy_loss_weighting"] = getattr(args, "energy_loss_weighting", None)
     hparams["energy_loss_decay_rate"] = getattr(args, "energy_loss_decay_rate", None)
+    # Carried over for provenance only -- every consumer reads args.use_ema directly.
+    # Without this the saved hparams inherit the pretrained checkpoint's value, so a
+    # run launched with --no-use_ema would still record use_ema: True.
+    hparams["use_ema"] = bool(getattr(args, "use_ema", hparams.get("use_ema", True)))
     hparams["affinity_loss_weight"] = getattr(args, "affinity_loss_weight", None)
     hparams["docking_loss_weight"] = getattr(args, "docking_loss_weight", None)
 

@@ -26,6 +26,10 @@ num_workers=12
 dataset="YOUR_PROJECT_NAME"
 data_path="MAIN_PATH/$dataset"
 
+# SAMPLING
+sampling_strategy="linear"
+#sampling_strategy="log"
+
 # CKPT PATH
 ckpt_path="YOUR_CKPT_PATH"
 ckpt="$ckpt_path/flowr_root.ckpt"
