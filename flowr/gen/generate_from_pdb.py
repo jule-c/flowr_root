@@ -102,6 +102,7 @@ def evaluate(args):
         remove_hs=hparams["remove_hs"],
         remove_aromaticity=hparams["remove_aromaticity"],
         ligand_idx=args.ligand_idx,
+        chain_id=args.chain_id,
         canonicalize_conformer=args.canonicalize_conformer,
     )
     dataset = get_dataset(system, transform, vocab, interpolant, args, hparams)

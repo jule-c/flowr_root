@@ -351,7 +351,7 @@ def evaluate(args):
             f"\n Mean time per pocket={round(global_run_time, 2)}s for {len(all_gen_ligs)} molecules"
         )
         print(
-            f"Mean time per complex: {np.mean(times):.3f} \pm {np.std(times):.2f} seconds"
+            f"Mean time per complex: {np.mean(times):.3f} \\pm {np.std(times):.2f} seconds"
         )
         print(f"Validity of generated ligands: {np.mean(validities):.3f}\n")
 
@@ -366,7 +366,7 @@ def evaluate(args):
     print(f"Samples saved as {str(predictions)}")
 
     print(
-        f"Time per pocket: {np.mean(out_dict['time_per_pocket']):.3f} \pm "
+        f"Time per pocket: {np.mean(out_dict['time_per_pocket']):.3f} \\pm "
         f"{np.std(out_dict['time_per_pocket']):.2f}"
     )
     print("Sampling finished.")

@@ -2897,7 +2897,16 @@ class GeometricInterpolant(Interpolant):
             elif mode == "linker_inpainting":
                 mask = extract_linkers([rdkit_mols[i]], invert_mask=True)[0]
             elif mode == "core_growing":
-                mask = extract_cores([rdkit_mols[i]], invert_mask=False)[0]
+                # ``ring_system_index`` is set on the interpolant by the generation
+                # entrypoints (flowr/gen/utils.py) from --ring_system_index. Without
+                # forwarding it here the generation-time core mask always pinned ring
+                # system 0, so the flag silently did nothing. The training path never
+                # sets the attribute, so the getattr default keeps it a no-op there.
+                mask = extract_cores(
+                    [rdkit_mols[i]],
+                    invert_mask=False,
+                    ring_system_index=getattr(self, "ring_system_index", 0),
+                )[0]
             elif mode == "fragment_growing":
                 # If grow_size is set, the input ligand IS the fragment to grow
                 # All atoms are fixed (mask = all True)

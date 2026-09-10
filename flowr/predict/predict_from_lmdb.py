@@ -122,7 +122,7 @@ def evaluate(args):
     print(
         f"\n Mean run time={round(global_run_time, 2)}s for {len(all_gen_ligs_with_aff)} molecules"
     )
-    print(f"Mean time per batch={np.mean(times):.3f} \pm {np.std(times):.2f} seconds")
+    print(f"Mean time per batch={np.mean(times):.3f} \\pm {np.std(times):.2f} seconds")
     print(f"Validity of generated ligands: {np.mean(validities):.3f}\n")
 
     # Save ligands as SDF

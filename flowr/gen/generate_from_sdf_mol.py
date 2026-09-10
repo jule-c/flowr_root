@@ -178,7 +178,7 @@ def evaluate(args):
         # Save timings
         global_run_time = time.time() - global_start
         print(
-            f"Mean time per batch: {np.mean(times):.3f} \pm {np.std(times):.2f} seconds"
+            f"Mean time per batch: {np.mean(times):.3f} \\pm {np.std(times):.2f} seconds"
         )
         print(
             f"\n Sampling took {round(global_run_time, 2)}s for {len(all_gen_mols)} molecules"
