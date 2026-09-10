@@ -23,7 +23,6 @@ from lightning.pytorch.callbacks import (
 )
 from lightning.pytorch.loggers import MLFlowLogger, WandbLogger
 from lightning.pytorch.strategies import DDPStrategy
-from openbabel import openbabel as ob
 from rdkit import Chem, RDLogger
 from torch.utils.data import ConcatDataset
 from torchmetrics import MetricCollection
@@ -81,7 +80,15 @@ COMPILER_CACHE_SIZE = 128
 
 
 def disable_lib_stdout():
-    ob.obErrorLog.StopLogging()
+    # openbabel is an optional dependency and is only used to silence its own
+    # logger, so import it lazily and treat it as best-effort.
+    try:
+        from openbabel import openbabel as ob
+
+        ob.obErrorLog.StopLogging()
+    except ImportError:
+        pass
+
     RDLogger.DisableLog("rdApp.*")
 
 

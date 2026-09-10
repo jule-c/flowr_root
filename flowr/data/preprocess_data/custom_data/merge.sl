@@ -9,13 +9,10 @@
 #SBATCH --output=./merge_data/lmdb_%j.out
 #SBATCH --error=./merge_data/lmdb_%j.err
 
+# ENVIRONMENT SETUP
+export PATH="$HOME/.local/bin:$PATH"
 cd YOUR_CODE_PATH/flowr_root
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/mamba.sh
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/conda.sh
-conda activate flowr_root
 
-export PYTHONPATH="YOUR_CODE_PATH/flowr_root"
-
-python -m flowr.data.datasets.complex_data.merge_lmdbs \
+uv run --no-sync python -m flowr.data.preprocess_data.merge_lmdbs \
     --chunks_dir ./processed \
     --output_path ./final \

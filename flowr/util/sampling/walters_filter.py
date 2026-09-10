@@ -4,8 +4,6 @@ import os
 from rdkit import Chem
 from rdkit.Chem import PandasTools
 
-import useful_rdkit_utils as uru
-
 
 def write_sdf_file(sdf_path, molecules, extract_mol=False):
     w = Chem.SDWriter(str(sdf_path))
@@ -31,6 +29,9 @@ def get_args():
 
 
 def walters_filter(args):
+    # Optional dependency, only needed by this script.
+    import useful_rdkit_utils as uru
+
     df_0 = PandasTools.LoadSDF(args.sdf_path)
 
     # remove fragments

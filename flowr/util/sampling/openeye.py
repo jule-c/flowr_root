@@ -24,7 +24,7 @@ else:
     )
 
 import rdkit
-from experiments.sampling.oe_utils import *
+from flowr.util.sampling.oe_utils import *
 from rdkit import Chem, Geometry
 from rdkit.Geometry import Point3D
 

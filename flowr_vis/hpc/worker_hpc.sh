@@ -51,16 +51,6 @@ if [ -z "$PROJECT_ROOT" ]; then
 fi
 SCRIPT_DIR="${PROJECT_ROOT}/flowr_vis"
 
-if [ -z "$CONDA_BASE" ]; then
-    if command -v conda &>/dev/null; then
-        CONDA_BASE="$(conda info --base 2>/dev/null)"
-    fi
-fi
-if [ -z "$CONDA_BASE" ]; then
-    echo "ERROR: CONDA_BASE is not set. Set it in hpc.env or your environment."
-    exit 1
-fi
-
 # ── Create SLURM output directory if needed ──
 SLURM_OUTPUT_DIR="${SLURM_OUTPUT_DIR:-${HOME}/slurm_outs}"
 mkdir -p "$SLURM_OUTPUT_DIR"

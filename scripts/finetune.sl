@@ -15,12 +15,12 @@ num_gpus=1  # Set the number of GPUs you want to use
 num_workers=12  # Set the number of CPU workers you want to use
 
 # ENVIRONMENT SETUP
+# One-time setup, from the repo root (pick the extra that matches the machine):
+#   uv sync --extra gpu   # Linux + NVIDIA GPU (CUDA 13 wheels)
+#   uv sync --extra cpu   # macOS / CPU-only
+# `uv run --no-sync` then uses .venv directly without re-resolving.
+export PATH="$HOME/.local/bin:$PATH"
 cd YOUR_CODE_PATH/flowr_root
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/mamba.sh
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/conda.sh 
-conda activate flowr_root
-
-export PYTHONPATH="YOUR_CODE_PATH/flowr_root"
 
 
 # MLFLOW LOGGING
@@ -52,7 +52,7 @@ lr_schedule="exponential"
 lr_gamma=0.995
 
 # RUN FINETUNE
-python -m flowr.finetune \
+uv run --no-sync python -m flowr.finetune \
     --arch pocket \
     --pocket_noise fix \
     --seed 42 \

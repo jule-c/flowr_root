@@ -11,7 +11,6 @@ import lightning as L
 import numpy as np
 import torch
 import yaml
-from pymol import cmd
 from rdkit import Chem
 from rdkit.Chem import DataStructs, rdFingerprintGenerator
 
@@ -967,6 +966,10 @@ def write_ligand_pocket_complex_pdb(
         raise ValueError("No ligand molecules provided.")
     if not all_gen_pdbs:
         raise ValueError("No pocket PDB files provided.")
+
+    # PyMOL is an optional dependency (no linux-aarch64 wheel exists upstream) and
+    # is only needed by this helper, so import it lazily.
+    from pymol import cmd
 
     for i, (lig, pdb_file) in enumerate(zip(all_gen_ligs, all_gen_pdbs)):
         out_path = Path(output_path) / f"{complex_name}_{i}.pdb"

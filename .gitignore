@@ -15,6 +15,20 @@ __pycache__/
 **/.DS_Store
 *.pyc
 
+# uv / virtualenv
+# NOTE: uv.lock is intentionally NOT ignored -- it is committed so that
+# `uv sync` is reproducible for everyone.
+.venv/
+**/.venv/
+venv/
+.uv/
+.uv-cache/
+*.egg-info/
+# Python build artefacts at the repo root only (do not shadow any
+# front-end build output under flowr_vis/).
+/build/
+/dist/
+
 # Log files
 molproc_logs/
 lightning_logs/

@@ -29,29 +29,36 @@ Browser ──► server.py (CPU) ──► worker.py (GPU)
 
 ## Quick Start
 
-### 1. Set up the conda environment
+### 1. Set up the environment
 
-Both server and worker share the same conda environment. Make sure it
-includes RDKit, FastAPI, PyTorch (MPS or CUDA), and the `flowr` package.
-
-```bash
-# From the project root:
-conda env create -f environment.yml        # or environment_mac.yml on Apple Silicon
-conda activate flowr_root
-```
-
-### 2. Install Python dependencies
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) from the
+single `pyproject.toml` at the project root. The visualization app's own
+dependencies (FastAPI, RDKit, scikit-learn, UMAP, biotite, …) live in the
+`vis` extra; PyTorch comes from the mutually exclusive `cpu` / `gpu`
+extras.
 
 ```bash
-# From the flowr_vis/ directory:
-pip install -r requirements.txt            # frontend (CPU) deps
-pip install -r requirements_worker.txt     # worker (GPU) deps
+# From the project root — run once:
+uv sync --extra cpu --extra vis     # macOS / Apple Silicon (MPS or CPU)
+uv sync --extra gpu --extra vis     # Linux with CUDA
 ```
 
-> **Note:** PyTorch, Lightning, and the `flowr` package itself come from
-> the conda environment — do **not** `pip install` them separately.
+That creates `.venv/` at the project root with RDKit, FastAPI, PyTorch
+and the `flowr` package itself (editable install — no `PYTHONPATH`
+needed). Every script below runs Python via `uv run --no-sync`, so
+there is nothing to activate.
 
-### 3. Place a model checkpoint
+> **Note:** the old `requirements.txt` / `requirements_worker.txt` files
+> have been removed — those dependencies are now the `vis` extra of the
+> root `pyproject.toml`. Use `uv sync --extra … --extra vis` instead of
+> `pip install -r`.
+
+`cpu` and `gpu` are mutually exclusive — they only decide which PyTorch
+wheel index is used. Note that `torch` is a base dependency of the root
+project, so it is installed either way, even on a frontend-only machine;
+picking `--extra cpu` there just gets you the much smaller CPU wheel.
+
+### 2. Place a model checkpoint
 
 Put at least one `.ckpt` file in the `ckpts/` directory at the project
 root. The default path is `ckpts/flowr_root.ckpt`.
@@ -59,19 +66,20 @@ root. The default path is `ckpts/flowr_root.ckpt`.
 ### Launch locally
 
 ```bash
-cd flowr_vis/
-./run_local.sh
+# From the project root:
+./flowr_vis/run_local.sh
 ```
 
 This starts both the frontend (port 8787) and the worker (port 8788).
-Open **<http://localhost:8787>** in your browser.
+Open **<http://localhost:8787>** in your browser. Press Ctrl+C to stop
+both. (The scripts resolve their own paths, so they work from any
+working directory.)
 
 #### Options
 
 ```bash
-./run_local.sh --server-port 9000 --worker-port 9001
-./run_local.sh --env my_conda_env
-./run_local.sh --ckpt /path/to/checkpoint.ckpt
+./flowr_vis/run_local.sh --server-port 9000 --worker-port 9001
+./flowr_vis/run_local.sh --ckpt /path/to/checkpoint.ckpt
 ```
 
 ### Launch on HPC (SLURM)
@@ -79,10 +87,21 @@ Open **<http://localhost:8787>** in your browser.
 On HPC clusters the frontend runs on a login/CPU node and dynamically
 allocates GPU jobs via SLURM when the user clicks **Generate**.
 
-#### 1. Create your configuration
+#### 1. Create the environment and your configuration
 
-All user-specific paths live in a single config file. Copy the template
-and fill in the values for your cluster:
+On the cluster (login node, on the shared filesystem) run the one-time
+sync so that `.venv/` exists at the project root:
+
+```bash
+cd <project root>
+uv sync --extra gpu --extra vis
+```
+
+The scripts prepend `~/.local/bin` to `PATH` so `uv` is also found in the
+non-interactive shell that SLURM gives the worker job.
+
+All remaining user-specific paths live in a single config file. Copy the
+template and fill in the values for your cluster:
 
 ```bash
 cd flowr_vis/hpc/
@@ -93,11 +112,10 @@ Open `hpc.env` in your editor and set at minimum:
 
 | Variable | What to set |
 |----------|-------------|
-| `CONDA_BASE` | Path to your conda/mamba install (e.g. `~/miniforge3`). Leave blank to auto-detect. |
-| `CONDA_ENV` | Name of the conda environment (default: `flowr_root`). |
+| `PROJECT_ROOT` | Absolute path to the project root (the directory holding `.venv`). Leave blank to auto-detect. |
 | `CKPT_PATH` | Path to the model checkpoint, absolute or relative to the project root. |
-| `SLURM_PARTITION` | Your cluster's GPU partition name. |
-| `SLURM_OUTPUT_DIR` | Where SLURM stdout/stderr logs go (default: `~/slurm_outs`). |
+| `FLOWR_SLURM_PARTITION` | Your cluster's GPU partition name. |
+| `FLOWR_SLURM_OUTPUT_DIR` | Where SLURM stdout/stderr logs go (default: `~/slurm_outs`). |
 
 You may also want to adjust the `#SBATCH` headers directly in
 `worker_hpc.sh` (time limit, memory, GPU type, partition) to match
@@ -146,38 +164,32 @@ Useful when the frontend (CPU) and worker (GPU) run on different machines.
 #### Frontend only
 
 ```bash
-cd flowr_vis/
-
-# Activate your conda environment first (needs RDKit):
-conda activate flowr_root
-
-# Install frontend dependencies:
-pip install -r requirements.txt
+# From the project root — on a CPU-only frontend host:
+uv sync --extra cpu --extra vis
 
 # Start the frontend server:
-./run_server.sh --worker-url http://gpu-host:8788
+./flowr_vis/run_server.sh --worker-url http://gpu-host:8788
 ```
 
-The frontend does **not** need PyTorch or the `flowr` package — only
-RDKit, FastAPI, scikit-learn, and umap-learn.
+The frontend server code does **not** import PyTorch or the `flowr`
+package — it only needs RDKit, FastAPI, scikit-learn and umap-learn,
+which are exactly the `vis` extra. (Torch still gets installed because
+the root project depends on it; `--extra cpu` keeps that download small
+on a frontend-only box.)
 
 #### Worker only
 
 ```bash
-cd flowr_vis/
-
-# Activate your conda environment (needs PyTorch + flowr):
-conda activate flowr_root
-
-# Install worker dependencies:
-pip install -r requirements_worker.txt
+# From the project root — the worker needs a torch extra as well:
+uv sync --extra gpu --extra vis     # Linux / CUDA
+uv sync --extra cpu --extra vis     # macOS / CPU (MPS)
 
 # Start the GPU worker:
-./run_worker.sh --port 8788 --ckpt /path/to/model.ckpt
+./flowr_vis/run_worker.sh --port 8788 --ckpt /path/to/model.ckpt
 ```
 
-The worker requires PyTorch with CUDA or MPS support and the `flowr`
-package on `PYTHONPATH`.
+The worker requires PyTorch with CUDA or MPS support plus the `flowr`
+package, which the sync installs in editable mode.
 
 ## Environment Variables
 
@@ -211,8 +223,6 @@ flowr_vis/
 ├── server.py              # Frontend FastAPI server (CPU-only)
 ├── worker.py              # GPU worker FastAPI server
 ├── chem_utils.py          # Shared chemistry utilities
-├── requirements.txt       # Frontend dependencies
-├── requirements_worker.txt# Worker dependencies
 ├── run_local.sh           # Launch both locally
 ├── run_server.sh          # Launch frontend only
 ├── run_worker.sh          # Launch worker only

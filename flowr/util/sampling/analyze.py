@@ -20,16 +20,16 @@ from rdkit.Chem import (
 from rdkit.DataStructs import BulkTanimotoSimilarity, TanimotoSimilarity
 
 from posebusters import PoseBusters
-from semlaflex.util.sampling.ring_utils import substructure
+from flowr.util.sampling.ring_utils import substructure
 
 sys.path.append(os.path.join(RDConfig.RDContribDir, "SA_Score"))
 import sascorer
 from torchmetrics import MaxMetric, MeanMetric
 from tqdm import tqdm
 
-from semlaflex.util.rdkit import write_sdf_file
-from semlaflex.util.sampling.lipinski import lipinski_pass
-from semlaflex.util.sampling.utils import (
+from flowr.util.rdkit import write_sdf_file
+from flowr.util.sampling.lipinski import lipinski_pass
+from flowr.util.sampling.utils import (
     angle_distance,
     atom_types_distance,
     bond_length_distance,

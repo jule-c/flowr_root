@@ -1,7 +1,9 @@
-from ase import Atoms
-from ase.io import Trajectory
-from ase.optimize import BFGS, LBFGS
-from fairchem.core import FAIRChemCalculator
+"""ASE / FAIRChem based relaxation helpers.
+
+``ase`` and ``fairchem-core`` are optional dependencies that are not installed by
+default, so they are imported lazily -- this module stays importable without them.
+"""
+
 from rdkit import Chem
 
 
@@ -59,6 +61,11 @@ def relax_molecule(
     The optimized structure is then converted back to an RDKit molecule.
     """
 
+    # Optional dependencies, only needed by this function.
+    from ase.io import Trajectory
+    from ase.optimize import BFGS, LBFGS
+    from fairchem.core import FAIRChemCalculator
+
     # Convert the RDKit molecule to an ASE Atoms object
     atoms = rdkit_conf_to_ase(ligand)
 
@@ -110,6 +117,9 @@ def rdkit_conf_to_ase(mol, conf_id=-1):
     ase.Atoms
         The ASE Atoms object with a copy of the RDKit molecule stored in atoms.info
     """
+    # Optional dependency, only needed by this function.
+    from ase import Atoms
+
     # Create a deep copy of the molecule to avoid modifying the original
     mol_copy = Chem.Mol(mol)
 

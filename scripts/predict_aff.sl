@@ -10,12 +10,13 @@
 #SBATCH --output=YOUR_CODE_PATH/slurm_outs/aff_pred/generate-sbdd_%j.out
 #SBATCH --error=YOUR_CODE_PATH/slurm_outs/aff_pred/generate-sbdd_%j.err
 
+# ENVIRONMENT SETUP
+# One-time setup, from the repo root (pick the extra that matches the machine):
+#   uv sync --extra gpu   # Linux + NVIDIA GPU (CUDA 13 wheels)
+#   uv sync --extra cpu   # macOS / CPU-only
+# `uv run --no-sync` then uses .venv directly without re-resolving.
+export PATH="$HOME/.local/bin:$PATH"
 cd YOUR_CODE_PATH/flowr_root
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/mamba.sh
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/conda.sh
-conda activate flowr_root
-
-export PYTHONPATH="YOUR_CODE_PATH/flowr_root"
 
 # COMPUTE
 num_workers=12
@@ -40,7 +41,7 @@ for seed in 2 42 512 1000; do
     #save_dir="$ckpt_path/predict-aff${noise_inject}_seed-${seed}"
     mkdir -p "$save_dir"
 
-    python -m flowr.predict.predict_from_pdb \
+    uv run --no-sync python -m flowr.predict.predict_from_pdb \
         --pdb_file "$data_path/YOUR_PROTEIN.pdb" \
         --ligand_file "$data_path/YOUR_LIGAND.sdf" \
         --dataset $dataset \

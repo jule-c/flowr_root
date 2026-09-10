@@ -10,12 +10,13 @@
 #SBATCH --output=YOUR_CODE_PATH/slurm_outs/pdb_gen/generate-sbdd_%j.out
 #SBATCH --error=YOUR_CODE_PATH/slurm_outs/pdb_gen/generate-sbdd_%j.err
 
+# ENVIRONMENT SETUP
+# One-time setup, from the repo root (pick the extra that matches the machine):
+#   uv sync --extra gpu   # Linux + NVIDIA GPU (CUDA 13 wheels)
+#   uv sync --extra cpu   # macOS / CPU-only
+# `uv run --no-sync` then uses .venv directly without re-resolving.
+export PATH="$HOME/.local/bin:$PATH"
 cd YOUR_CODE_PATH/flowr_root
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/mamba.sh
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/conda.sh
-conda activate flowr_root
-
-export PYTHONPATH="YOUR_CODE_PATH/flowr_root"
 
 # COMPUTE
 num_gpus=1
@@ -59,7 +60,7 @@ save_dir="$data_path/processed$conditional_generation$sample_mol_sizes$noise_inj
 # BATCH SIZE
 batch_cost=20
 
-python -m flowr.gen.generate_from_pdb \
+uv run --no-sync python -m flowr.gen.generate_from_pdb \
     --pdb_file "$data_path/YOUR_PROTEIN.pdb" \
     --ligand_file "$data_path/YOUR_LIGAND.sdf" \
     --arch pocket \

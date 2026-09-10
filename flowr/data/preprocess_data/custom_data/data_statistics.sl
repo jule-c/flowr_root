@@ -9,15 +9,12 @@
 #SBATCH --output=./data_statistics/lmdb_%j.out
 #SBATCH --error=./data_statistics/lmdb_%j.err
 
+# ENVIRONMENT SETUP
+export PATH="$HOME/.local/bin:$PATH"
 cd YOUR_CODE_PATH/flowr_root
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/mamba.sh
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/conda.sh
-conda activate flowr_root
-
-export PYTHONPATH="YOUR_CODE_PATH/flowr_root"
 
 for state in train val test; do
-        python -m flowr.data.preprocess_data.create_data_statistics \
+        uv run --no-sync python -m flowr.data.preprocess_data.create_data_statistics \
                 --data_path ./final \
                 --remove_hs \
                 --from_lmdb \

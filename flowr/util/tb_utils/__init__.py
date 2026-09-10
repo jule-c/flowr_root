@@ -1,5 +1,5 @@
 from flowr.util.tb_utils.instantiators import instantiate_callbacks, instantiate_loggers
-from flowr.util.tb_utils.pylogger import RankedLogger
+from flowr.util.pylogger import RankedLogger
 from flowr.util.tb_utils.rich_utils import enforce_tags, print_config_tree
 from flowr.util.tb_utils.utils import (
     extras,

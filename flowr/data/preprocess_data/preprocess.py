@@ -11,7 +11,7 @@ from rdkit import Chem
 from tqdm import tqdm
 
 import flowr.util.rdkit as smolRD
-from flowr.data.datasets.complex_data.preprocess_util import (
+from flowr.data.preprocess_data.preprocess_util import (
     calculate_docking_score,
     extract_affinity_data_from_csv,
     extract_affinity_data_from_mol,
@@ -218,11 +218,12 @@ def main():
                 affinity = extract_affinity_data_from_mol(mol)
 
             # Process docking data, if not already present in affinity
+            # NOTE: Vina scoring is not part of this release, so only GNINA is
+            # requested here (there is no --calc_vina_score flag).
             docking_data = calculate_docking_score(
                 sdf_file=str(sdf_file),
                 pdb_file=str(pdb_file),
                 system_id=system_id,
-                calc_vina_score=args.calc_vina_score and "vina_score" not in affinity,
                 calc_gnina_score=args.calc_gnina_score
                 and "gnina_score" not in affinity,
                 num_workers=args.num_workers,

@@ -8,14 +8,18 @@
 # Expected variables (set before sourcing):
 #   PROJECT_ROOT   – absolute path to the project root
 #   SCRIPT_DIR     – absolute path to the flowr_vis directory
-#   CONDA_BASE     – absolute path to conda/mamba installation
+#
+# The Python environment is the uv-managed .venv at PROJECT_ROOT
+# (one-time setup: `uv sync --extra gpu --extra vis`).
 # ══════════════════════════════════════════════════════════════════════
 
 set -e
 
-CONDA_ENV="${CONDA_ENV:-flowr_root}"
 WORKER_PORT="${FLOWR_WORKER_PORT:-8788}"
 IDLE_TIMEOUT="${FLOWR_WORKER_IDLE_TIMEOUT:-120}"
+
+# ── uv must be on PATH (SLURM jobs get a non-interactive shell) ──
+export PATH="$HOME/.local/bin:$PATH"
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
@@ -24,39 +28,55 @@ echo "╚═══════════════════════�
 echo ""
 echo "  Node:          $(hostname)"
 echo "  GPU:           ${CUDA_VISIBLE_DEVICES:-none}"
-echo "  Conda env:     ${CONDA_ENV}"
+echo "  Environment:   ${PROJECT_ROOT}/.venv (uv)"
 echo "  Worker port:   ${WORKER_PORT}"
 echo "  Idle timeout:  ${IDLE_TIMEOUT}s"
 echo "  SLURM Job ID:  ${SLURM_JOB_ID:-n/a}"
 echo ""
 
-# ── Load conda/mamba ──
-source "${CONDA_BASE}/etc/profile.d/conda.sh"
-if [ -f "${CONDA_BASE}/etc/profile.d/mamba.sh" ]; then
-    source "${CONDA_BASE}/etc/profile.d/mamba.sh"
+# ── Check the uv environment ──
+if ! command -v uv &>/dev/null; then
+    echo "ERROR: 'uv' was not found on PATH."
+    echo "       Install it with:  curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
 fi
-conda activate "$CONDA_ENV"
+
+if [ ! -d "${PROJECT_ROOT}/.venv" ]; then
+    echo "ERROR: No virtual environment at ${PROJECT_ROOT}/.venv"
+    echo "       Create it once with:"
+    echo "         cd ${PROJECT_ROOT} && uv sync --extra gpu --extra vis"
+    exit 1
+fi
 
 # ── Set environment ──
-export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
 export FLOWR_WORKER_PORT="${WORKER_PORT}"
 export FLOWR_WORKER_IDLE_TIMEOUT="${IDLE_TIMEOUT}"
 
-# ── OpenEye license ──
+# ── OpenEye license (optional external toolkit) ──
 if [ -f "${SCRIPT_DIR}/tools/oe_license.txt" ]; then
     export OE_LICENSE="${SCRIPT_DIR}/tools/oe_license.txt"
-elif [ -f "$(dirname "$SCRIPT_DIR")/oe_license.txt" ]; then
-    export OE_LICENSE="$(dirname "$SCRIPT_DIR")/oe_license.txt"
+elif [ -f "${PROJECT_ROOT}/oe_license.txt" ]; then
+    export OE_LICENSE="${PROJECT_ROOT}/oe_license.txt"
 fi
 
-echo "Python:  $(python --version 2>&1)"
-echo "PyTorch: $(python -c 'import torch; print(torch.__version__)' 2>/dev/null || echo 'NOT FOUND')"
-echo "CUDA:    $(python -c 'import torch; print(torch.cuda.is_available())' 2>/dev/null || echo 'detection failed')"
-GPU_NAME=$(python -c 'import torch; print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A")' 2>/dev/null || echo 'detection failed')
-echo "GPU:     ${GPU_NAME}"
+cd "$PROJECT_ROOT"
+
+echo "uv:      $(uv --version)"
+# Single interpreter start: importing torch three times costs ~10s on a GPU node.
+uv run --no-sync python -c '
+import sys
+print("Python:  " + sys.version.split()[0])
+try:
+    import torch
+    print("PyTorch: " + torch.__version__)
+    avail = torch.cuda.is_available()
+    print("CUDA:    " + str(avail))
+    print("GPU:     " + (torch.cuda.get_device_name(0) if avail else "N/A"))
+except Exception as exc:
+    print("PyTorch: NOT FOUND (" + str(exc) + ")")
+' || echo "PyTorch: detection failed"
 echo ""
 echo "Worker starting on $(hostname):${WORKER_PORT} — will auto-shutdown after ${IDLE_TIMEOUT}s idle"
 echo ""
 
-cd "$SCRIPT_DIR"
-python worker.py
+uv run --no-sync python "${SCRIPT_DIR}/worker.py"

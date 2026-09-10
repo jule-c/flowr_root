@@ -8,6 +8,9 @@
 #
 #   WORKER_SCRIPT_NAME     – basename of the worker script (e.g. worker_hpc.sh)
 #   DEFAULT_PARTITION      – default SLURM partition (e.g. your_partition)
+#
+# Environment management is handled by uv: the project's .venv at
+# PROJECT_ROOT must exist (one-time `uv sync --extra gpu --extra vis`).
 # ══════════════════════════════════════════════════════════════════════
 
 HPC_DIR="$(cd "$(dirname "${BASH_SOURCE[1]}")" && pwd)"
@@ -47,20 +50,29 @@ if [ -z "$PROJECT_ROOT" ]; then
 fi
 SCRIPT_DIR="${PROJECT_ROOT}/flowr_vis"
 
-# ── Auto-detect CONDA_BASE if not set ──
-if [ -z "$CONDA_BASE" ]; then
-    if command -v conda &>/dev/null; then
-        CONDA_BASE="$(conda info --base 2>/dev/null)"
-    fi
+# ── uv must be on PATH (non-interactive shells often lack ~/.local/bin) ──
+export PATH="$HOME/.local/bin:$PATH"
+
+if [ "$(uname -s)" = "Darwin" ]; then
+    SYNC_HINT="uv sync --extra cpu --extra vis"
+else
+    SYNC_HINT="uv sync --extra gpu --extra vis"
 fi
-if [ -z "$CONDA_BASE" ]; then
-    echo "ERROR: CONDA_BASE is not set and could not be auto-detected."
-    echo "       Set it in ${CONFIG_FILE}"
+
+if ! command -v uv &>/dev/null; then
+    echo "ERROR: 'uv' was not found on PATH."
+    echo "       Install it with:  curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
+fi
+
+if [ ! -d "${PROJECT_ROOT}/.venv" ]; then
+    echo "ERROR: No virtual environment at ${PROJECT_ROOT}/.venv"
+    echo "       Create it once with:"
+    echo "         cd ${PROJECT_ROOT} && ${SYNC_HINT}"
     exit 1
 fi
 
 # ── Apply defaults for anything not set in config ──
-CONDA_ENV="${CONDA_ENV:-flowr_root}"
 PORT="${FLOWR_PORT:-${PORT:-8787}}"
 SSH_USER="${SSH_USER:-${USER}}"
 STARTUP_TIMEOUT="${STARTUP_TIMEOUT:-300}"
@@ -80,27 +92,16 @@ echo ""
 echo "  Config:          ${CONFIG_FILE}"
 echo "  Node:            $(hostname)"
 echo "  Project root:    ${PROJECT_ROOT}"
-echo "  Conda base:      ${CONDA_BASE}"
-echo "  Conda env:       ${CONDA_ENV}"
+echo "  Environment:     ${PROJECT_ROOT}/.venv (uv)"
 echo "  Port:            ${PORT}"
 echo "  Checkpoint:      ${CKPT_PATH}"
 echo "  Worker mode:     slurm (on-demand GPU allocation)"
 echo "  Worker script:   ${HPC_DIR}/${WORKER_SCRIPT_NAME}"
 echo ""
 
-# ── Load conda/mamba ──
-source "${CONDA_BASE}/etc/profile.d/conda.sh"
-if [ -f "${CONDA_BASE}/etc/profile.d/mamba.sh" ]; then
-    source "${CONDA_BASE}/etc/profile.d/mamba.sh"
-fi
-conda activate "$CONDA_ENV"
-
 # ── Set environment ──
 # Export paths so they propagate through server.py → sbatch → compute node
-export CONDA_BASE
-export CONDA_ENV
 export PROJECT_ROOT
-export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
 export FLOWR_PORT="${PORT}"
 export FLOWR_CKPT_PATH="${CKPT_PATH}"
 if [ -f "${SCRIPT_DIR}/tools/oe_license.txt" ]; then
@@ -135,7 +136,10 @@ echo "  Startup timeout: ${FLOWR_SLURM_STARTUP_TIMEOUT}s"
 echo "  Idle timeout:    ${FLOWR_WORKER_IDLE_TIMEOUT}s"
 echo ""
 
-echo "Python: $(python --version)"
+cd "$PROJECT_ROOT"
+
+echo "uv:     $(uv --version)"
+echo "Python: $(uv run --no-sync python --version)"
 echo ""
 
 # ── Print connection instructions ──
@@ -152,5 +156,4 @@ echo "  in the browser and a SLURM job will be submitted."
 echo "════════════════════════════════════════════"
 echo ""
 
-cd "$SCRIPT_DIR"
-python server.py
+uv run --no-sync python "${SCRIPT_DIR}/server.py"

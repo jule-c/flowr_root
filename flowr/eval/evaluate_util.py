@@ -15,7 +15,6 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 import torch
-from fcd import get_fcd
 from rdkit import Chem, RDLogger
 from rdkit.Chem import (
     QED,
@@ -29,12 +28,6 @@ from rdkit.Chem import (
 from rdkit.Chem.rdForceFieldHelpers import UFFGetMoleculeForceField
 from scipy.spatial.distance import jensenshannon
 from tqdm import tqdm
-from useful_rdkit_utils import (
-    REOS,
-    RingSystemFinder,
-    RingSystemLookup,
-    get_min_ring_frequency,
-)
 
 from flowr.util.device import get_map_location
 from posebusters import PoseBusters
@@ -904,6 +897,9 @@ class ChemblRingEvaluator(AbstractEvaluator):
     ID = "chembl_ring_systems"
 
     def __init__(self):
+        # Optional dependency, only needed by this evaluator.
+        from useful_rdkit_utils import RingSystemLookup
+
         self.ring_system_lookup = RingSystemLookup.default()  # ChEMBL
 
     def evaluate(self, molecule, protein=None):
@@ -923,6 +919,8 @@ class ChemblRingEvaluator(AbstractEvaluator):
             freq_list = self.ring_system_lookup.process_mol(molecule)
         except ValueError:
             return results
+
+        from useful_rdkit_utils import get_min_ring_frequency
 
         min_ring, min_freq = get_min_ring_frequency(freq_list)
 
@@ -948,6 +946,9 @@ class REOSEvaluator(AbstractEvaluator):
     ID = "reos"
 
     def __init__(self):
+        # Optional dependency, only needed by this evaluator.
+        from useful_rdkit_utils import REOS
+
         self.reos = REOS()
 
     def evaluate(self, molecule, protein=None):
@@ -1130,6 +1131,10 @@ class FCDEvaluator(AbstractCollectionEvaluator):
             w for w in canonical_smiles(reference_smiles) if w is not None
         ]
         smiles_canonical = [w for w in canonical_smiles(smiles) if w is not None]
+
+        # Optional dependency, only needed by this evaluator.
+        from fcd import get_fcd
+
         fcd = get_fcd(reference_smiles_canonical, smiles_canonical)
         return {"fcd": fcd}
 
@@ -1142,6 +1147,9 @@ class RingDistributionEvaluator(AbstractCollectionEvaluator):
         reference_smiles: Collection[str],
         jsd_on_k_most_freq: Collection[int] = (),
     ):
+        # Optional dependency, only needed by this evaluator.
+        from useful_rdkit_utils import RingSystemFinder
+
         self.ring_system_finder = RingSystemFinder()
         self.ref_ring_dict = self.compute_ring_dict(reference_smiles)
         self.jsd_on_k_most_freq = jsd_on_k_most_freq

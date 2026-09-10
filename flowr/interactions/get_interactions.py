@@ -1,10 +1,31 @@
+"""Legacy ground-truth PLIF extraction built on the external ``plif_utils`` package.
+
+``plif_utils`` is not distributed with FlowR, so it is imported lazily here and
+this module stays importable without it. See
+:mod:`flowr.util.interaction_util` for the maintained, self-contained
+interaction-fingerprint implementation.
+"""
+
 import argparse
 from pathlib import Path
 
 import dill as pkl
 
-from plif_utils.analysis import get_plifs
-from plif_utils.system_prep import SystemPrep
+_PLIF_UTILS_HINT = (
+    "This script requires the external 'plif_utils' package, which is not "
+    "distributed with FlowR. See flowr.util.interaction_util for the "
+    "self-contained interaction-fingerprint implementation."
+)
+
+
+def _import_plif_utils():
+    try:
+        from plif_utils.analysis import get_plifs
+        from plif_utils.system_prep import SystemPrep
+    except ImportError as err:  # pragma: no cover - depends on the environment
+        raise ImportError(_PLIF_UTILS_HINT) from err
+
+    return get_plifs, SystemPrep
 
 
 def args():
@@ -66,6 +87,8 @@ def get_ground_truth_interactions(
                     The path to all the PLIFs and the prepared protein-ligand files (protonated and optimized)
 
     """
+
+    get_plifs, SystemPrep = _import_plif_utils()
 
     # Get data
     data_path = Path(data_path) / state

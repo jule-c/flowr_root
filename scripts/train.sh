@@ -1,4 +1,13 @@
 #!/bin/sh
+
+# ENVIRONMENT SETUP
+# One-time setup, from the repo root (pick the extra that matches the machine):
+#   uv sync --extra gpu   # Linux + NVIDIA GPU (CUDA 13 wheels)
+#   uv sync --extra cpu   # macOS / CPU-only
+# `uv run --no-sync` then uses .venv directly without re-resolving.
+export PATH="$HOME/.local/bin:$PATH"
+cd "$(cd "$(dirname "$0")/.." && pwd)"   # repo root
+
 # Modify this script to run as sbatch if needed
 
 # Number of GPUs and workers - adjust as needed; normally we use 8 H100 GPUs
@@ -22,7 +31,7 @@ acc_batches=6
 val_batch_cost=20
 
 # Run training
-python -m flowr.train \
+uv run --no-sync python -m flowr.train \
     --exp_name "$exp_name" \
     --run_name "$run_name" \
     --arch pocket \

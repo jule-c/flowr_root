@@ -6,7 +6,6 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import scipy as scipy
-from plinder.core import PlinderSystem
 from tqdm import tqdm
 
 from flowr.util.apo import load_apo_pocket
@@ -114,6 +113,10 @@ def process_apo(args, system, holo_structure, holo_pocket):
 
 # Assumes the system has a single protein chain and a single ligand
 def process_system(args, system_id, split):
+    # Imported lazily so that the PLINDER_* env vars set at module import time are
+    # picked up by plinder, and so that this module stays importable without plinder.
+    from plinder.core import PlinderSystem
+
     system = PlinderSystem(system_id=system_id)
 
     if len(system.system["ligands"]) > 1:

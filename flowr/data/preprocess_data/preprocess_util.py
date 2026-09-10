@@ -2,10 +2,12 @@ import re
 import subprocess
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from rdkit import Chem
 
 import flowr.util.rdkit as smolRD
+from flowr.constants import AFFINITY_PROP_NAMES
 
 
 def check_ligand_atom_types(complex_data, core_atoms_set):
@@ -162,54 +164,76 @@ def _convert_to_molar(value: float, unit: str) -> float:
 
 def extract_affinity_data_from_mol(mol: Chem.Mol) -> dict:
     """
-    Extract affinity data from GatorAffinity dataset molecule properties.
+    Extract affinity labels from the SD properties of a ligand molecule.
+
+    Any SD tag whose (lower-cased) name is one of ``flowr.constants``'
+    ``AFFINITY_PROP_NAMES`` -- i.e. ``pIC50``, ``pKi``, ``pKd``, ``pEC50``, in any
+    capitalisation -- is picked up and stored under its lower-cased name.
+
+    Affinity labels are entirely optional: molecules that carry none simply yield
+    an empty dict, which downstream code (``process_complex`` ->
+    ``PocketComplex.metadata`` -> ``PocketComplexBatch.affinity()``) turns into
+    NaN targets. Unparseable values are skipped with a warning rather than
+    aborting preprocessing.
 
     Args:
-        mol: RDKit molecule object with GatorAffinity affinity properties
+        mol: RDKit molecule object, may be None
 
     Returns:
-        dict: Dictionary with affinity data - can be empty if no data found
+        dict: Dictionary with affinity data - empty if the molecule carries none
     """
-    raise NotImplementedError(
-        "This function is a placeholder and needs to be implemented."
-    )
     affinity = {}
 
-    # Get all property names from the molecule
-    prop_names = mol.GetPropNames()
+    if mol is None:
+        return affinity
 
-    # Extract GatorAffinity-specific properties
-    if "pIC50" in prop_names:
-        pic50 = float(mol.GetProp("pIC50"))
-        affinity["pic50"] = pic50
-    if "pKi" in prop_names:
-        pki = float(mol.GetProp("pKi"))
-        affinity["pki"] = pki
-    if "pKd" in prop_names:
-        pkd = float(mol.GetProp("pKd"))
-        affinity["pkd"] = pkd
-    if "pEC50" in prop_names:
-        pec50 = float(mol.GetProp("pEC50"))
-        affinity["pec50"] = pec50
+    for prop_name in mol.GetPropNames():
+        key = prop_name.lower()
+        if key not in AFFINITY_PROP_NAMES:
+            continue
+
+        raw_value = mol.GetProp(prop_name)
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            print(
+                f"Warning: could not parse affinity property '{prop_name}'="
+                f"'{raw_value}' as a float, skipping."
+            )
+            continue
+
+        affinity[key] = value
 
     return affinity
 
 
 def extract_affinity_data_from_csv(index_df: pd.DataFrame, system_id: str) -> dict:
     """
-    Extract affinity data from BindingNet dataset index DataFrame.
+    Extract affinity data from a metadata CSV indexed by ``system_id``.
+
+    The CSV is expected to have a ``system_id`` column plus, for each measure it
+    provides, a ``<MEASURE>_value`` / ``<MEASURE>_unit`` column pair (e.g.
+    ``IC50_value`` / ``IC50_unit``). Values are converted to molar and stored as
+    the corresponding p-value (``pic50``, ``pki``, ``pkd``, ``pec50``).
+
+    Missing rows, missing columns and unparseable values are all non-fatal: they
+    simply yield an empty dict, which downstream code turns into NaN targets.
+
     Args:
         index_df: DataFrame containing the dataset index with affinity data
         system_id: System identifier to look up in the DataFrame
     Returns:
-        dict: Dictionary with affinity data - can be empty if no data found
+        dict: Dictionary with affinity data - empty if no data found
     """
 
-    raise NotImplementedError(
-        "This function is a placeholder and needs to be implemented."
-    )
-
     affinity = {}
+
+    if index_df is None or "system_id" not in index_df.columns:
+        print(
+            "Warning: metadata file has no 'system_id' column, skipping affinity "
+            "extraction."
+        )
+        return affinity
 
     # Locate the row corresponding to the system_id
     row = index_df[index_df["system_id"] == system_id]
@@ -225,14 +249,25 @@ def extract_affinity_data_from_csv(index_df: pd.DataFrame, system_id: str) -> di
         value_col = f"{measure}_value"
         unit_col = f"{measure}_unit"
 
+        if value_col not in row.index or unit_col not in row.index:
+            continue
+
         if pd.notna(row[value_col]) and pd.notna(row[unit_col]):
-            value = float(row[value_col])
+            try:
+                value = float(row[value_col])
+            except (TypeError, ValueError):
+                print(
+                    f"Warning: could not parse '{value_col}'='{row[value_col]}' "
+                    f"for system_id {system_id}, skipping."
+                )
+                continue
+
             unit = str(row[unit_col])
             molar_value = _convert_to_molar(value, unit)
 
-            if molar_value is not None:
-                p_measure = -pd.np.log10(molar_value)
-                affinity[f"p{measure.lower()}"] = p_measure
+            if molar_value is not None and molar_value > 0:
+                p_measure = -np.log10(molar_value)
+                affinity[f"p{measure.lower()}"] = float(p_measure)
 
     return affinity
 

@@ -5,9 +5,12 @@
 # Starts BOTH the frontend server and GPU worker locally.
 # The worker uses MPS (Apple Silicon) or CPU as fallback.
 #
+# Requires a one-time environment setup at the project root:
+#   uv sync --extra cpu --extra vis     # macOS / CPU
+#   uv sync --extra gpu --extra vis     # Linux / CUDA
+#
 # Usage:
 #   ./run_local.sh                          # defaults
-#   ./run_local.sh --env flowr_root         # custom conda env
 #   ./run_local.sh --ckpt /path/to/ckpt     # custom checkpoint
 #
 # Then open http://localhost:8787 in your browser.
@@ -22,7 +25,6 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # ── Defaults ──
 SERVER_PORT=8787
 WORKER_PORT=8788
-CONDA_ENV="flowr_root"
 CKPT_PATH="${PROJECT_ROOT}/ckpts/flowr_root.ckpt"
 
 # ── Parse arguments ──
@@ -30,10 +32,9 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         --server-port) SERVER_PORT="$2"; shift ;;
         --worker-port) WORKER_PORT="$2"; shift ;;
-        --env)         CONDA_ENV="$2"; shift ;;
         --ckpt)        CKPT_PATH="$2"; shift ;;
         -h|--help)
-            echo "Usage: ./run_local.sh [--server-port PORT] [--worker-port PORT] [--env CONDA_ENV] [--ckpt CKPT_PATH]"
+            echo "Usage: ./run_local.sh [--server-port PORT] [--worker-port PORT] [--ckpt CKPT_PATH]"
             exit 0 ;;
         *) echo "Unknown parameter: $1"; exit 1 ;;
     esac
@@ -43,32 +44,43 @@ done
 WORKER_URL="http://localhost:${WORKER_PORT}"
 SERVER_URL="http://localhost:${SERVER_PORT}"
 
+# ── uv must be on PATH (login shells put it in ~/.local/bin) ──
+export PATH="$HOME/.local/bin:$PATH"
+
+if [ "$(uname -s)" = "Darwin" ]; then
+    SYNC_HINT="uv sync --extra cpu --extra vis"
+else
+    SYNC_HINT="uv sync --extra gpu --extra vis"
+fi
+
 echo ""
 echo "╔══════════════════════════════════════════╗"
 echo "║   FLOWR Visualization – Local Launch    ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 echo "  Project root:  ${PROJECT_ROOT}"
-echo "  Conda env:     ${CONDA_ENV}"
 echo "  Checkpoint:    ${CKPT_PATH}"
 echo "  Frontend:      ${SERVER_URL}"
 echo "  Worker:        ${WORKER_URL}"
 echo ""
 
-# ── Activate conda environment ──
-if command -v conda &>/dev/null; then
-    eval "$(conda shell.bash hook)"
-    conda activate "$CONDA_ENV" 2>/dev/null || {
-        echo "WARNING: Could not activate conda env '${CONDA_ENV}'."
-        echo "         Falling back to current environment."
-    }
-else
-    echo "WARNING: conda not found. Ensure '${CONDA_ENV}' is activated."
+# ── Check the uv environment ──
+if ! command -v uv &>/dev/null; then
+    echo "ERROR: 'uv' was not found on PATH."
+    echo "       Install it with:  curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
 fi
 
-export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
+if [ ! -d "${PROJECT_ROOT}/.venv" ]; then
+    echo "ERROR: No virtual environment at ${PROJECT_ROOT}/.venv"
+    echo "       Create it once with:"
+    echo "         cd ${PROJECT_ROOT} && ${SYNC_HINT}"
+    exit 1
+fi
 
-# ── OpenEye license ──
+cd "$PROJECT_ROOT"
+
+# ── OpenEye license (optional external toolkit) ──
 if [ -f "${SCRIPT_DIR}/tools/oe_license.txt" ]; then
     export OE_LICENSE="${SCRIPT_DIR}/tools/oe_license.txt"
 elif [ -f "${PROJECT_ROOT}/oe_license.txt" ]; then
@@ -77,7 +89,8 @@ fi
 
 # ── Quick env check ──
 echo "Checking Python environment…"
-python -c "
+echo "  uv:       $(uv --version)"
+uv run --no-sync python -c "
 import sys
 print(f'  Python:   {sys.executable}')
 try:
@@ -93,7 +106,7 @@ except ImportError:
 try:
     import fastapi; print(f'  FastAPI:  {fastapi.__version__}')
 except ImportError:
-    print('  FastAPI:  NOT FOUND – run: pip install -r requirements.txt')
+    print('  FastAPI:  NOT FOUND – run: ${SYNC_HINT}')
     exit(1)
 "
 echo ""
@@ -123,7 +136,7 @@ trap cleanup SIGINT SIGTERM
 echo "Starting worker on ${WORKER_URL} …"
 FLOWR_CKPT_PATH="${CKPT_PATH}" \
 FLOWR_WORKER_PORT="${WORKER_PORT}" \
-    python "$SCRIPT_DIR/worker.py" &
+    uv run --no-sync python "$SCRIPT_DIR/worker.py" &
 WORKER_PID=$!
 
 # Give the worker a moment to bind its port
@@ -137,7 +150,7 @@ echo ""
 FLOWR_PORT="${SERVER_PORT}" \
 FLOWR_WORKER_URL="${WORKER_URL}" \
 FLOWR_SERVER_URL="${SERVER_URL}" \
-    python "$SCRIPT_DIR/server.py" &
+    uv run --no-sync python "$SCRIPT_DIR/server.py" &
 SERVER_PID=$!
 
 # Wait for either to exit (compatible with macOS bash 3.2)

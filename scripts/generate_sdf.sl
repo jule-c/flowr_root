@@ -10,12 +10,13 @@
 #SBATCH --output=YOUR_CODE_PATH/slurm_outs/pdb_gen/generate-sbdd_%j.out
 #SBATCH --error=YOUR_CODE_PATH/slurm_outs/pdb_gen/generate-sbdd_%j.err
 
+# ENVIRONMENT SETUP
+# One-time setup, from the repo root (pick the extra that matches the machine):
+#   uv sync --extra gpu   # Linux + NVIDIA GPU (CUDA 13 wheels)
+#   uv sync --extra cpu   # macOS / CPU-only
+# `uv run --no-sync` then uses .venv directly without re-resolving.
+export PATH="$HOME/.local/bin:$PATH"
 cd YOUR_CODE_PATH/flowr_root
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/mamba.sh
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/conda.sh
-conda activate flowr_root
-
-export PYTHONPATH="YOUR_CODE_PATH/flowr_root"
 
 # COMPUTE
 num_gpus=1
@@ -70,7 +71,7 @@ mkdir -p "$save_dir"
 batch_cost=256
 
 ligand_idx=0 # modify this index to select a specific ligand from the sdf file, or set to -1 or None to use all ligands
-python -m flowr.gen.generate_from_sdf_mol \
+uv run --no-sync python -m flowr.gen.generate_from_sdf_mol \
     --sdf_path "$data_path/YOUR_SDF_FILE.sdf" \
     --ligand_idx $ligand_idx \
     --arch flowr \

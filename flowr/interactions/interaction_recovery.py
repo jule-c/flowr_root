@@ -1,25 +1,54 @@
+"""Legacy PLIF recovery helper built on the external ``plif_utils`` package.
+
+``plif_utils`` is not distributed with FlowR. The maintained, self-contained
+interaction-recovery implementation lives in
+:func:`flowr.util.metrics.interaction_recovery_per_complex` (backed by
+:class:`flowr.util.interaction_util.InteractionFingerprints`), which is what the
+``--compute_interaction_recovery`` generation flag uses. This module is kept for
+reference and imports ``plif_utils`` lazily so the package stays importable.
+"""
+
 import os
 import tempfile
 import warnings
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import prolif as plf
 from rdkit import Chem
 from tqdm import tqdm
 
 from flowr.util.rdkit import write_sdf_file
-from plif_utils.analysis import get_plif_recovery_rates, run
-from plif_utils.file_prep import FilePrep, get_files
-from plif_utils.system_prep import SystemPrep
+
+if TYPE_CHECKING:  # pragma: no cover - plif_utils is not shipped with FlowR
+    from plif_utils.file_prep import FilePrep
+    from plif_utils.system_prep import SystemPrep
+
+_PLIF_UTILS_HINT = (
+    "This function requires the external 'plif_utils' package, which is not "
+    "distributed with FlowR. Use "
+    "flowr.util.metrics.interaction_recovery_per_complex (the implementation "
+    "behind --compute_interaction_recovery) instead."
+)
+
+
+def _import_plif_utils():
+    try:
+        from plif_utils.analysis import get_plif_recovery_rates, run
+        from plif_utils.file_prep import get_files
+    except ImportError as err:  # pragma: no cover - depends on the environment
+        raise ImportError(_PLIF_UTILS_HINT) from err
+
+    return get_plif_recovery_rates, run, get_files
 
 
 def get_recovery_rates_given_target(
     target: str,
     ligands: list[Chem.Mol],
-    system_prep: SystemPrep,
+    system_prep: "SystemPrep",
     data_dir: Path,
     ground_truth_plif: plf.Fingerprint,
-    ground_truth_file_prep: FilePrep,
+    ground_truth_file_prep: "FilePrep",
 ) -> dict[str, plf.Fingerprint]:
     """
     Given a target and a list of ligands, calculate the PLIFs for the target
@@ -29,6 +58,8 @@ def get_recovery_rates_given_target(
     data_dir: Path to the data directory
     return: ist of PLIF recovery rates
     """
+
+    get_plif_recovery_rates, run, get_files = _import_plif_utils()
 
     # loop over ligands given target and calculate plifs
     recovery_rates = []

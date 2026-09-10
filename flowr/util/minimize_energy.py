@@ -1,14 +1,22 @@
+"""Energy minimisation helpers.
+
+``openff-toolkit`` and ``openmmforcefields`` are optional dependencies that are
+not installed by default, so they are imported lazily -- this module stays
+importable without them.
+"""
+
+from __future__ import annotations
+
 import copy
 import logging
 import os
 import shutil
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from Bio.PDB import MMCIFIO, PDBIO, MMCIFParser, PDBParser, Select
-from openff.toolkit.topology import Molecule
-from openff.units import Quantity as openff_Quantity
 from openmm import (
     CustomExternalForce,
     LangevinIntegrator,
@@ -19,7 +27,6 @@ from openmm import (
 )
 from openmm.app import Atom, ForceField, HBonds, Modeller, PDBFile, PDBxFile, Simulation
 from openmm.unit import kelvin, kilojoule, molar, mole, nanometer, picosecond
-from openmmforcefields.generators import SMIRNOFFTemplateGenerator, SystemGenerator
 from pdbfixer import PDBFixer
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -27,6 +34,9 @@ from rdkit.Chem.rdmolfiles import MolFromMolFile, MolToMolFile
 from rdkit.Chem.rdmolops import AddHs, RemoveHs
 from scipy.spatial.distance import cdist
 from scipy.spatial.transform import Rotation as R
+
+if TYPE_CHECKING:  # pragma: no cover - openff is an optional dependency
+    from openff.toolkit.topology import Molecule
 
 logging.basicConfig(
     format="[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s"
@@ -590,6 +600,9 @@ def load_molecule(mol_path: Path, **kwargs) -> Molecule:
         Molecule.from_file method.
     :return: The loaded molecule.
     """
+    # Optional dependency, only needed on this path.
+    from openff.toolkit.topology import Molecule
+
     mols = Molecule.from_file(str(mol_path), file_format="sdf", **kwargs)
     molecule = mols[0] if isinstance(mols, list) else mols
     molecule.name = str(mol_path)
@@ -633,6 +646,8 @@ def prep_ligand(
                 mol_with_hs = Chem.RenumberAtoms(
                     mol_with_hs, mol_smiles_atom_output_order
                 )
+                from openff.toolkit.topology import Molecule
+
                 mol = Molecule.from_smiles(
                     mol_smiles, allow_undefined_stereo=allow_undefined_stereo
                 )
@@ -804,6 +819,8 @@ def generate_system(
                 or all(a.element._symbol.upper() == "FE" for a in res._atoms)
             },
         }
+        from openmmforcefields.generators import SystemGenerator
+
         system_generator = SystemGenerator(
             forcefields=["amber/ff14SB.xml"],
             small_molecule_forcefield="gaff-2.11",
@@ -817,6 +834,8 @@ def generate_system(
     else:
         # set up forcefield
         forcefield = ForceField(*force_fields)
+        from openmmforcefields.generators import SMIRNOFFTemplateGenerator
+
         smirnoff = SMIRNOFFTemplateGenerator(molecules=ligands)
         forcefield.registerTemplateGenerator(smirnoff.generator)
 
@@ -1212,6 +1231,9 @@ def optimize_ligand_in_pocket(
                 num_atoms_in_ligand = len(ligands[ligand_index].atoms)
                 pos_start_index = num_particles_protein + num_ligand_atoms_observed
                 pos_end_index = pos_start_index + num_atoms_in_ligand
+                from openff.toolkit.topology import Molecule
+                from openff.units import Quantity as openff_Quantity
+
                 new_molecule = Molecule.from_smiles(
                     ligands_smiles[ligand_index],
                     allow_undefined_stereo=allow_undefined_stereo,

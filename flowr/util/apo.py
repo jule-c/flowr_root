@@ -1,14 +1,17 @@
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import biotite.structure as struc
 import numpy as np
 import scipy as scipy
 from biotite.sequence import ProteinSequence
 from biotite.sequence.align import SubstitutionMatrix, align_optimal
-from plinder.core import PlinderSystem
 
 from flowr.util.plinder import load_structure, run_prep_wizard_protein
 from flowr.util.pocket import ProteinPocket
+
+if TYPE_CHECKING:  # pragma: no cover - plinder is an optional dependency
+    from plinder.core import PlinderSystem
 
 DEFAULT_MIN_APO_ATOMS = 50
 
@@ -342,7 +345,7 @@ def _find_apo_pocket(
 
 
 def load_apo_pocket(
-    system: PlinderSystem,
+    system: "PlinderSystem",
     holo_structure: struc.AtomArray,
     holo_pocket: struc.AtomArray,
     tmp_path: str,

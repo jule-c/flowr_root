@@ -1,0 +1,189 @@
+[project]
+name = "flowr-root"
+version = "1.0.0"
+description = "FLOWR.root — structure-based generative flow matching for ligand design, joint affinity prediction and pocket-conditioned sampling."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = "==3.12.*"
+
+# NOTE ON PINNING
+# Almost everything is pinned loosely (`>=`) on purpose: the exact versions
+# live in `uv.lock`, which is committed and is what `uv sync` installs.
+# The three tight pins below each exist for a concrete reason:
+#   torch==2.11.*        the series verified on the CUDA 13 / GB10 box
+#   tensordict>=0.12,<0.13   its compiled extension is ABI-paired with torch 2.11
+#   biotite>=1.5,<2      flowr is written against the biotite 1.x API
+dependencies = [
+  # --- core numerics ---------------------------------------------------------
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "pandas>=2.0",
+  "scikit-learn>=1.3",
+  "networkx>=3.0",
+
+  # --- plotting --------------------------------------------------------------
+  "matplotlib>=3.8",
+  "seaborn>=0.13",
+
+  # --- torch stack -----------------------------------------------------------
+  # torch itself is resolved from an explicit PyTorch index; pick the wheel
+  # flavour with the mutually exclusive `cpu` / `gpu` extras (see [tool.uv]).
+  # Pinned to the 2.11 series: it is the version verified on the NVIDIA GB10
+  # (Blackwell, sm_121, CUDA 13) box, and it is what the CUDA 13 wheels on
+  # download.pytorch.org/whl/cu130 are built for.
+  "torch==2.11.*",
+  "torchmetrics>=1.4",
+  "lightning>=2.4",
+  "lightning-utilities>=0.11",
+  "torch-geometric>=2.6",
+  "tensordict>=0.12,<0.13",   # ABI-paired with torch 2.11
+
+  # --- cheminformatics / structural biology ----------------------------------
+  "rdkit>=2024.3",
+  "openbabel-wheel>=3.1.1",     # PyPI build of Open Babel + its Python bindings
+  "openmm>=8.2",
+  "pdbfixer>=1.10",
+  "datamol>=0.12",
+  "biotite>=1.5,<2",            # flowr targets the biotite 1.x API
+  "hydride>=1.2",
+  "pdbinf>=0.0.4",
+  "prolif>=2.0",
+  "biopython>=1.83",
+  "biopandas>=0.5",
+  "MDAnalysis>=2.7",
+  "prody>=2.4",
+  "rmsd>=1.6",
+
+  # --- storage / serialisation ----------------------------------------------
+  "lmdb>=1.4",
+  "dill>=0.3.8",
+  "pyyaml>=6.0",
+
+  # --- experiment tracking (lightning's WandbLogger / MLFlowLogger backends) --
+  "wandb>=0.17",
+  "mlflow>=2.14",
+
+  # --- misc runtime ----------------------------------------------------------
+  "tqdm>=4.66",
+  "requests>=2.31",
+  "rich>=13.0",
+  "omegaconf>=2.3",
+  "hydra-core>=1.3",
+  "typing-extensions>=4.9",
+]
+
+[project.optional-dependencies]
+# --- torch wheel flavour (mutually exclusive, see [tool.uv].conflicts) -------
+# macOS / CPU-only boxes:   uv sync --extra cpu
+cpu = ["torch==2.11.*"]
+# CUDA 13 / Blackwell (GB10, H100 with a cu13 driver, ...): uv sync --extra gpu
+gpu = ["torch==2.11.*"]
+
+# --- flowr_vis frontend server ----------------------------------------------
+# The frontend server itself needs no torch, but `torch` is a base dependency
+# of this project, so `--extra vis` must always be combined with `cpu` or
+# `gpu`, e.g. `uv sync --extra cpu --extra vis`.
+vis = [
+  "fastapi>=0.104.0",
+  "uvicorn[standard]>=0.24.0",
+  "python-multipart>=0.0.6",
+  "requests>=2.31.0",
+  "scikit-learn>=1.3.0",
+  "umap-learn>=0.5.0",
+  "biotite>=1.5,<2",
+  "rdkit>=2024.3",
+  "numpy>=1.24.0",
+]
+
+# --- notebooks in examples/ -------------------------------------------------
+notebooks = [
+  "jupyterlab>=4.0",
+  "notebook>=7.0",
+  "ipywidgets>=8.0",
+  "py3Dmol>=2.4",
+]
+
+# --- extended evaluation metrics (flowr/eval/evaluate_util.py) --------------
+eval = [
+  "fcd>=1.2",
+  "useful-rdkit-utils>=0.7",
+]
+
+# ---------------------------------------------------------------------------
+# NOT PACKAGED HERE -- optional tools that are not installable from PyPI
+# ---------------------------------------------------------------------------
+# The following were in the old conda environment files but have no usable
+# PyPI distribution. None of them is imported at module scope by `flowr`, so
+# the package installs and runs without them; they are only needed by specific
+# opt-in code paths, which raise ImportError if the tool is missing.
+#
+#   pymol           `pymol-open-source` on PyPI is a 3.2.0a0 pre-release with
+#                   NO linux-aarch64 wheel at all, and its macOS-arm64 wheel is
+#                   mis-linked (its _cmd.so hardcodes an rpath into the wheel
+#                   author's private mamba prefix and fails to dlopen libpng).
+#                   Verified broken -- install PyMOL separately (system package
+#                   manager or an upstream installer) if you need
+#                   `flowr.gen.utils` PDB-merging or `flowr.util.pocket`
+#                   PyMOL helpers.
+#   ambertools      no PyPI distribution.
+#   openff-toolkit  on PyPI but unusable without ambertools/openeye backends.
+#   openmmforcefields  sdist-only and requires ambertools at runtime.
+#   openeye-toolkits   proprietary; needs OpenEye's own index + a licence file.
+#                      Only used by the leaf module flowr/util/sampling/openeye.py.
+#   reduce          an external binary (Richardson lab), optionally shelled out
+#                   to by the vendored `posecheck`.
+#   xtb / vina      external CLI binaries shelled out to by
+#                   flowr/eval/evaluate_xtb.py and the docking helpers; their
+#                   PyPI packages are sdist-only Fortran/C++ builds and provide
+#                   Python bindings rather than the CLI these call.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Three top-level packages. `posebusters` and `posecheck` are *vendored,
+# locally modified* forks -- they must always come from this source tree and
+# never from PyPI.
+packages = ["flowr", "posebusters", "posecheck"]
+
+[tool.hatch.build.targets.sdist]
+include = ["flowr", "posebusters", "posecheck", "README.md", "LICENSE"]
+
+# ---------------------------------------------------------------------------
+# uv configuration
+# ---------------------------------------------------------------------------
+# PyPI is declared explicitly, and first, on purpose.
+# `[[tool.uv.index]]` entries outrank indexes injected through the ambient
+# environment (`UV_EXTRA_INDEX_URL` / `--extra-index-url`), so listing PyPI
+# here guarantees that every dependency resolves against PyPI even when the
+# machine running `uv lock` has a private registry configured. Without it,
+# uv's default first-index-wins strategy lets any private index that happens
+# to publish a package of the same name (e.g. an internal `biotite`) shadow
+# PyPI entirely and break resolution. This keeps the committed `uv.lock`
+# reproducible for everyone cloning the repo, without having to weaken
+# resolution to `index-strategy = "unsafe-best-match"` (which would allow
+# *any* configured index to win a version race -- a dependency-confusion
+# hazard in a public repository).
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu13"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu13", extra = "gpu" },
+]
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "gpu" }]]

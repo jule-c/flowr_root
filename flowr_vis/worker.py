@@ -140,8 +140,8 @@ try:
     FLOWR_AVAILABLE = True
 except ImportError as exc:
     logger.warning(
-        "FLOWR modules not importable (%s) – generation will "
-        "not work. Make sure the flowr package is on PYTHONPATH.",
+        "FLOWR modules not importable (%s) – generation will not work. "
+        "Run `uv sync --extra gpu --extra vis` at the project root.",
         exc,
     )
 

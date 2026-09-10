@@ -11,8 +11,8 @@ from rdkit.DataStructs import BulkTanimotoSimilarity, TanimotoSimilarity
 from torchmetrics import MaxMetric, MeanMetric
 from tqdm import tqdm
 
-from experiments.sampling.utils import *
-from experiments.sampling.utils import dihedral_distance
+from flowr.util.sampling.utils import *
+from flowr.util.sampling.utils import dihedral_distance
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)

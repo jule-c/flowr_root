@@ -8,7 +8,7 @@ import lmdb
 from tqdm import tqdm
 
 from flowr.constants import CORE_ATOMS, MAX_LIGAND_SIZE
-from flowr.data.datasets.complex_data.preprocess_util import (
+from flowr.data.preprocess_data.preprocess_util import (
     check_ligand_atom_types,
     check_ligand_size,
 )

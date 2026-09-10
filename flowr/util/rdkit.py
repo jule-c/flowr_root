@@ -455,6 +455,38 @@ def has_radicals(mol: Chem.Mol) -> bool:
     return False
 
 
+def largest_component(
+    mols: list[Chem.rdchem.Mol],
+) -> list[Chem.rdchem.Mol]:
+    """Reduce each molecule to its largest (by atom count) disconnected fragment.
+
+    The input list is not modified; a new list of the same length and ordering is
+    returned. Molecules that are already fully connected are returned unchanged.
+
+    Args:
+        mols (list[Chem.Mol]): RDKit molecules
+
+    Returns:
+        list[Chem.Mol]: For each input mol, its largest connected fragment (or the
+            original mol if it could not be fragmented)
+    """
+
+    largest = []
+    for mol in mols:
+        try:
+            frags = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=False)
+        except Exception:
+            largest.append(mol)
+            continue
+
+        if len(frags) <= 1:
+            largest.append(mol)
+        else:
+            largest.append(max(frags, key=lambda frag: frag.GetNumAtoms()))
+
+    return largest
+
+
 def calc_energy(mol: Chem.rdchem.Mol, per_atom: bool = False) -> float:
     """Calculate the energy for an RDKit molecule using the MMFF forcefield
 

@@ -9,7 +9,7 @@ import numpy as np
 from tqdm import tqdm
 
 from flowr.constants import CORE_ATOMS
-from flowr.data.datasets.complex_data.preprocess_util import check_ligand_atom_types
+from flowr.data.preprocess_data.preprocess_util import check_ligand_atom_types
 from flowr.util.pocket import PocketComplex
 
 

@@ -3,7 +3,7 @@ import math
 import torch
 import torch.nn as nn
 
-from .sphcs_util import (
+from .sph_util import (
     binom,
     generate_clebsch_gordan_rsh,
     scatter_add,

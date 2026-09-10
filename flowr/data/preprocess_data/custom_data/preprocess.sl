@@ -10,16 +10,13 @@
 #SBATCH --output=./preprocess_data/lmdb_%j.out
 #SBATCH --error=./preprocess_data/lmdb_%j.err
 
+# ENVIRONMENT SETUP
+export PATH="$HOME/.local/bin:$PATH"
 cd YOUR_CODE_PATH/flowr_root
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/mamba.sh
-source YOUR_ENV_PATH/miniforge3/etc/profile.d/conda.sh
-conda activate flowr_root
-
-export PYTHONPATH="YOUR_CODE_PATH/flowr_root"
 
 num_jobs=40
 
-python -m flowr.data.datasets.complex_data.preprocess \
+uv run --no-sync python -m flowr.data.preprocess_data.preprocess \
     --data_dir ./data \
     --save_path ./processed \
     --file_type pdb \

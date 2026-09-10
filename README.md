@@ -38,41 +38,73 @@ This is a research repository introducing FLOWR.root.
 
 - **GPU**: CUDA-compatible GPU with at least 40GB VRAM recommended for inference
 
-- **Installation time** Installation takes roughly 5 minutes on a normal computer.
+- **Installation time**: Installation takes roughly 5 minutes on a normal computer.
 
-- **Package Manager**: [mamba](https://mamba.readthedocs.io)
+- **Package Manager**: [uv](https://docs.astral.sh/uv/)
   Install via:
 
   ```bash
-  curl -L -O https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh
-  bash Miniforge3-$(uname)-$(uname -m).sh
+  curl -LsSf https://astral.sh/uv/install.sh | sh
   ```
 
 1. **Create the Environment**
-   Install the required environment using [mamba](https://mamba.readthedocs.io):
+
+   On Linux with a CUDA GPU:
 
    ```bash
-   mamba env create -f environment.yml
+   uv sync --extra gpu
    ```
 
-   If you are on a MacBook (tested on Apple M3 Max), install via:
+   On macOS (tested on Apple M3 Max) or any CPU-only machine:
 
    ```bash
-   mamba env create -f environment_mac.yml
+   uv sync --extra cpu
    ```
 
-2. **Activate the Environment**
+   The `cpu` and `gpu` extras are mutually exclusive — they select the PyTorch wheel
+   flavour. `uv sync` creates `.venv/` in the repository root, installs the exact
+   versions recorded in the committed `uv.lock`, and installs FLOWR.root itself into
+   the environment.
+
+   To also install FLOWR.ui, the notebook tutorial, or the extended evaluation
+   metrics, add the corresponding extras:
 
    ```bash
-   conda activate flowr_root
+   uv sync --extra gpu --extra vis          # + FLOWR.ui web app
+   uv sync --extra cpu --extra notebooks    # + examples/examples.ipynb
+   uv sync --extra gpu --extra eval         # + FCD and extended metrics
    ```
 
-3. **Set PYTHONPATH**
-   Ensure the repository directory is in your Python path:
+2. **Run commands**
+
+   Prefix any command with `uv run`:
 
    ```bash
-   export PYTHONPATH="$PWD"
+   uv run python -m flowr.gen.generate_from_pdb --help
    ```
+
+   or activate the environment once and drop the prefix:
+
+   ```bash
+   source .venv/bin/activate
+   ```
+
+   **No `PYTHONPATH` setup is required.** FLOWR.root is installed into the
+   environment as a package, so `python -m flowr.<module>` works from anywhere.
+
+<details>
+<summary><b>Optional external toolkits</b></summary>
+
+A few capabilities depend on toolkits that are not installable from PyPI. FLOWR.root
+runs without them — only the specific feature is unavailable.
+
+| Toolkit | Needed for | Notes |
+| --- | --- | --- |
+| **OpenEye** | shape-based alignment and conformer utilities (`flowr/util/sampling/openeye.py`, `flowr_vis/oe_conformer.py`) | Commercial licence. Install the `OpenEye-toolkits` wheel from OpenEye's own package index and point `OE_LICENSE` at your licence file. |
+| **PyMOL** | one alternative PDB-writing path in `flowr/util/pocket.py` | `uv sync --extra pymol`. No `linux-aarch64` wheel exists upstream, so this extra is a no-op on ARM Linux (e.g. DGX Spark / GB10); the code falls back to the OpenBabel path. |
+| **`reduce`** | protonation for the PoseCheck interaction metrics | Build from [rlabduke/reduce](https://github.com/rlabduke/reduce) and put it on `PATH`. |
+
+</details>
 
 ---
 
@@ -90,7 +122,7 @@ See [`flowr_vis/README.md`](flowr_vis/README.md) for setup and usage instruction
 ## Tutorial
 
 A Jupyter Notebook tutorial is provided at examples/examples.ipynb alongside a few protein-ligand complexes to play around with!
-You can also run this on your MacBook - install the respective environment and you are good to go (see above).
+You can also run this on your MacBook - run `uv sync --extra cpu --extra notebooks` and you are good to go (see [Installation](#installation)).
 
 ---
 

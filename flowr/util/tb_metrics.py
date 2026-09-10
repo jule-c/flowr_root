@@ -8,7 +8,7 @@ from rdkit import Chem
 from rdkit.Chem import Crippen, Descriptors, Lipinski
 from torchmetrics import Metric
 
-from flowr.scriptutil import ATOM_NAMES
+from flowr.constants import CORE_ATOMS as ATOM_NAMES
 from flowr.util.pylogger import RankedLogger
 from flowr.util.rdkit import calc_energy, largest_component, mol_is_valid, optimise_mol
 from posebusters import PoseBusters
