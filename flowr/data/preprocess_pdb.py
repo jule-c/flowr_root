@@ -379,7 +379,8 @@ def transform_pdb(main_path, pdb_name, ligand_id, chain_id=None):
     Read Ligand Expo data, split pdb into protein and ligands,
     write protein pdb, write ligand sdf files
     :param pdb_name: id from the pdb, doesn't need to have an extension
-    :param chain_id: optional chain ID to select specific ligand copy
+    :param chain_id: optional chain ID to select specific ligand copy. Raises
+        ValueError if the ligand has no copy in that chain.
     :return:
     """
     protein_complex, ligand = get_pdb_components(pdb_name, ligand_id)
@@ -405,6 +406,16 @@ def process_ligand(ligand, res_name, chain_id=None):
     output = StringIO()
     if chain_id:
         sub_mol = ligand.select(f"resname {res_name} and chain {chain_id}")
+        if sub_mol is None:
+            # prody's select() returns None for an empty selection. Falling through
+            # with that None made a bogus --chain_id fail obscurely (or, upstream,
+            # be ignored entirely), so report the mismatch here.
+            available = ligand.select(f"resname {res_name}")
+            chains = sorted({str(c) for c in available.getChids()}) if available else []
+            raise ValueError(
+                f"No copy of ligand '{res_name}' found in chain '{chain_id}'. "
+                f"Chains containing this ligand: {chains}"
+            )
     else:
         # Get first chain only
         ligand_subset = ligand.select(f"resname {res_name}")

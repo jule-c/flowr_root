@@ -221,6 +221,30 @@ def evaluate(args):
                     f"Substructure match rate: {round(len(gen_ligs) / num_sampled, 2)}"
                 )
 
+            # Filter by molecular properties / ADME models.
+            # This has to happen *before* the batch is merged into all_gen_ligs:
+            # it used to run afterwards and only rebind the local `gen_ligs`, so the
+            # molecules it rejected had already been copied into the list that gets
+            # written out and the filter changed nothing.
+            if mol_filter_pipeline.active:
+                num_before = len(gen_ligs)
+                kept_ligs = mol_filter_pipeline(gen_ligs)
+                if gen_pdbs:
+                    # Keep the per-ligand pockets aligned with the ligands they belong
+                    # to. The pipeline returns the surviving mol objects themselves,
+                    # so identity is what maps a kept ligand back to its pocket.
+                    kept_ids = {id(lig) for lig in kept_ligs}
+                    gen_pdbs = [
+                        pdb
+                        for lig, pdb in zip(gen_ligs, gen_pdbs)
+                        if id(lig) in kept_ids
+                    ]
+                gen_ligs = kept_ligs
+                print(
+                    f"Property/ADME filter pass rate: "
+                    f"{round(len(gen_ligs) / max(num_before, 1), 2)}"
+                )
+
             # Add to global ligand list
             all_gen_ligs.extend(gen_ligs)
             if gen_pdbs:
@@ -238,15 +262,6 @@ def evaluate(args):
                         all_gen_ligs, threshold=args.diversity_threshold
                     )
                 print(f"Diversity rate: {round(len(all_gen_ligs) / n_ligands, 2)}")
-
-            # Filter by molecular properties / ADME models
-            if mol_filter_pipeline.active:
-                num_before = len(gen_ligs)
-                gen_ligs = mol_filter_pipeline(gen_ligs)
-                print(
-                    f"Property/ADME filter pass rate: "
-                    f"{round(len(gen_ligs) / max(num_before, 1), 2)}"
-                )
 
             # Update number of generated ligands
             num_ligands = len(all_gen_ligs)
@@ -563,7 +578,11 @@ def get_args():
     parser.add_argument('--ligand_file', type=str, default=None)
     parser.add_argument('--ligand_idx', type=int, default=0, help="Index of the ligand in the sdf file to be used for generation")
     parser.add_argument('--res_txt_file', type=str, default=None)
-    parser.add_argument('--chain_id', type=str, default=None)
+    parser.add_argument('--chain_id', type=str, default=None,
+        help="Restrict processing to a single chain of the structure. The pocket is "
+             "cut from that chain only; with --pdb_id the ligand copy is also taken "
+             "from it. Errors out if the chain (or, on the --pdb_id route, a copy of "
+             "the ligand in it) is not present. Default: use every chain.")
     parser.add_argument('--canonicalize_conformer', action='store_true')
 
     parser.add_argument('--pocket_noise', type=str, choices=["apo", "random", "fix"], default="fix")

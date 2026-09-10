@@ -796,6 +796,18 @@ def load_data_from_pdb(
         chain_id=chain_id,
         **processing_params,
     )
+    if system is None:
+        # process_complex() returns None on every failure it handles itself (empty or
+        # too-small pocket, unreadable ligand, ...). Calling remove_hs() on that None
+        # raised a bare AttributeError, which told the user nothing -- most visibly
+        # when --chain_id picked a real chain that holds no pocket for this ligand.
+        source = args.pdb_file if args.pdb_file is not None else args.pdb_id
+        detail = f" for chain '{chain_id}'" if chain_id is not None else ""
+        raise RuntimeError(
+            f"Could not build a pocket complex from {source}{detail}. "
+            "See the messages above for the reason (e.g. an empty or too-small "
+            "pocket, or a ligand that could not be read)."
+        )
     # Forward remove_aromaticity so the ligand is re-featurized in the SAME bond
     # representation the model was trained on. remove_hs() re-runs mol_to_torch on
     # the ligand; without remove_aromaticity it sanitizes to aromatic bonds

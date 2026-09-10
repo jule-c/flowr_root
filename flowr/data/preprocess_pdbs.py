@@ -368,6 +368,7 @@ def process_pdb(
     pocket_cutoff: float = 6.0,
     cut_pocket: bool = False,
     use_pdbfixer: bool = False,
+    chain_id: str = None,
 ):
     """
     Load a protein from a PDB file, optionally add hydrogens,
@@ -381,8 +382,12 @@ def process_pdb(
         pocket_cutoff (float): Cutoff distance for pocket extraction.
         cut_pocket (bool): Whether to cut out the pocket from the protein.
         use_pdbfixer (bool): Whether to use PDBFixer for fixing the PDB file.
+        chain_id (str, optional): Restrict the structure to this chain before any
+            pocket extraction. ``None`` (the default) keeps every chain.
     Returns:
         ProteinPocket: The extracted pocket as a ProteinPocket object.
+    Raises:
+        ValueError: If ``chain_id`` is not present in the structure.
     """
 
     if cut_pocket:
@@ -493,6 +498,26 @@ def process_pdb(
                 bonds = struc.BondList(rdmol.GetNumAtoms(), bonds)
             structure.bonds = bonds
 
+    # Restrict the structure to a single chain if requested.
+    # This is the *only* place a protein structure is narrowed to a chain, so both the
+    # --pdb_file and the --pdb_id route honour --chain_id here. A chain that is absent
+    # from the structure is an error rather than a silent fall-through to the whole
+    # (multi-chain) structure -- that fall-through is what made --chain_id a no-op.
+    if chain_id is not None:
+        chain_mask = structure.chain_id == chain_id
+        if not chain_mask.any():
+            available = sorted(
+                {chain for chain in np.unique(structure.chain_id).tolist() if chain}
+            )
+            if use_pdbfixer and fixed_pdb_file != pdb_file:
+                if os.path.exists(fixed_pdb_file):
+                    os.remove(fixed_pdb_file)
+            raise ValueError(
+                f"Chain '{chain_id}' not found in {pdb_file}. "
+                f"Available chains: {available}"
+            )
+        structure = structure[chain_mask]
+
     # Add hydrogens and optimize
     if add_hs_to_protein and not use_pdbfixer:
         structure, mask = hydride.add_hydrogen(structure)
@@ -531,9 +556,11 @@ def process_pdb(
         chain_res_pairs = set(zip(structure.chain_id, structure.res_id))
         res_filter_mask = np.zeros(len(structure), dtype=bool)
 
-        for chain_id, res_id in chain_res_pairs:
+        for res_chain_id, res_id in chain_res_pairs:
             # Get residue atoms for this specific chain-residue combination
-            res_mask = (structure.chain_id == chain_id) & (structure.res_id == res_id)
+            res_mask = (structure.chain_id == res_chain_id) & (
+                structure.res_id == res_id
+            )
             res = structure[res_mask]
 
             if (
@@ -942,6 +969,9 @@ def process_complex(
         ligand_sdf_path (str): The path to the SDF or PDB file.
         ligand_mol (rdkit.Chem.Mol): The RDKit molecule object for the ligand.
         txt_path (str): The path to the TXT file with residue IDs.
+        chain_id (str): Restrict processing to this chain. On the pdb_id route it
+            also picks the ligand copy from that chain. Raises if the chain (or, for
+            the ligand, a copy of the ligand in that chain) does not exist.
         remove_hs (bool): Whether to remove hydrogens from the ligand.
         kekulize (bool): Whether to kekulize the ligand.
         add_bonds_to_protein (bool): Whether to add bonds to the protein.
@@ -967,7 +997,9 @@ def process_complex(
         # Save downloaded files into the current working directory, delete afterwards
         # if no ligand_id is provided, the first ligand in the PDB file will be used
         save_path = Path.cwd()
-        pdb_path, ligand_sdf_path = transform_pdb(save_path, pdb_id, ligand_id)
+        pdb_path, ligand_sdf_path = transform_pdb(
+            save_path, pdb_id, ligand_id, chain_id=chain_id
+        )
 
     if ligand_sdf_path is not None:
         mol = safe_load_mol_from_file(
@@ -1032,6 +1064,7 @@ def process_complex(
         pocket_cutoff=pocket_cutoff,
         cut_pocket=cut_pocket,
         use_pdbfixer=use_pdbfixer,
+        chain_id=chain_id,
     )
     if pocket is None:
         print(f"Failed to process pocket from {pdb_path}. Skipping!")
@@ -1062,6 +1095,7 @@ def process_complex(
                 pocket_cutoff=new_cutoff,
                 cut_pocket=cut_pocket,
                 use_pdbfixer=use_pdbfixer,
+                chain_id=chain_id,
             )
             hs_mask = pocket.atoms.element != "H"
             pocket_nohs = pocket.select_atoms(hs_mask)
@@ -1078,6 +1112,7 @@ def process_complex(
                     pocket_cutoff=5.0,
                     cut_pocket=cut_pocket,
                     use_pdbfixer=use_pdbfixer,
+                    chain_id=chain_id,
                 )
                 hs_mask = pocket.atoms.element != "H"
                 pocket_nohs = pocket.select_atoms(hs_mask)
@@ -1094,6 +1129,7 @@ def process_complex(
                         pocket_cutoff=4.0,
                         cut_pocket=cut_pocket,
                         use_pdbfixer=use_pdbfixer,
+                        chain_id=chain_id,
                     )
                     hs_mask = pocket.atoms.element != "H"
                     pocket_nohs = pocket.select_atoms(hs_mask)
@@ -1110,6 +1146,7 @@ def process_complex(
                             pocket_cutoff=3.5,
                             cut_pocket=cut_pocket,
                             use_pdbfixer=use_pdbfixer,
+                            chain_id=chain_id,
                         )
                         hs_mask = pocket.atoms.element != "H"
                         pocket_nohs = pocket.select_atoms(hs_mask)
