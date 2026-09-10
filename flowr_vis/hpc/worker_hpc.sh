@@ -5,17 +5,19 @@
 # This script is submitted by the frontend server via `sbatch`.
 # All user-specific paths are read from hpc.env (see hpc.env.template).
 #
-# IMPORTANT: #SBATCH directives MUST appear before any executable code,
-# otherwise SLURM silently ignores them. Edit the defaults below, or
-# pass overrides via the sbatch command line (the server does this
-# automatically using values from hpc.env).
+# IMPORTANT: the #SBATCH directives below are fallbacks that only apply
+# when this script is submitted by hand. The frontend server always
+# passes --partition/--time/--mem-per-cpu/--cpus-per-task/--gres on the
+# sbatch command line (built from the FLOWR_SLURM_* values in hpc.env),
+# and CLI flags override in-script directives — so set your cluster's
+# resources in hpc.env, not here.
 # ══════════════════════════════════════════════════════════════════════
 
 # ── SBATCH directives (must be before any executable statements) ──
 #SBATCH -J flowr_gpu
 #SBATCH --ntasks-per-node=1
 #SBATCH --nodes=1
-# ── Edit these SBATCH headers to match your cluster ──
+# ── Fallbacks for manual submission; hpc.env wins when the server submits ──
 #SBATCH --time=01:00:00
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=8
@@ -52,7 +54,9 @@ fi
 SCRIPT_DIR="${PROJECT_ROOT}/flowr_vis"
 
 # ── Create SLURM output directory if needed ──
-SLURM_OUTPUT_DIR="${SLURM_OUTPUT_DIR:-${HOME}/slurm_outs}"
+# FLOWR_SLURM_OUTPUT_DIR is the documented knob (hpc.env); the bare
+# SLURM_OUTPUT_DIR fallback is kept for backwards compatibility.
+SLURM_OUTPUT_DIR="${FLOWR_SLURM_OUTPUT_DIR:-${SLURM_OUTPUT_DIR:-${HOME}/slurm_outs}}"
 mkdir -p "$SLURM_OUTPUT_DIR"
 
 source "${_HPC_DIR}/worker_common.sh"
