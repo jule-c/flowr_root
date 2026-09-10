@@ -186,6 +186,8 @@ sbatch scripts/generate_pdb.sl
 - `--compute_interactions`: Needed for interaction_conditional (using ProLIF to extract interactions)
 - `--filter_cond_substructure`: Filter to ensure inpainting constraint is satisfied
 
+**⚠️ Diversity filtering starves inpainting runs:** `scripts/generate_pdb.sl` ships with `--filter_diversity --diversity_threshold 0.7`, which is a poor fit for the modes above: constrained outputs are similar by construction - every molecule keeps the same fixed core - so nearly all pairs exceed 0.7 Tanimoto and get discarded. Measured on 1iep, substructure inpainting produced 20 valid, fully substructure-matching molecules per iteration yet finished with 2 ligands after 11 iterations, versus 8-20 molecules in a third of the time without the filter. When inpainting, drop `--filter_diversity` or raise `--diversity_threshold` well above the default.
+
 **Prior Options:**
 
 - `--anisotropic_prior`: Use an anisotropic (pocket-shape-adapted) prior distribution instead of the default isotropic Gaussian. This better captures the binding site geometry and can improve pose quality.
@@ -225,8 +227,9 @@ added, reading all ligands from one SDF and averaging over several seeds:
 sbatch scripts/predict_aff_multi.sl
 ```
 
-- **Output**: Ligands are saved as an SDF file at the specified location (save_dir).
-The SDF file contains predicted affinity values (pIC50, pKi, pKd, pEC50)
+- **Output**: The scored ligands are saved as an SDF file at the specified location (save_dir).
+These are the input structures you supplied - affinity prediction scores the ligand it is
+given, it does not generate one - annotated with the predicted affinity values (pIC50, pKi, pKd, pEC50)
 
 ### Generating Molecules from SDF (Ligand-only)
 

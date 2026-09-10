@@ -108,7 +108,9 @@ def evaluate(args):
             seed=args.seed + i,
         )
 
-        # validity of generated ligands
+        # Sanity check on the scored ligands. These are the *input* ligands (affinity
+        # prediction scores what it is given, it does not generate molecules), so this
+        # is a check on the input data rather than on model output.
         validity = np.mean(
             [smolRD.mol_is_valid(mol, connected=True) for mol in gen_ligs_with_aff]
         )
@@ -123,7 +125,7 @@ def evaluate(args):
         f"\n Mean run time={round(global_run_time, 2)}s for {len(all_gen_ligs_with_aff)} molecules"
     )
     print(f"Mean time per batch={np.mean(times):.3f} \\pm {np.std(times):.2f} seconds")
-    print(f"Validity of generated ligands: {np.mean(validities):.3f}\n")
+    print(f"Validity of scored ligands: {np.mean(validities):.3f}\n")
 
     # Save ligands as SDF
     sdf_path = Path(args.save_dir) / "gen_ligs_with_aff.sdf"
