@@ -67,3 +67,6 @@ oe_license.txt
 code_to_pdf.py
 flowr_code.pdf
 flowr_code.html
+
+# FLOWR.ui writes saved ligands here (POST /save-all-ligands)
+output/

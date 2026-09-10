@@ -39,7 +39,7 @@ extras.
 
 ```bash
 # From the project root — run once:
-uv sync --extra cpu --extra vis     # macOS / Apple Silicon (MPS or CPU)
+uv sync --extra cpu --extra vis     # macOS / Apple Silicon (CPU)
 uv sync --extra gpu --extra vis     # Linux with CUDA
 ```
 
@@ -233,14 +233,16 @@ still gets installed because the root project depends on it; picking
 ```bash
 # From the project root — the worker needs a torch extra as well:
 uv sync --extra gpu --extra vis     # Linux / CUDA
-uv sync --extra cpu --extra vis     # macOS / CPU (MPS)
+uv sync --extra cpu --extra vis     # macOS / CPU
 
 # Start the GPU worker:
 ./flowr_vis/run_worker.sh --port 8788 --ckpt /path/to/model.ckpt
 ```
 
-The worker requires PyTorch with CUDA or MPS support plus the `flowr`
-package, which the sync installs in editable mode.
+The worker runs on CUDA where available and falls back to CPU otherwise; it needs
+the `flowr` package, which the sync installs in editable mode. Apple's MPS backend is
+**not** selected automatically -- see "Device selection" in the root README. CPU
+generation works but takes minutes rather than seconds.
 
 ## Environment Variables
 
@@ -298,7 +300,7 @@ flowr_vis/
 ## Frontend Libraries
 
 - [3Dmol.js 2.4.2](https://3dmol.csb.pitt.edu/) — 3D molecular viewer
-- [RDKit.js 2024.3.3](https://github.com/rdkit/rdkit-js) — 2D structure rendering
+- [RDKit.js 2025.03.4](https://github.com/rdkit/rdkit-js) — 2D structure rendering
 - [Plotly.js 2.35.0](https://plotly.com/javascript/) — Chemical/property space charts
 
 ## License
