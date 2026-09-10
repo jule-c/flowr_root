@@ -7,6 +7,9 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=YOUR_PARTITION
 #SBATCH --gres=gpu:1
+# NOTE: SLURM does not create these directories -- `mkdir -p` the slurm_outs path
+# once before your first submission or the job dies with
+# "slurmstepd: error: Unable to open file" and no other output.
 #SBATCH --output=YOUR_CODE_PATH/slurm_outs/pdb_gen/generate-sbdd_%j.out
 #SBATCH --error=YOUR_CODE_PATH/slurm_outs/pdb_gen/generate-sbdd_%j.err
 
@@ -24,7 +27,7 @@ num_workers=12
 
 # MAIN PATH
 dataset="YOUR_PROJECT_NAME"
-data_path="MAIN_PATH/$dataset"
+data_path="YOUR_MAIN_PATH/$dataset"
 
 # SAMPLING
 sampling_strategy="linear"
@@ -32,7 +35,7 @@ sampling_strategy="linear"
 
 # CKPT PATH
 ckpt_path="YOUR_CKPT_PATH"
-ckpt="$ckpt_path/flowr_root.ckpt"
+ckpt="$ckpt_path/flowr_root_v2.2.ckpt"
 
 
 # SAMPLING STEPS

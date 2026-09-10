@@ -7,6 +7,9 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=YOUR_PARTITION
 #SBATCH --gres=gpu:1
+# NOTE: SLURM does not create these directories -- `mkdir -p` the slurm_outs path
+# once before your first submission or the job dies with
+# "slurmstepd: error: Unable to open file" and no other output.
 #SBATCH --output=YOUR_CODE_PATH/slurm_outs/aff_pred/generate-sbdd_%j.out
 #SBATCH --error=YOUR_CODE_PATH/slurm_outs/aff_pred/generate-sbdd_%j.err
 
@@ -28,7 +31,7 @@ data_path="$main_path/$dataset"
 
 # CKPT PATH
 ckpt_path="YOUR_CKPT_PATH"
-ckpt="$ckpt_path/flowr_root.ckpt"
+ckpt="$ckpt_path/flowr_root_v2.2.ckpt"
 
 # NOISE INJECTION
 coord_noise_std=0.1
@@ -47,6 +50,7 @@ for seed in 2 42 512 1000; do
         --ligand_file "$data_path/YOUR_LIGAND.sdf" \
         --dataset $dataset \
         --gpus 1 \
+        --num_workers "$num_workers" \
         --seed $seed \
         --batch_cost $batch_cost \
         --arch pocket \

@@ -1226,6 +1226,20 @@ def main(args):
 
     data = os.path.join(args.data_path, args.split)
     txt_files = glob(os.path.join(data, "*.txt"))
+    if not txt_files:
+        raise SystemExit(
+            f"No '*.txt' files found in {data!r}.\n\n"
+            "This module drives preprocessing from the TXT pocket-residue files, and it "
+            "looks for them in <--data_path>/<--split>/ -- i.e. inside a "
+            f"{args.split!r} subdirectory of --data_path (change it with --split). "
+            "Every system needs <system>.txt alongside its <system>.pdb and <system>.sdf.\n\n"
+            "If your data is the flat directory of .pdb/.sdf files described under "
+            "'Input Data Requirements' in the README, use the documented entrypoint "
+            "instead, which does not need TXT files:\n"
+            "    python -m flowr.data.preprocess_data.preprocess --data_dir <dir> "
+            "--save_path <dir> --file_type pdb ...\n"
+            "  (see flowr/data/preprocess_data/custom_data/preprocess.sl)"
+        )
     pdb_files = [
         os.path.join(Path(file).parent, Path(file).stem.split("_")[0] + ".pdb")
         for file in txt_files

@@ -19,15 +19,16 @@ This is a research repository introducing FLOWR.root.
   - [Checkpoints](#checkpoints)
   - [Data](#data)
   - [Generating Molecules from PDB/CIF](#generating-molecules-from-pdbcif)
-  - [Generating Molecules from SDF (Ligand-only)](#generating-molecules-from-sdf)
+  - [Generating Molecules from SDF (Ligand-only)](#generating-molecules-from-sdf-ligand-only)
   - [Predicting Binding Affinities](#predicting-binding-affinities)
   - [Training](#training)
 - [Data Preprocessing](#data-preprocessing)
-  - [Input Data Requirements](#input-data-requirements)
-  - [Preprocessing Workflow](#preprocessing-workflow)
+  - [Input Data Requirements](#-input-data-requirements)
+  - [Preprocessing Workflow](#-preprocessing-workflow)
 - [Finetuning](#finetuning)
   - [Prerequisites](#prerequisites)
-  - [Running Fine-tuning](#running-fine-tuning)
+  - [Running Full Fine-tuning](#running-full-fine-tuning)
+  - [Running LoRA Fine-tuning](#running-lora-fine-tuning)
 - [Contributing](#contributing)
 - [License](#license)
 - [Citation](#citation)
@@ -66,13 +67,14 @@ This is a research repository introducing FLOWR.root.
    versions recorded in the committed `uv.lock`, and installs FLOWR.root itself into
    the environment.
 
-   To also install FLOWR.ui, the notebook tutorial, or the extended evaluation
-   metrics, add the corresponding extras:
+   To also install FLOWR.ui, the notebook tutorial, the extended evaluation
+   metrics, or the PLINDER dataset utilities, add the corresponding extras:
 
    ```bash
    uv sync --extra gpu --extra vis          # + FLOWR.ui web app
    uv sync --extra cpu --extra notebooks    # + examples/examples.ipynb
    uv sync --extra gpu --extra eval         # + FCD and extended metrics
+   uv sync --extra gpu --extra plinder      # + PLINDER dataset tooling
    ```
 
 2. **Run commands**
@@ -143,7 +145,7 @@ All checkpoints can be downloaded from [Google Drive](https://drive.google.com/d
 - `flowr_root_v2.2.ckpt` — latest joint ligand generation and affinity model.
 - `flowr_root_v2.ckpt` — original model behind most results in the paper; use it for reproduction.
 - `flowr_root_spindr_base.ckpt` — fully converged, generation-only model trained on SPINDR (shows slightly more creative ligand generation, less clashes OOD, best as ideation tool).
-- `flowr_root_v2_mol.ckpt` — ligand-only generation without protein context (see [Generating Molecules from SDF](#generating-molecules-from-sdf)).
+- `flowr_root_v2_mol.ckpt` — ligand-only generation without protein context (see [Generating Molecules from SDF](#generating-molecules-from-sdf-ligand-only)).
 
 ### Data
 
@@ -151,7 +153,8 @@ All datasets can be downloaded from [Google Drive](https://drive.google.com/driv
 
 ### Generating Molecules from PDB/CIF
 
-If you provide a protein PDB/CIF file, you need to provide a ligand file (SDF/MOL/PDB) as well to cut out the pocket (default: 7A cutoff - modify if needed).
+If you provide a protein PDB/CIF file, you need to provide a ligand file (SDF/MOL/PDB) as well to cut out the pocket. The `--pocket_cutoff` default is 6 Å; the shipped
+`scripts/generate_pdb.sl` passes `--pocket_cutoff 7` - modify either if needed.
 We recommend using (Schrödinger-)prepared complexes for best results with the protein and ligand being protonated.
 
 Note, if you want to run conditional generation, you need to provide a ligand file as reference.
@@ -175,8 +178,8 @@ sbatch scripts/generate_pdb.sl
 - `--fragment_growing`: Fragment-constrained generation (using provided fragment to grow from)
 - `--grow_size`: Number of atoms to grow additional to given fragment (only for fragment_growing mode)
 - `--prior_center_file`: Provide starting coordinate(s)/density as xyz file (can be std. xyz-file, only x y z, or numpy array-like 2d matrix; only for fragment_growing mode)
-- `--core_growing`: Core-constrained generation (using RDKit to extract a core; if multiple cores, select by index using -- ring_system_index, which defaults to 0)
-- `--ring_system_index`: Use when running core_growing to select the core (default: 0; only relevant if number of cores > 0)
+- `--core_growing`: Core-constrained generation (using RDKit to extract a core; if multiple cores, select by index using `--ring_system_index`, which defaults to 0)
+- `--ring_system_index`: Use when running core_growing to select the core (default: 0; only relevant if number of cores > 1)
 - `--scaffold_hopping`: Scaffold generation (using RDKit to extract functional groups)
 - `--scaffold_elaboration`: Functional group generation (using RDKit to extract scaffold)
 - `--interaction_conditional`: Interaction-constrained generation mode (using ProLIF to extract interactions)
@@ -187,13 +190,13 @@ sbatch scripts/generate_pdb.sl
 
 - `--anisotropic_prior`: Use an anisotropic (pocket-shape-adapted) prior distribution instead of the default isotropic Gaussian. This better captures the binding site geometry and can improve pose quality.
 - `--ref_ligand_com_prior`: Center the prior distribution on the reference ligand's center of mass. Focuses generation around the known binding pose.
-- `--ref_ligand_com_noise_std`: Standard deviation of noise added to the reference ligand center of mass (default: 0.0). A small value (e.g., 0.05) adds slight spatial variation while keeping the prior anchored.
+- `--ref_ligand_com_noise_std`: Standard deviation of noise added to the reference ligand center of mass (default: 0.05). The default already adds slight spatial variation while keeping the prior anchored; raise it to explore more, or set it to `0.0` to pin the prior exactly on the reference center of mass.
 
 **Post-processing Options:**
 
 - `--filter_valid_unique`: Filter for valid and unique molecules
 - `--filter_diversity`: Apply diversity filtering
-- `--diversity_threshold`: Tanimoto similarity threshold for diversity (default: 0.7)
+- `--diversity_threshold`: Tanimoto similarity threshold for diversity (default: 0.9; `scripts/generate_pdb.sl` sets 0.7 for stricter filtering)
 - `--optimize_gen_ligs`: Optimize geometries in-pocket (using RDKit)
 - `--optimize_gen_ligs_hs`: Optimize ligand hydrogens in-pocket (using RDKit)
 - `--filter_cond_substructure`: Filter to ensure inpainting constraint is satisfied
@@ -212,6 +215,14 @@ Modify `scripts/predict_aff.sl` according to your requirements, then submit the 
 
 ```bash
 sbatch scripts/predict_aff.sl
+```
+
+For scoring **many ligands against one protein** in a single job, use
+`scripts/predict_aff_multi.sl` instead. It is the same pipeline with `--multiple_ligands`
+added, reading all ligands from one SDF and averaging over several seeds:
+
+```bash
+sbatch scripts/predict_aff_multi.sl
 ```
 
 - **Output**: Ligands are saved as an SDF file at the specified location (save_dir).
@@ -276,12 +287,14 @@ Your input data should be organized in a folder named `data/` with the following
 - **Protein files**: PDB format
 - **Naming convention**: Files must share a consistent system identifier, like
 
+```text
 data/
 ├── system_1.sdf
 ├── system_1.pdb
 ├── system_2.sdf
 ├── system_2.pdb
 └── ...
+```
 
 #### Binding affinity labels (optional)
 
@@ -329,6 +342,7 @@ This script parallelizes the preprocessing across multiple jobs, creating N LMDB
 
    ```bash
    sbatch flowr/data/preprocess_data/custom_data/preprocess.sl
+   ```
 
 
 #### **Step 2: Merge LMDB Databases** (`merge.sl`)
@@ -341,6 +355,7 @@ Once all preprocessing jobs complete, merge the individual LMDB chunks into a si
 
    ```bash
    sbatch flowr/data/preprocess_data/custom_data/merge.sl
+   ```
 
 3. Output: Unified LMDB saved in final/ folder
 
@@ -359,7 +374,11 @@ This final step computes essential data distribution statistics required for tra
 **Option A: Custom Train/Val/Test Split**
 
 - Place your `splits.npz` file (with keys idx_train, idx_val and idx_test containing indices) in the `final/` folder
-- Comment out `--val_size` and `--test_size` parameters in `data_statistics.sl`
+- Comment out **both** `--val_size` and `--test_size` in `data_statistics.sl`. They are the
+  last two arguments of the command precisely so that this is safe: a commented-out line
+  ends a backslash-continued command, so anything you leave below it is silently dropped
+  and then run as a stray command (`--seed: command not found`). Comment the pair out
+  together, and never leave a live argument underneath them.
 
 **Option B: Random Split**
 
@@ -395,6 +414,7 @@ Before fine-tuning, ensure you have:
 
    ```bash
    sbatch scripts/finetune.sl
+   ```
 
 
 ### Running LoRA Fine-tuning
@@ -405,6 +425,7 @@ Before fine-tuning, ensure you have:
 
    ```bash
    sbatch scripts/finetune_lora.sl
+   ```
 
 ### Tuning EMA for small datasets
 
@@ -431,6 +452,13 @@ Rules of thumb:
 ## Contributing
 
 Contributions are welcome! If you have ideas, bug fixes, or improvements, please open an issue or submit a pull request.
+
+To run the test suite, install the `dev` extra and invoke pytest:
+
+```bash
+uv sync --extra cpu --extra dev
+uv run --no-sync pytest
+```
 
 ---
 

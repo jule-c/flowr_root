@@ -7,6 +7,9 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=YOUR_PARTITION
 #SBATCH --gres=gpu:1
+# NOTE: SLURM does not create these directories -- `mkdir -p` the slurm_outs path
+# once before your first submission or the job dies with
+# "slurmstepd: error: Unable to open file" and no other output.
 #SBATCH --output=YOUR_CODE_PATH/slurm_outs/pdb_gen/generate-sbdd_%j.out
 #SBATCH --error=YOUR_CODE_PATH/slurm_outs/pdb_gen/generate-sbdd_%j.err
 
@@ -76,7 +79,7 @@ uv run --no-sync python -m flowr.gen.generate_from_sdf_mol \
     --ligand_idx $ligand_idx \
     --arch flowr \
     --gpus "$num_gpus" \
-    --num_workers 12 \
+    --num_workers "$num_workers" \
     --batch_cost $batch_cost \
     --ckpt_path "$ckpt" \
     --save_dir "$save_dir" \
