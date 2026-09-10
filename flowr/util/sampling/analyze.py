@@ -27,7 +27,11 @@ import sascorer
 from torchmetrics import MaxMetric, MeanMetric
 from tqdm import tqdm
 
-from flowr.util.rdkit import write_sdf_file
+# NOTE: the local write_sdf_file, not flowr.util.rdkit's. This module's molecules
+# are wrapper objects carrying .rdkit_mol (see mol.rdkit_mol below), which is what
+# extract_mol=True unwraps; flowr.util.rdkit's version takes `name` and has no such
+# parameter, so the call in evaluate_posebusters raised TypeError unconditionally.
+from flowr.util.sampling.walters_filter import write_sdf_file
 from flowr.util.sampling.lipinski import lipinski_pass
 from flowr.util.sampling.utils import (
     angle_distance,
