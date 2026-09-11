@@ -1,5 +1,7 @@
+import logging
 import os
 import shutil
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from glob import glob
@@ -14,6 +16,14 @@ from tensordict import TensorDict
 import flowr.util.functional as smolF
 import flowr.util.metrics as Metrics
 import flowr.util.rdkit as smolRD
+from flowr.util.valence_repair import (
+    DEFAULT_MAX_EDITS,
+    DEFAULT_MAX_STATES,
+    DEFAULT_TOP_K,
+    repair_valence,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class MolBuilder:
@@ -26,6 +36,11 @@ class MolBuilder:
         pocket_noise=None,
         save_dir=None,
         n_workers=12,
+        ligand_valence_repair: bool = False,
+        ligand_valence_repair_max_edits: int = DEFAULT_MAX_EDITS,
+        ligand_valence_repair_top_k: int = DEFAULT_TOP_K,
+        ligand_valence_repair_max_states: int = DEFAULT_MAX_STATES,
+        ligand_valence_repair_allow_bond_deletion: bool = False,
     ):
         self.vocab = vocab
         self.vocab_charges = vocab_charges
@@ -34,7 +49,76 @@ class MolBuilder:
         self.pocket_noise = pocket_noise
         self.save_dir = save_dir
         self.n_workers = n_workers
+        # VALENCE-CONSTRAINED DECODE (default OFF => the argmax is the shipped one and
+        # `repair_valence` is never called at all). When on, a GENERATED molecule whose
+        # independent argmax fails to build is re-decoded to the model's OWN most probable
+        # valence-VALID assignment; see `_repair_valence_decode` and
+        # `flowr.util.valence_repair`. NOT inert: a charge, a bond order or an element can
+        # come back different, which is why it is gated on the build ALREADY having failed
+        # and why it is threaded through the `partial` rather than read off `self` -- the
+        # REFERENCE ligand goes through the same `_mol_from_tensors` and must never be
+        # repaired (see `ligs_from_complex`).
+        self.ligand_valence_repair = bool(ligand_valence_repair)
+        self.ligand_valence_repair_max_edits = int(ligand_valence_repair_max_edits)
+        self.ligand_valence_repair_top_k = int(ligand_valence_repair_top_k)
+        self.ligand_valence_repair_max_states = int(ligand_valence_repair_max_states)
+        # Deleting a bond is a DEMOTION in arithmetic ("no bond" is a class of the bond head
+        # with order 0) but a different act in chemistry: it can split the molecule, turning
+        # a valence failure into a disconnected one. That lifts plain validity and NOT
+        # fully-connected validity. False forbids anything->none while leaving
+        # triple->double->single alone. It defaults to False HERE (the donor's function
+        # default is True): this repo reports fully-connected validity, the donor's own
+        # measurement had a substantial minority of its repairs coming back disconnected,
+        # and the same was reproduced by hand in this repo's build path.
+        self.ligand_valence_repair_allow_bond_deletion = bool(
+            ligand_valence_repair_allow_bond_deletion
+        )
+        self._repair_lock = threading.Lock()
+        self._capped_warned = set()
+        self.reset_repair_stats()
         self._executor = None
+
+    def reset_repair_stats(self):
+        """Zero the valence-repair counters.
+
+        Counters, not a log line per molecule: a validation epoch decodes hundreds of
+        ligands and a per-molecule message would be unreadable. `rejected` (the repair
+        found a valid assignment but RDKit still refused to build it) and `cap_*` (the
+        search was truncated) are kept apart from `unrepaired` on purpose -- pooling them
+        would let a silently truncated search read as "nothing was repairable".
+
+        The key set must stay in lock-step with `Metrics.ValenceRepairStats.COUNTERS`;
+        `test_the_metric_counters_match_the_builder` is the guard against the two drifting.
+        """
+        self.repair_stats = {
+            "attempted": 0,
+            "repaired": 0,
+            # Of the repaired ones, how many came back as ONE fragment. "No bond" is a
+            # class of the bond head like any other, so the cheapest way out of an
+            # over-valence is sometimes to drop a bond -- which can split the molecule.
+            # That lifts plain validity but NOT fully-connected validity, and pooling the
+            # two would hide it.
+            "repaired_ok": 0,
+            "repaired_disconnected": 0,
+            "unrepaired": 0,
+            "rejected": 0,
+            "cap_states": 0,
+            "cap_edits": 0,
+            "edits_charges": 0,
+            "edits_bonds": 0,
+            "edits_types": 0,
+            # Of the accepted bond edits, how many DELETED the bond rather than lowering its
+            # order. This is the mechanism behind `repaired_disconnected`, and it is the
+            # tripwire on `ligand_valence_repair_allow_bond_deletion=False`: with the guard
+            # on it must be exactly 0, whatever else moved.
+            "edits_bond_deletions": 0,
+            # ... and the price of the guard: molecules left UNREPAIRED where a deletion
+            # candidate was actually suppressed. An upper bound on "the guard cost this
+            # molecule its repair" -- the suppressed deletion need not have fixed the
+            # valence either -- but without it the guard's cost is invisible, showing up
+            # only as `unrepaired` drifting for no stated reason.
+            "unrepaired_deletion_blocked": 0,
+        }
 
     def shutdown(self):
         if self._executor is not None:
@@ -78,7 +162,13 @@ class MolBuilder:
         )
 
         self._startup()
-        build_fn = partial(self._mol_from_tensors, sanitise=sanitise, add_hs=add_hs)
+        # GENERATED molecules: the valence repair is allowed here, and only here.
+        build_fn = partial(
+            self._mol_from_tensors,
+            sanitise=sanitise,
+            add_hs=add_hs,
+            valence_repair=self.ligand_valence_repair,
+        )
         futures = [self._executor.submit(build_fn, *items) for items in extracted]
         mols = [future.result() for future in futures]
         self.shutdown()
@@ -108,7 +198,16 @@ class MolBuilder:
         )
 
         self._startup()
-        build_fn = partial(self._mol_from_tensors, sanitise=sanitise, add_hs=add_hs)
+        # REFERENCE ligands: repair is hard-OFF, never `self.ligand_valence_repair`. Every
+        # caller of `ligs_from_complex` names the result `ref_ligs` and writes it out as
+        # `out_dict["ref_lig"]`; it is the ground truth that RMSD and substructure matching
+        # compare against, so a repair here would silently alter the thing being measured.
+        build_fn = partial(
+            self._mol_from_tensors,
+            sanitise=sanitise,
+            add_hs=add_hs,
+            valence_repair=False,
+        )
         futures = [self._executor.submit(build_fn, *items) for items in extracted]
         mols = [future.result() for future in futures]
         self.shutdown()
@@ -170,6 +269,109 @@ class MolBuilder:
         )
         return mol
 
+    def _repair_valence_decode(self, atom_dists, bond_dists, charge_dists):
+        """The model's most probable valence-VALID re-decode of an over-valent molecule.
+
+        Returns `((tokens, charges, bonds) | None, RepairOutcome | None)`. The triple is
+        None whenever nothing valid was reachable inside the bounds -- the molecule is then
+        delivered exactly as the argmax produced it, still broken. The outcome is None only
+        when there was nothing to search over at all.
+
+        The search is handed the very sheets `_mol_extract_*` argmaxed, and its answer is
+        turned back into a molecule through the SAME `vocab.tokens_from_indices`,
+        `vocab_charges.tokens_from_indices` and `smolF.bonds_from_adj` calls, so the
+        repaired graph is a decode of the model's own output rather than a parallel
+        construction. Coordinates, hybridization and aromaticity are not touched: the repair
+        changes discrete classes only, never geometry.
+
+        A molecule with no bond head or no charge head is left alone: there is nothing to
+        search over on the channel that produced the violation.
+        """
+        if bond_dists is None or charge_dists is None:
+            return None, None
+        outcome = repair_valence(
+            atom_probs=atom_dists,
+            charge_probs=charge_dists,
+            bond_probs=bond_dists,
+            atom_tokens=[
+                self.vocab.idx_token_map[index] for index in range(self.vocab.size)
+            ],
+            charge_values=[
+                self.vocab_charges.idx_token_map[index]
+                for index in range(self.vocab_charges.size)
+            ],
+            max_edits=self.ligand_valence_repair_max_edits,
+            top_k=self.ligand_valence_repair_top_k,
+            max_states=self.ligand_valence_repair_max_states,
+            allow_bond_deletion=self.ligand_valence_repair_allow_bond_deletion,
+        )
+        if not outcome.repaired:
+            return None, outcome
+        tokens = self.vocab.tokens_from_indices(
+            [int(index) for index in outcome.atom_classes.tolist()]
+        )
+        charges = np.array(
+            self.vocab_charges.tokens_from_indices(
+                [int(index) for index in outcome.charge_classes.tolist()]
+            )
+        )
+        bonds = (
+            smolF.bonds_from_adj(torch.from_numpy(outcome.bond_classes)).long().numpy()
+        )
+        return (tokens, charges, bonds), outcome
+
+    def _count_repair(self, outcome, accepted: bool, connected=None):
+        """Accumulate the repair counters under a lock; the build fans out over threads."""
+        # A build that failed for a reason OTHER than over-valence comes back
+        # `attempted=False` with the argmax untouched. It is not a repair opportunity and
+        # must not be counted: folding it into `unrepaired` would make the denominator the
+        # number of FAILED molecules rather than the number of over-valent ones, and the
+        # accept rate would read as a fraction of the wrong population.
+        if outcome is None or not outcome.attempted:
+            return
+        with self._repair_lock:
+            self.repair_stats["attempted"] += 1
+            if outcome.cap_hit is not None:
+                self.repair_stats[f"cap_{outcome.cap_hit}"] += 1
+            if accepted:
+                self.repair_stats["repaired"] += 1
+                if connected:
+                    self.repair_stats["repaired_ok"] += 1
+                else:
+                    self.repair_stats["repaired_disconnected"] += 1
+                for edit in outcome.edits:
+                    self.repair_stats[f"edits_{edit.channel}"] += 1
+                    if edit.deletes_a_bond():
+                        self.repair_stats["edits_bond_deletions"] += 1
+            elif outcome.repaired:
+                self.repair_stats["rejected"] += 1
+            else:
+                self.repair_stats["unrepaired"] += 1
+                if outcome.deletion_blocked:
+                    self.repair_stats["unrepaired_deletion_blocked"] += 1
+            warn = outcome.cap_hit is not None and outcome.cap_hit not in (
+                self._capped_warned
+            )
+            if warn:
+                self._capped_warned.add(outcome.cap_hit)
+        if warn:
+            # Once per builder per cap kind, and OUTSIDE the lock: a truncated search that
+            # logged nothing would be indistinguishable from "nothing was repairable", but
+            # a message per molecule would be unreadable.
+            logger.warning(
+                "ligand_valence_repair hit its '%s' cap (max_edits=%d, top_k=%d, "
+                "max_states=%d); such molecules are left UNREPAIRED and the count is in "
+                "MolBuilder.repair_stats",
+                outcome.cap_hit,
+                self.ligand_valence_repair_max_edits,
+                self.ligand_valence_repair_top_k,
+                self.ligand_valence_repair_max_states,
+            )
+
+    @staticmethod
+    def _is_connected(mol):
+        return mol.GetNumAtoms() > 0 and len(Chem.GetMolFrags(mol)) == 1
+
     def _mol_from_tensors(
         self,
         coords,
@@ -180,6 +382,7 @@ class MolBuilder:
         aromaticity_dists=None,
         sanitise=True,
         add_hs=False,
+        valence_repair=False,
     ):
         tokens = self._mol_extract_atomics(atom_dists)
         bonds = self._mol_extract_bonds(bond_dists) if bond_dists is not None else None
@@ -198,7 +401,7 @@ class MolBuilder:
             if aromaticity_dists is not None
             else None
         )
-        return smolRD.mol_from_atoms(
+        mol = smolRD.mol_from_atoms(
             coords.numpy(),
             tokens,
             bonds=bonds,
@@ -208,6 +411,48 @@ class MolBuilder:
             sanitise=sanitise,
             add_hs=add_hs,
         )
+        if not valence_repair or mol is not None:
+            # With the flag off this is the ONLY path, byte-for-byte the shipped one.
+            return mol
+        # Gated on the ORIGINAL build having already failed, which is what makes "it cannot
+        # touch a molecule that loads" a property of the control flow rather than of the
+        # search. `repair_valence` then classifies the failure itself: with no over-valent
+        # atom it returns `attempted=False` and the argmax untouched, so a failure with any
+        # other cause (an unknown token, a bad bond class, a kekulization error) costs one
+        # cheap scan and is left alone.
+        repaired, outcome = self._repair_valence_decode(
+            atom_dists, bond_dists, charge_dists
+        )
+        accepted = False
+        connected = None
+        if repaired is not None:
+            repaired_tokens, repaired_charges, repaired_bonds = repaired
+            # STALE AROMATICITY, known and accepted: the repair carries the `aromaticity`
+            # flags through untouched, so flipping the ELEMENT of an atom the model flagged
+            # aromatic can make the rebuild fail kekulization. That is graceful -- the
+            # candidate is refused below, counted `rejected`, and the original failure is
+            # delivered unchanged -- but it does lower the accept rate on aromatic-flagged
+            # molecules. Re-deriving aromaticity would mean scoring a molecule the model did
+            # not predict, which is the line this whole module refuses to cross.
+            candidate = smolRD.mol_from_atoms(
+                coords.numpy(),
+                repaired_tokens,
+                bonds=repaired_bonds,
+                charges=repaired_charges,
+                hybridization=hybridization,
+                aromaticity=aromaticity,
+                sanitise=sanitise,
+                add_hs=add_hs,
+            )
+            # Zero valence violations was necessary, not sufficient: RDKit has the last
+            # word, and a repair it still refuses is DISCARDED rather than delivered as a
+            # different failure.
+            accepted = candidate is not None
+            if accepted:
+                connected = self._is_connected(candidate)
+                mol = candidate
+        self._count_repair(outcome, accepted, connected)
+        return mol
 
     def mol_stabilities(self, coords, atom_dists, mask, bond_dists, charge_dists):
         extracted = self._extract_mols(
