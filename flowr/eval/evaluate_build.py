@@ -24,6 +24,12 @@ saved `gen_ligs` has already been reduced to the fully-connected survivors and e
 below reads 1.0.
 
     python -m flowr.eval.evaluate_build RUN_DIR [RUN_DIR ...] [--json out.json]
+    python -m flowr.eval.evaluate_build RUN_DIR ... --posebusters [--pb-limit 500]
+
+`--posebusters` adds the quality axis. Build success alone cannot say whether a change that
+delivers MORE molecules delivers WORSE ones, and that is the question any change to the
+decode or the sampler has to answer. It runs the `dock` config against the pocket the run
+itself wrote out, on CPU, so it is deliberately separate from generation.
 """
 
 from __future__ import annotations
@@ -79,7 +85,35 @@ def rates(counts: dict[str, int]) -> dict[str, float]:
     }
 
 
-def evaluate_run(run_dir: Path) -> dict[str, Any]:
+def posebusters_validity(mols: list, pdb_file: str, limit: int | None = None) -> dict:
+    """Fraction of molecules passing the full PoseBusters `dock` battery.
+
+    Subsample with `limit` when the point is to compare arms rather than to certify a run:
+    the battery is the slow part by orders of magnitude, and a few hundred molecules already
+    separates rates that differ by more than a couple of points.
+    """
+    from flowr.util.metrics import evaluate_pb_validity
+
+    usable = [m for m in mols if m is not None]
+    if limit is not None and len(usable) > limit:
+        step = len(usable) / limit  # even stride, not the first N -- order is batch order
+        usable = [usable[int(i * step)] for i in range(limit)]
+    if not usable:
+        return {"pb_n": 0, "pb_validity": None}
+    flags = evaluate_pb_validity(usable, pdb_file=pdb_file, return_list=True)
+    return {"pb_n": len(flags), "pb_validity": float(sum(flags)) / len(flags)}
+
+
+def _pocket_pdb(run_dir: Path, payload: dict) -> str | None:
+    """The pocket this run actually generated into, for the PoseBusters protein term."""
+    ref = payload.get("ref_pdb")
+    if isinstance(ref, str) and Path(ref).is_file():
+        return ref
+    hits = sorted(run_dir.glob("ref_pdbs/*.pdb")) + sorted(run_dir.glob("*.pdb"))
+    return str(hits[0]) if hits else None
+
+
+def evaluate_run(run_dir: Path, posebusters: bool = False, pb_limit=None) -> dict[str, Any]:
     """Census every `samples*.pt` under one run directory."""
     files = sorted(run_dir.glob("samples*.pt")) if run_dir.is_dir() else [run_dir]
     if not files:
@@ -128,6 +162,12 @@ def evaluate_run(run_dir: Path) -> dict[str, Any]:
         # would be indistinguishable from a run that lost everything.
         result["yield"] = None
         result["lost"] = None
+    if posebusters:
+        pdb = _pocket_pdb(run_dir, payload)
+        if pdb is None:
+            result.update({"pb_n": 0, "pb_validity": None, "pb_note": "no pocket pdb found"})
+        else:
+            result.update(posebusters_validity(mols, pdb, pb_limit))
     return result
 
 
@@ -136,12 +176,16 @@ def _row(result: dict[str, Any]) -> str:
     fc = result.get("n_fc_valid", result["fc_valid"])
     y = result.get("yield")
     lost = result.get("lost")
-    return (
+    row = (
         f"{Path(result['run']).name[:30]:<30} "
         f"{(sampled if sampled else '?'):>9} {fc:>9} "
         f"{(lost if lost is not None else '?'):>6} "
         f"{(f'{y:.4f}' if y is not None else '?'):>8} {result['disconnected']:>8}"
     )
+    if "pb_validity" in result:
+        pb = result["pb_validity"]
+        row += f" {(f'{pb:.4f}' if pb is not None else '?'):>11}"
+    return row
 
 
 if __name__ == "__main__":
@@ -150,12 +194,20 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("run_dirs", nargs="+", help="generation --save_dir (or a samples*.pt)")
     ap.add_argument("--json", dest="json_out", default=None, help="also write JSON here")
+    ap.add_argument("--posebusters", action="store_true",
+                    help="also run the PoseBusters dock battery (slow, CPU)")
+    ap.add_argument("--pb-limit", type=int, default=None,
+                    help="evenly subsample this many molecules per run for PoseBusters")
     args = ap.parse_args()
 
-    results = [evaluate_run(Path(d)) for d in args.run_dirs]
+    results = [
+        evaluate_run(Path(d), posebusters=args.posebusters, pb_limit=args.pb_limit)
+        for d in args.run_dirs
+    ]
 
     header = (
         f"{'run':<30} {'n_sampled':>9} {'fc_valid':>9} {'lost':>6} {'yield':>8} {'disconn':>8}"
+        + (f" {'pb_validity':>11}" if any("pb_validity" in r for r in results) else "")
     )
     print(header)
     print("-" * len(header))
