@@ -1498,3 +1498,47 @@ def optimize_molecule_rdkit(mol):
     except Exception as e:
         print(f"Error optimizing molecule: {e}")
         return None, None, None
+
+
+def repair_stats_summary(model):
+    """The valence-repair census for a finished run, or ``None`` if the repair never fired.
+
+    Read off the builder, which accumulates across the whole run (it is reset per epoch only
+    on the Lightning path). Worth printing rather than leaving on the object: ``cap_states``
+    and ``cap_edits`` are the honesty mechanism -- a search that ran out of budget leaves the
+    molecule UNREPAIRED, and without the counts a truncated search reads as "everything that
+    could be repaired was".
+    """
+    builder = getattr(model, "builder", None)
+    stats = getattr(builder, "repair_stats", None)
+    if not stats or not stats.get("attempted"):
+        return None
+    return dict(stats)
+
+
+def print_repair_stats(stats):
+    """Print the census returned by :func:`repair_stats_summary`, if there is one."""
+    if not stats:
+        return
+    attempted = stats["attempted"]
+    repaired = stats["repaired"]
+    print(
+        f"\nValence repair: {repaired}/{attempted} failed builds repaired "
+        f"({stats['repaired_ok']} connected, {stats['repaired_disconnected']} disconnected), "
+        f"{stats['unrepaired']} unrepairable, {stats['rejected']} rejected by the rebuild."
+    )
+    if stats["cap_states"] or stats["cap_edits"]:
+        print(
+            f"  bounds hit: max_states x{stats['cap_states']}, max_edits x{stats['cap_edits']} "
+            "-- those molecules were left UNREPAIRED, so this is not a complete search."
+        )
+    if stats["edits_bond_deletions"]:
+        print(
+            f"  {stats['edits_bond_deletions']} accepted edit(s) DELETED a bond; "
+            f"{stats['repaired_disconnected']} repair(s) came back disconnected."
+        )
+    if stats["unrepaired_deletion_blocked"]:
+        print(
+            f"  {stats['unrepaired_deletion_blocked']} molecule(s) were left unrepaired with "
+            "a bond deletion suppressed -- what the no-deletion guard cost."
+        )

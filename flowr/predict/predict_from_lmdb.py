@@ -245,6 +245,28 @@ def get_args():
     )
     parser.add_argument("--use_sde_simulation", action="store_true")
     parser.add_argument("--use_cosine_scheduler", action="store_true")
+
+    # Inference-time sampler guard and decode repair. Every one of these defaults OFF, so a
+    # command line that does not name them behaves exactly as before.
+    parser.add_argument("--cat_noise_euler_guard", action="store_true",
+        help="Silence the categorical sampling noise over the terminal window where the "
+             "Euler step stops being a valid probability step (1-t <= step*(1+noise*K)). "
+             "Without it a converged prediction is still kicked off its argmax at a rate "
+             "of (K-1)*noise/steps per step, which corrupts the input to the final passes.")
+    parser.add_argument("--ligand_valence_repair", action="store_true",
+        help="When a generated ligand's argmax decode FAILS to build, re-decode it to the "
+             "model's own highest-joint-probability assignment that satisfies the "
+             "RDKit-probed valence limits. CHANGES THE DELIVERED MOLECULE: an element, a "
+             "charge or a bond order can come back different from the argmax. Never "
+             "applied to reference ligands, and never to a molecule that already builds.")
+    parser.add_argument("--ligand_valence_repair_allow_bond_deletion", action="store_true",
+        help="Let the repair escape an over-valence by DELETING a bond, not just demoting "
+             "it. Off by default because deleting a bond can split the molecule, turning a "
+             "valence failure into a disconnected one -- that lifts validity but not "
+             "fully-connected validity.")
+    parser.add_argument("--ligand_valence_repair_max_edits", type=int, default=2)
+    parser.add_argument("--ligand_valence_repair_top_k", type=int, default=4)
+    parser.add_argument("--ligand_valence_repair_max_states", type=int, default=200)
     parser.add_argument(
         "--categorical_strategy", type=str, default=DEFAULT_CATEGORICAL_STRATEGY
     )

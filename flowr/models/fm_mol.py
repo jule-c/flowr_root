@@ -306,6 +306,21 @@ class LigandCFM(pl.LightningModule):
             vocab_hybridization=vocab_hybridization,
             vocab_aromatic=vocab_aromatic,
             save_dir=self.hparams.save_dir,
+            # Inference-time decode repair. `.get()` because the TRAINING path never sets
+            # these keys, and `self.hparams` raises on a missing attribute.
+            ligand_valence_repair=self.hparams.get("ligand_valence_repair", False),
+            ligand_valence_repair_allow_bond_deletion=self.hparams.get(
+                "ligand_valence_repair_allow_bond_deletion", False
+            ),
+            ligand_valence_repair_max_edits=self.hparams.get(
+                "ligand_valence_repair_max_edits", 2
+            ),
+            ligand_valence_repair_top_k=self.hparams.get(
+                "ligand_valence_repair_top_k", 4
+            ),
+            ligand_valence_repair_max_states=self.hparams.get(
+                "ligand_valence_repair_max_states", 200
+            ),
         )
         self.integrator = integrator
         self.builder = builder
