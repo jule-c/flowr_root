@@ -66,6 +66,7 @@ class Integrator:
         bond_mask_index=None,
         use_sde_simulation=False,
         use_cosine_scheduler=False,
+        cat_noise_euler_guard=False,
         eps=1e-5,
     ):
 
@@ -86,6 +87,7 @@ class Integrator:
         self.bond_mask_index = bond_mask_index
         self.use_sde_simulation = use_sde_simulation
         self.use_cosine_scheduler = use_cosine_scheduler
+        self.cat_noise_euler_guard = cat_noise_euler_guard
         self.eps = eps
 
         if self.use_cosine_scheduler:
@@ -108,6 +110,7 @@ class Integrator:
             "integration-coord-noise-scale": self.coord_noise_level,
             "use-sde-simulation": self.use_sde_simulation,
             "use-cosine-scheduler": self.use_cosine_scheduler,
+            "cat-noise-euler-guard": self.cat_noise_euler_guard,
         }
 
     def coord_step(
@@ -367,7 +370,22 @@ class Integrator:
         ones = [1] * (len(pred_dist.shape) - 1)
         times = t.view(-1, *ones).clamp(min=self.eps, max=1.0 - self.eps)
         noise = torch.zeros_like(times)
-        noise[times + step_size < 1.0] = self.cat_noise_level
+        # How much time the step needs before the uniform-noise term stops being a valid
+        # Euler step. `second_term` below adds `step_size * noise * p_current` to EVERY
+        # category, so even a perfectly converged prediction leaks `(K-1) * noise / N` of
+        # probability off the diagonal each step. Once the off-diagonal mass reaches 1 the
+        # `diags` clamp on line ~381 floors the CURRENT category at exactly zero and the
+        # sampler is forced to move -- the argmax is starved, not merely perturbed. The
+        # condition below is where that first happens, `1 - t > step_size * (1 + noise*K)`,
+        # so it scales itself per feature (5 for bonds, 8 for charges, 15/16 for atomics)
+        # with no hand-tuned constant.
+        #
+        # Default OFF: `guard` is then `step_size` and the comparison is the expression
+        # this sampler has always used, which silences the LAST step only.
+        guard = step_size
+        if self.cat_noise_euler_guard:
+            guard = step_size * (1.0 + self.cat_noise_level * n_categories)
+        noise[times + guard < 1.0] = self.cat_noise_level
 
         # Off-diagonal step probs
         mult = (1 + noise + (noise * (n_categories - 1) * times)) / (1 - times)
