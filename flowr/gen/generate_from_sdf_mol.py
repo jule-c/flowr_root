@@ -116,7 +116,9 @@ def evaluate(args):
         dataloader = util.get_dataloader(args, dataset, interpolant, iter=k)
         for batch in tqdm(dataloader, desc="Sampling", leave=False):
             prior, posterior, _, _ = batch
-            ref_mols = model._generate_mols(posterior)
+            # REFERENCE ligands -- never repaired, they are what generations are
+            # compared against.
+            ref_mols = model._generate_mols(posterior, valence_repair=False)
             batch_start = time.time()
             gen_mols = generate_molecules(
                 args,

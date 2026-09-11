@@ -332,14 +332,21 @@ def evaluate(args):
     out_dict["ref_lig_with_hs"] = ref_lig_with_hs
     out_dict["ref_pdb"] = ref_pdb
     out_dict["ref_pdb_with_hs"] = ref_pdb_with_hs
-    # Yield of the run, which was otherwise discarded: `num_sampled_ligands` counts what the
-    # model actually produced and `gen_ligs` only what survived `sanitize_list`, which keeps
-    # `mol_is_valid(..., connected=True)` alone. Without both numbers the delivered file
-    # cannot say whether a build-failure change moved anything -- every molecule in it is
-    # fully-connected valid by construction. Only meaningful with --filter_valid_unique off;
-    # with it on, the in-loop filter has already run and `n_sampled` counts survivors.
+    # Yield of the run, which was otherwise discarded. `gen_ligs` only ever holds what
+    # survived `sanitize_list`, which keeps `mol_is_valid(..., connected=True)` alone, so
+    # every molecule in the delivered file is fully-connected valid BY CONSTRUCTION and the
+    # file alone cannot say whether a build-failure change moved anything.
+    # `n_sampled` is the count entering the final sanitize -- with --filter_valid_unique off
+    # that is every molecule the model produced, which is what makes the yield a true rate.
+    # With it ON the in-loop validity/uniqueness/diversity filters have already run, so
+    # `n_sampled` counts survivors and the yield is not comparable; `prefiltered` records
+    # which case this was.
     out_dict["n_sampled"] = num_sampled_ligands
-    out_dict["n_fc_valid"] = len(all_gen_ligs)
+    # `num_ligands` is the survivor count BEFORE the per-target truncation a dozen lines
+    # above; `len(all_gen_ligs)` is after it. The yield needs the untruncated numerator,
+    # or a run that overshot its target reports a loss it did not suffer.
+    out_dict["n_fc_valid"] = num_ligands
+    out_dict["n_delivered"] = len(all_gen_ligs)
     out_dict["prefiltered"] = bool(args.filter_valid_unique)
     out_dict["run_time"] = run_time
     out_dict["repair_stats"] = util.repair_stats_summary(model)

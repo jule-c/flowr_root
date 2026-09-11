@@ -75,7 +75,7 @@ def rates(counts: dict[str, int]) -> dict[str, float]:
         "total": total,
         "validity": built / total,
         "fc_validity": counts["fc_valid"] / total,
-        "disconnection": (built - counts["fc_valid"]) / total,
+        "disconnection": counts["disconnected"] / total,
     }
 
 
@@ -86,12 +86,17 @@ def evaluate_run(run_dir: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"no samples*.pt under {run_dir}")
     mols: list = []
     sampled = 0
+    survived = 0
+    have_survived = False
     prefiltered = None
     repair: dict | None = None
     for path in files:
         payload = torch.load(path, weights_only=False)
         mols.extend(_flatten(payload.get("gen_ligs", [])))
         sampled += int(payload.get("n_sampled") or 0)
+        if payload.get("n_fc_valid") is not None:
+            survived += int(payload["n_fc_valid"])
+            have_survived = True
         if payload.get("prefiltered") is not None:
             prefiltered = bool(payload["prefiltered"]) or bool(prefiltered)
         if payload.get("repair_stats"):
@@ -110,18 +115,32 @@ def evaluate_run(run_dir: Path) -> dict[str, Any]:
     # not --filter_valid_unique was passed. So the saved population is ALWAYS fully-connected
     # valid and the census above reads 100% on every run. The only honest rate is the YIELD:
     # survivors over what the model actually produced, which `n_sampled` preserves.
+    # The numerator is the run's own untruncated survivor count when it recorded one; the
+    # delivered list is capped at --sample_n_molecules_per_target and would understate.
+    numerator = survived if have_survived else counts["fc_valid"]
     if sampled:
-        result["yield"] = counts["fc_valid"] / sampled
-        result["lost"] = sampled - counts["fc_valid"]
+        result["n_fc_valid"] = numerator
+        result["yield"] = numerator / sampled
+        result["lost"] = sampled - numerator
+    else:
+        # NOT zero -- unknown. Only `generate_from_pdb` records `n_sampled`; for every other
+        # entrypoint the denominator simply is not in the file, and reporting 0.0000 there
+        # would be indistinguishable from a run that lost everything.
+        result["yield"] = None
+        result["lost"] = None
     return result
 
 
 def _row(result: dict[str, Any]) -> str:
     sampled = result.get("n_sampled") or 0
+    fc = result.get("n_fc_valid", result["fc_valid"])
+    y = result.get("yield")
+    lost = result.get("lost")
     return (
-        f"{Path(result['run']).name[:30]:<30} {sampled:>9} {result['fc_valid']:>9} "
-        f"{result.get('lost', 0):>6} "
-        f"{(result.get('yield') or 0.0):>8.4f} {result['disconnected']:>8}"
+        f"{Path(result['run']).name[:30]:<30} "
+        f"{(sampled if sampled else '?'):>9} {fc:>9} "
+        f"{(lost if lost is not None else '?'):>6} "
+        f"{(f'{y:.4f}' if y is not None else '?'):>8} {result['disconnected']:>8}"
     )
 
 
@@ -147,9 +166,13 @@ if __name__ == "__main__":
         a, b = results
         print()
         print(f"delta ({Path(b['run']).name} - {Path(a['run']).name}):")
-        print(f"  yield        {(b.get('yield') or 0) - (a.get('yield') or 0):+.4f}")
-        print(f"  fc_valid     {b['fc_valid'] - a['fc_valid']:+d}")
-        print(f"  lost         {(b.get('lost') or 0) - (a.get('lost') or 0):+d}")
+        if a.get("yield") is None or b.get("yield") is None:
+            print("  yield        UNKNOWN -- at least one run did not record `n_sampled`,")
+            print("               so there is no denominator and no delta to report.")
+        else:
+            print(f"  yield        {b['yield'] - a['yield']:+.4f}")
+            print(f"  fc_valid     {b['n_fc_valid'] - a['n_fc_valid']:+d}")
+            print(f"  lost         {b['lost'] - a['lost']:+d}")
         if (b.get("n_sampled") or 0) != (a.get("n_sampled") or 0):
             print("  WARNING: the arms did not sample the same number of molecules, so the")
             print("           counts are not directly comparable -- compare yield instead.")

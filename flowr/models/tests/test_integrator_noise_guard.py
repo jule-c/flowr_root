@@ -110,6 +110,50 @@ class TerminalNoiseGuardTests(unittest.TestCase):
         self.assertEqual(_flips(guarded, t=0.85), 0)
 
 
+class NonTerminalGuardWarningTests(unittest.TestCase):
+    """The guard is stated in continuous time, so a coarse or non-uniform schedule can make
+    it silence the WHOLE trajectory rather than a terminal window.
+
+    Under `--ode_sampling_strategy log` the step grows as `1 - t` shrinks, so `(1-t)/step`
+    is roughly constant and the condition is all-or-nothing: below about `K + 1` steps it is
+    false everywhere and `--cat_sampling_noise_level` becomes a silent no-op. That must be
+    audible, because "terminal guard" does not lead anyone to expect it.
+    """
+
+    def test_warns_when_noise_is_suppressed_mid_trajectory(self):
+        integrator = _integrator(guard=True)
+        curr, pred, _ = _converged(n_atoms=32)
+        with self.assertLogs("flowr.models.integrator", level="WARNING") as caught:
+            # 1-t = 0.9 but a coarse step: guard = 0.1 * (1 + 1*15) = 1.6 > 0.9.
+            integrator._uniform_sample_step(curr, pred, torch.tensor([0.1]), 0.1)
+        self.assertIn("no longer a terminal guard", "\n".join(caught.output))
+
+    def test_warns_only_once(self):
+        integrator = _integrator(guard=True)
+        curr, pred, _ = _converged(n_atoms=32)
+        with self.assertLogs("flowr.models.integrator", level="WARNING") as caught:
+            for _ in range(5):
+                integrator._uniform_sample_step(curr, pred, torch.tensor([0.1]), 0.1)
+        self.assertEqual(len(caught.output), 1)
+
+    def test_does_not_warn_for_a_genuinely_terminal_window(self):
+        """The normal case: 100 linear steps, guard covering only the last ~K."""
+        integrator = _integrator(guard=True)
+        curr, pred, _ = _converged(n_atoms=32)
+        import logging
+
+        with self.assertNoLogs("flowr.models.integrator", level="WARNING"):
+            for t in (0.90, 0.95, 0.99):
+                integrator._uniform_sample_step(curr, pred, torch.tensor([t]), STEP)
+        logging.getLogger("flowr.models.integrator")  # keep the import used
+
+    def test_never_warns_while_the_guard_is_off(self):
+        integrator = _integrator(guard=False)
+        curr, pred, _ = _converged(n_atoms=32)
+        with self.assertNoLogs("flowr.models.integrator", level="WARNING"):
+            integrator._uniform_sample_step(curr, pred, torch.tensor([0.1]), 0.1)
+
+
 def _reference_uniform_sample_step(integrator, curr_dist, pred_dist, t, step_size):
     """`_uniform_sample_step` verbatim as it stands on main, for the equivalence test."""
     import flowr.util.functional as smolF

@@ -39,10 +39,16 @@ BOUNDS (and why they are safe)
 Only the FIRST violating atom is expanded. That is not a heuristic: an over-valent atom can
 only be relieved by lowering its valence (one of its own incident bonds) or by raising its
 limit (its own charge or its own element), so every solution must contain an edit from that
-atom's local set. Inside that set the search is exhaustive up to `top_k` alternatives per
-head and `max_edits` total edits, capped at `max_states` expansions. When a cap binds it is
-reported on the outcome (`cap_hit`) and logged -- a silently truncated search would read as
+atom's local set. Inside that set the search covers `top_k` alternatives per head and
+`max_edits` total edits, capped at `max_states` expansions. When a cap binds it is reported
+on the outcome (`cap_hit`) and logged -- a silently truncated search would read as
 "repaired everything".
+
+It is NOT exhaustive over that set, by one known omission: an edited slot is keyed by atom
+index alone, so editing an atom's charge also blocks editing its element (and vice versa),
+and the two-edit solution "charge AND element on the same atom" is unreachable. Measured
+over 4000 random decodes this costs about 0.3% of repairs (9 of ~1230). The molecules it
+loses are left UNREPAIRED rather than mangled, so the omission is conservative.
 
 DELETING A BOND IS A DEMOTION IN ARITHMETIC ONLY
 ------------------------------------------------
@@ -185,7 +191,7 @@ def _normalise(scores) -> np.ndarray:
     output gets the same answer -- pinned by a property test over both spellings.
 
     A `-inf` entry is the decode masks' own spelling of "this class is gone"
-    (`MolBuilder._mask_class`), and it must come out as probability ZERO in both branches,
+    (the decode's own masking convention), and it must come out as probability ZERO in both branches,
     never as a cheap alternative.
     """
     arr = np.asarray(scores, dtype=np.float64)
@@ -446,6 +452,12 @@ def _successors(
     over-valent (see the module docstring). A slot already edited by an ancestor state is
     skipped, so an edit sequence never re-litigates a slot: two edits to one slot are always
     dominated by the single edit to the final class, which the search already enumerates.
+
+    Slots are keyed by atom INDEX, so that skip is coarser than the argument justifies: the
+    charge head and the atom-type head share a key, and editing one blocks the other on the
+    same atom. The dominance argument does not hold across two different heads, so this
+    loses the "charge AND element on one atom" solution -- about 0.3% of repairs. Keyed by
+    `(channel, index)` it would not, at the cost of a larger frontier.
 
     Returns `(successors, suppressed)`, where `suppressed` says at least one candidate was
     withheld by `allow_bond_deletion=False`. The guard lives HERE rather than on the answer:

@@ -1501,19 +1501,26 @@ def optimize_molecule_rdkit(mol):
 
 
 def repair_stats_summary(model):
-    """The valence-repair census for a finished run, or ``None`` if the repair never fired.
+    """The valence-repair census for a finished run, or ``None`` if the repair was OFF.
 
-    Read off the builder, which accumulates across the whole run (it is reset per epoch only
-    on the Lightning path). Worth printing rather than leaving on the object: ``cap_states``
-    and ``cap_edits`` are the honesty mechanism -- a search that ran out of budget leaves the
-    molecule UNREPAIRED, and without the counts a truncated search reads as "everything that
-    could be repaired was".
+    Read off the builder, which accumulates for the life of the process: nothing calls
+    ``reset_repair_stats`` after construction, which is what a whole-run census wants.
+
+    Keyed on the FLAG, not on ``attempted``. Returning ``None`` for "nothing was
+    over-valent" would make a clean run indistinguishable from a run where the flag was
+    never passed, and those are different facts -- the first says the repair had nothing to
+    do, the second says it was not asked.
+
+    Worth recording rather than leaving on the object: ``cap_states`` and ``cap_edits`` are
+    the honesty mechanism -- a search that ran out of budget leaves the molecule UNREPAIRED,
+    and without the counts a truncated search reads as "everything that could be repaired
+    was".
     """
     builder = getattr(model, "builder", None)
-    stats = getattr(builder, "repair_stats", None)
-    if not stats or not stats.get("attempted"):
+    if builder is None or not getattr(builder, "ligand_valence_repair", False):
         return None
-    return dict(stats)
+    stats = getattr(builder, "repair_stats", None)
+    return dict(stats) if stats else None
 
 
 def print_repair_stats(stats):
@@ -1522,6 +1529,9 @@ def print_repair_stats(stats):
         return
     attempted = stats["attempted"]
     repaired = stats["repaired"]
+    if not attempted:
+        print("\nValence repair: ON, but no build failed with an over-valence.")
+        return
     print(
         f"\nValence repair: {repaired}/{attempted} failed builds repaired "
         f"({stats['repaired_ok']} connected, {stats['repaired_disconnected']} disconnected), "

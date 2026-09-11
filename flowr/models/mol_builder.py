@@ -90,6 +90,7 @@ class MolBuilder:
         The key set must stay in lock-step with `Metrics.ValenceRepairStats.COUNTERS`;
         `test_the_metric_counters_match_the_builder` is the guard against the two drifting.
         """
+        self._capped_warned = set()
         self.repair_stats = {
             "attempted": 0,
             "repaired": 0,
@@ -150,7 +151,17 @@ class MolBuilder:
         aromaticity_dists=None,
         sanitise=True,
         add_hs=False,
+        valence_repair=None,
     ):
+        """`valence_repair=False` forces the decode repair OFF for this call.
+
+        This entry point decodes GENERATED molecules, so it follows the builder's setting
+        by default (`None`). But some callers route a REFERENCE or a scored ligand through
+        it -- ground truth in `fm_mol.validation_step`, the reference in
+        `generate_from_sdf_mol`, the decoded ligand an affinity belongs to in
+        `predict.predict_affinity_batch` -- and those must never be rewritten. The guard on
+        `ligs_from_complex` does not cover them, because they do not go through it.
+        """
         extracted = self._extract_mols(
             coords,
             atom_dists,
@@ -167,7 +178,9 @@ class MolBuilder:
             self._mol_from_tensors,
             sanitise=sanitise,
             add_hs=add_hs,
-            valence_repair=self.ligand_valence_repair,
+            valence_repair=(
+                self.ligand_valence_repair if valence_repair is None else bool(valence_repair)
+            ),
         )
         futures = [self._executor.submit(build_fn, *items) for items in extracted]
         mols = [future.result() for future in futures]

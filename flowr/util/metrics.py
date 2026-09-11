@@ -2165,9 +2165,17 @@ class ValenceRepairStats(Metric):
     "nothing was repairable".
 
     PURE MEASUREMENT: it consumes integers the builder counted anyway. With the repair off
-    every counter is 0 and the logged key set is unchanged, which is why it is safe to
-    register unconditionally -- a key set that appears and disappears with a flag breaks the
-    panel.
+    every counter is 0 and the key set is unchanged, so it would be safe to register
+    unconditionally -- a key set that appears and disappears with a flag breaks the panel.
+
+    NOT CURRENTLY REGISTERED anywhere. In this repo the repair is an INFERENCE-only knob:
+    it is threaded through `load_model` / `load_mol_model`, and the training path
+    (`build_model`) never sets the hparam, so a validation-loop metric would log zeros for
+    ever. The generation entrypoints report the same counters directly from
+    `MolBuilder.repair_stats` via `flowr.gen.utils.print_repair_stats`. This class is here
+    for the case where the repair is enabled during validation; wiring it means adding it
+    beside the other metrics in `fm_pocket` / `fm_mol` and calling
+    `update(self.builder.repair_stats)` in `on_validation_epoch_end`.
     """
 
     full_state_update = False

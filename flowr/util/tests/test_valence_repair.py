@@ -6,6 +6,7 @@ from behaviour verified by hand against this repo's own build path before the po
 """
 
 import unittest
+from unittest import mock
 
 import numpy as np
 import torch
@@ -255,6 +256,82 @@ class LimitTableTests(unittest.TestCase):
         is load-bearing: an unlimited limit means the search refuses them as edit targets."""
         self.assertEqual(max_valence("<PAD>", 0), UNLIMITED_VALENCE)
         self.assertEqual(max_valence("<NOATOM>", 0), UNLIMITED_VALENCE)
+
+
+class GateIsLoadBearingTests(unittest.TestCase):
+    """The gate is `mol is None`, and removing it must break a test.
+
+    Asserting `attempted is False` is NOT enough: the search reports that for any molecule
+    with no over-valence, so a build that succeeded would still pass while the gate was
+    gone. It matters, because the probed table and RDKit's sanitiser do NOT agree in every
+    cell -- an aromatic bond contributes 1.5, which a probe built from integer single bonds
+    cannot represent -- so molecules exist that BUILD and are over-valent per the table.
+    Without the gate those would be silently rewritten. So spy on the call instead.
+    """
+
+    @staticmethod
+    def _builder(**kwargs):
+        return MolBuilder(VOCAB, VOCAB_CHARGES, n_workers=1, **kwargs)
+
+    def test_the_search_is_not_even_called_when_the_build_succeeds(self):
+        builder = self._builder(ligand_valence_repair=True)
+        with mock.patch(
+            "flowr.models.mol_builder.repair_valence", wraps=repair_valence
+        ) as spy:
+            mols = builder.mols_from_tensors(**_batch(_valid_five()), sanitise=True)
+        self.assertIsNotNone(mols[0])
+        self.assertEqual(spy.call_count, 0, "the search ran on a molecule that BUILT")
+
+    def test_the_search_is_called_when_the_build_fails(self):
+        builder = self._builder(ligand_valence_repair=True)
+        with mock.patch(
+            "flowr.models.mol_builder.repair_valence", wraps=repair_valence
+        ) as spy:
+            builder.mols_from_tensors(**_batch(_overvalent("demote")), sanitise=True)
+        self.assertEqual(spy.call_count, 1)
+
+    def test_explicit_valence_repair_false_overrides_the_builder_setting(self):
+        """C1's mechanism: callers that decode a REFERENCE pass `valence_repair=False`.
+
+        `fm_mol.validation_step` (ground truth), `generate_from_sdf_mol` (the reference) and
+        `predict.predict_affinity_batch` (the ligand an affinity is reported for) all route
+        through `mols_from_tensors`, not `ligs_from_complex`, so the guard on the latter
+        does not cover them.
+        """
+        builder = self._builder(ligand_valence_repair=True)
+        with mock.patch(
+            "flowr.models.mol_builder.repair_valence", wraps=repair_valence
+        ) as spy:
+            mols = builder.mols_from_tensors(
+                **_batch(_overvalent("demote")), sanitise=True, valence_repair=False
+            )
+        self.assertEqual(spy.call_count, 0, "a reference decode reached the search")
+        self.assertIsNone(mols[0], "the reference was repaired")
+        self.assertEqual(builder.repair_stats["attempted"], 0)
+
+    def test_none_means_follow_the_builder_setting(self):
+        builder = self._builder(ligand_valence_repair=True)
+        mols = builder.mols_from_tensors(
+            **_batch(_overvalent("demote")), sanitise=True, valence_repair=None
+        )
+        self.assertIsNotNone(mols[0])
+
+
+class BoundsTests(unittest.TestCase):
+    def test_max_edits_zero_short_circuits_rather_than_exhausting_a_cap(self):
+        """`max_edits=0` is the untouched baseline, so it must not read as a HIT BOUND.
+
+        Falling through the loop instead of short-circuiting produces the same `edits=()`
+        and `repaired=False`, which is why asserting only those does not test this branch.
+        The observable difference is `cap_hit`, and a spurious "edits" there would both fire
+        the bound warning and inflate `cap_edits` -- i.e. report a truncated search where
+        none was attempted.
+        """
+        out = repair_valence(**_overvalent("demote"), max_edits=0, allow_bond_deletion=False)
+        self.assertEqual(out.edits, ())
+        self.assertFalse(out.repaired)
+        self.assertIsNone(out.cap_hit, "max_edits=0 reported a bound it never reached")
+        self.assertEqual(out.states_expanded, 0)
 
 
 if __name__ == "__main__":

@@ -2373,7 +2373,9 @@ class LigandPocketCFM(pl.LightningModule):
 
         return predicted
 
-    def _generate_mols(self, generated, scale=1.0, sanitise=True, add_hs=False):
+    def _generate_mols(
+        self, generated, scale=1.0, sanitise=True, add_hs=False, valence_repair=None
+    ):
         coords = generated["coords"] * scale
         atom_dists = generated["atomics"]
         bond_dists = generated["bonds"]
@@ -2390,6 +2392,7 @@ class LigandPocketCFM(pl.LightningModule):
             hybridization_dists=hybridization_dists,
             sanitise=sanitise,
             add_hs=add_hs,
+            valence_repair=valence_repair,
         )
 
         # affinity: TensorDict | None = generated.get("affinity", None)
