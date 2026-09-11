@@ -291,17 +291,26 @@ sbatch scripts/generate_pdb.sl
   model loader is an integration point rather than a shipped model -- it warns and raises
   unless you override `ADMEFilter._load_model()` with your own loader.
 
-**Decode and Sampler Options (all default OFF; a command line that does not name them behaves exactly as before):**
+**Decode and Sampler Options:**
 
-- `--ligand_valence_repair`: When a generated ligand's argmax decode *fails to build*, re-decode
-  it to the model's own highest-joint-probability assignment that satisfies the RDKit-probed
-  valence limits. The atom-type, charge and bond heads are argmaxed independently, so nothing
+Defaults: the valence repair is **on**, bond deletion is **forbidden**, the sampler guard is
+**off**. Measured on 1500 generations (ptp1b, seed 42, 100 steps), turning the repair on
+produced *the baseline population plus four molecules* — nothing altered, nothing dropped —
+because it is gated on a build that already failed. The four rescues were indistinguishable
+from the rest of the population (26.8 vs 27.1 heavy atoms, MW 440 vs 431, 3.0 vs 3.0 rings,
+all single-fragment).
+
+- `--ligand_valence_repair` / `--no_ligand_valence_repair`: **ON by default.** When a generated
+  ligand's argmax decode *fails to build*, re-decode it to the model's own
+  highest-joint-probability assignment that satisfies the RDKit-probed valence limits. The atom-type, charge and bond heads are argmaxed independently, so nothing
   otherwise stops that combination naming an impossible atom (three single bonds and one double
   on a neutral carbon is a valence of 5, and the build returns `None`).
-  **This changes the delivered molecule** — an element, a charge or a bond order can come back
-  different from the argmax. It is constrained decoding, not a rendering fix. It never consults
-  ground truth, never infers bonds from geometry, never deletes an atom or picks a fragment, is
-  never applied to reference ligands, and cannot touch a molecule that already builds.
+  It is constrained decoding, not a rendering fix: an element, a charge or a bond order can
+  come back different from the argmax. But because it runs only on a build that already
+  returned `None`, it can only **add** molecules — it cannot alter or drop one that built. It
+  never consults ground truth, never infers bonds from geometry, never deletes an atom or picks
+  a fragment, and is never applied to reference ligands. Pass `--no_ligand_valence_repair` for
+  the raw argmax decode.
 - `--ligand_valence_repair_allow_bond_deletion`: Let the repair escape an over-valence by
   *deleting* a bond rather than demoting it. Off by default: "no bond" is a bond class like any
   other, so deletion is often the cheapest escape — and it can split the molecule, converting a
@@ -312,7 +321,10 @@ sbatch scripts/generate_pdb.sl
   molecule **unrepaired**, is counted, and warns once — a truncated search must not read as
   "everything repairable was repaired". The counters are printed at the end of a run and saved
   as `out_dict["repair_stats"]`.
-- `--cat_noise_euler_guard`: Silence the categorical sampling noise over the terminal window
+- `--cat_noise_euler_guard`: **Off by default** — unlike the repair it changes *every*
+  trajectory rather than only failed builds (≈35% of generated molecules differ), and on the
+  evidence so far its benefit is not established (6→2 build failures in 1500, Fisher p = 0.29).
+  Silence the categorical sampling noise over the terminal window
   where the Euler step stops being a valid probability step (`1-t <= step*(1+noise*K)`). Without
   it, a converged prediction is still kicked off its own argmax at `(K-1)*noise/steps` per step —
   about 14% per step for atom types at the default 100 steps and `--cat_sampling_noise_level 1`.

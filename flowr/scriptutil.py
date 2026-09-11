@@ -1458,7 +1458,7 @@ def load_model(
     # a value given on the command line wins over anything stale in the checkpoint; read
     # back with `.get()` because the TRAINING path never sets these keys. `getattr` because
     # flowr_vis builds a partial Namespace rather than going through argparse.
-    hparams["ligand_valence_repair"] = getattr(args, "ligand_valence_repair", False)
+    hparams["ligand_valence_repair"] = getattr(args, "ligand_valence_repair", True)
     hparams["ligand_valence_repair_allow_bond_deletion"] = getattr(
         args, "ligand_valence_repair_allow_bond_deletion", False
     )
@@ -2024,7 +2024,7 @@ def load_mol_model(
     # a value given on the command line wins over anything stale in the checkpoint; read
     # back with `.get()` because the TRAINING path never sets these keys. `getattr` because
     # flowr_vis builds a partial Namespace rather than going through argparse.
-    hparams["ligand_valence_repair"] = getattr(args, "ligand_valence_repair", False)
+    hparams["ligand_valence_repair"] = getattr(args, "ligand_valence_repair", True)
     hparams["ligand_valence_repair_allow_bond_deletion"] = getattr(
         args, "ligand_valence_repair_allow_bond_deletion", False
     )
