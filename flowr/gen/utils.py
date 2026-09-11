@@ -1498,3 +1498,57 @@ def optimize_molecule_rdkit(mol):
     except Exception as e:
         print(f"Error optimizing molecule: {e}")
         return None, None, None
+
+
+def repair_stats_summary(model):
+    """The valence-repair census for a finished run, or ``None`` if the repair was OFF.
+
+    Read off the builder, which accumulates for the life of the process: nothing calls
+    ``reset_repair_stats`` after construction, which is what a whole-run census wants.
+
+    Keyed on the FLAG, not on ``attempted``. Returning ``None`` for "nothing was
+    over-valent" would make a clean run indistinguishable from a run where the flag was
+    never passed, and those are different facts -- the first says the repair had nothing to
+    do, the second says it was not asked.
+
+    Worth recording rather than leaving on the object: ``cap_states`` and ``cap_edits`` are
+    the honesty mechanism -- a search that ran out of budget leaves the molecule UNREPAIRED,
+    and without the counts a truncated search reads as "everything that could be repaired
+    was".
+    """
+    builder = getattr(model, "builder", None)
+    if builder is None or not getattr(builder, "ligand_valence_repair", False):
+        return None
+    stats = getattr(builder, "repair_stats", None)
+    return dict(stats) if stats else None
+
+
+def print_repair_stats(stats):
+    """Print the census returned by :func:`repair_stats_summary`, if there is one."""
+    if not stats:
+        return
+    attempted = stats["attempted"]
+    repaired = stats["repaired"]
+    if not attempted:
+        print("\nValence repair: ON, but no build failed with an over-valence.")
+        return
+    print(
+        f"\nValence repair: {repaired}/{attempted} failed builds repaired "
+        f"({stats['repaired_ok']} connected, {stats['repaired_disconnected']} disconnected), "
+        f"{stats['unrepaired']} unrepairable, {stats['rejected']} rejected by the rebuild."
+    )
+    if stats["cap_states"] or stats["cap_edits"]:
+        print(
+            f"  bounds hit: max_states x{stats['cap_states']}, max_edits x{stats['cap_edits']} "
+            "-- those molecules were left UNREPAIRED, so this is not a complete search."
+        )
+    if stats["edits_bond_deletions"]:
+        print(
+            f"  {stats['edits_bond_deletions']} accepted edit(s) DELETED a bond; "
+            f"{stats['repaired_disconnected']} repair(s) came back disconnected."
+        )
+    if stats["unrepaired_deletion_blocked"]:
+        print(
+            f"  {stats['unrepaired_deletion_blocked']} molecule(s) were left unrepaired with "
+            "a bond deletion suppressed -- what the no-deletion guard cost."
+        )

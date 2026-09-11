@@ -182,7 +182,10 @@ def predict_affinity_batch(
             # silently: fall back to the model's reconstruction and warn that the
             # written structure may not be the one that was scored.
             if decoded_ligs is None:
-                decoded_ligs = model._generate_mols(output)
+                # The decode of the ligand the affinity is being predicted FOR.
+                # Repairing it would silently change the structure the score is
+                # reported against, so it is left exactly as the model decoded it.
+                decoded_ligs = model._generate_mols(output, valence_repair=False)
             mol = decoded_ligs[idx] if idx < len(decoded_ligs) else None
             warnings.warn(
                 f"Could not recover the input ligand for system {system_id}. Falling "

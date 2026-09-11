@@ -1454,6 +1454,23 @@ def load_model(
     hparams["substructure"] = args.substructure
     hparams["data_path"] = args.data_path
     hparams["save_dir"] = args.save_dir
+    # Inference-time ligand valence repair. Splatted into `load_from_checkpoint` below, so
+    # a value given on the command line wins over anything stale in the checkpoint; read
+    # back with `.get()` because the TRAINING path never sets these keys. `getattr` because
+    # flowr_vis builds a partial Namespace rather than going through argparse.
+    hparams["ligand_valence_repair"] = getattr(args, "ligand_valence_repair", True)
+    hparams["ligand_valence_repair_allow_bond_deletion"] = getattr(
+        args, "ligand_valence_repair_allow_bond_deletion", False
+    )
+    hparams["ligand_valence_repair_max_edits"] = getattr(
+        args, "ligand_valence_repair_max_edits", 2
+    )
+    hparams["ligand_valence_repair_top_k"] = getattr(
+        args, "ligand_valence_repair_top_k", 4
+    )
+    hparams["ligand_valence_repair_max_states"] = getattr(
+        args, "ligand_valence_repair_max_states", 200
+    )
     # Set optimizer hyperparameters
     hparams["lr"] = args.lr if getattr(args, "lr", None) else hparams.get("lr", 1e-4)
     hparams["lr_schedule"] = (
@@ -1715,6 +1732,7 @@ def load_model(
         type_mask_index=type_mask_index,
         bond_mask_index=bond_mask_index,
         use_cosine_scheduler=args.use_cosine_scheduler,
+        cat_noise_euler_guard=getattr(args, "cat_noise_euler_guard", False),
     )
     _ckpt = ckpt_path if ckpt_path is not None else args.ckpt_path
     fm_model = CFM.load_from_checkpoint(
@@ -2002,6 +2020,23 @@ def load_mol_model(
     # Set dataset and save paths
     hparams["data_path"] = getattr(args, "data_path", None)
     hparams["save_dir"] = args.save_dir
+    # Inference-time ligand valence repair. Splatted into `load_from_checkpoint` below, so
+    # a value given on the command line wins over anything stale in the checkpoint; read
+    # back with `.get()` because the TRAINING path never sets these keys. `getattr` because
+    # flowr_vis builds a partial Namespace rather than going through argparse.
+    hparams["ligand_valence_repair"] = getattr(args, "ligand_valence_repair", True)
+    hparams["ligand_valence_repair_allow_bond_deletion"] = getattr(
+        args, "ligand_valence_repair_allow_bond_deletion", False
+    )
+    hparams["ligand_valence_repair_max_edits"] = getattr(
+        args, "ligand_valence_repair_max_edits", 2
+    )
+    hparams["ligand_valence_repair_top_k"] = getattr(
+        args, "ligand_valence_repair_top_k", 4
+    )
+    hparams["ligand_valence_repair_max_states"] = getattr(
+        args, "ligand_valence_repair_max_states", 200
+    )
     # Set sampling params
     hparams["integration-steps"] = args.integration_steps
     hparams["sampling_strategy"] = args.ode_sampling_strategy
@@ -2173,6 +2208,7 @@ def load_mol_model(
         type_mask_index=type_mask_index,
         bond_mask_index=bond_mask_index,
         use_cosine_scheduler=args.use_cosine_scheduler,
+        cat_noise_euler_guard=getattr(args, "cat_noise_euler_guard", False),
     )
 
     # Initialize the ligand flow model

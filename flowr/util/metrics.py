@@ -2135,3 +2135,102 @@ def calc_circular_wasserstein_distance(molecules1, molecules2, nbins=36):
     # Circular Wasserstein distance is computed as the total absolute deviation, scaled by bin width
     distance = np.sum(np.abs(diff - shift)) * bin_width
     return distance
+
+
+class ValenceRepairStats(Metric):
+    """Per-epoch outcome tally of the decode-time valence repair.
+
+    `MolBuilder` accumulates these counters whenever `ligand_valence_repair` is on, but a
+    raw move in validity carries neither of the two facts that make the move readable:
+
+    1. WHAT THE REPAIR BOUGHT. "No bond" is a class of the bond head like any other, so the
+       cheapest escape from an over-valence is sometimes DELETING a bond -- which lifts
+       plain validity but NOT fully-connected validity, and can convert a valence failure
+       into a disconnection. `repaired-ok` vs `repaired-disconnected` (and the derived
+       `repair-connected-rate`) is the only thing that separates "repaired 19, all
+       connected" from "repaired 19, eight of them by dropping a bond".
+       `edits-bond-deletions` names that mechanism directly and is the tripwire on
+       `ligand_valence_repair_allow_bond_deletion=False`: with the guard on it must be
+       exactly 0. `unrepaired-deletion-blocked` is what the guard COST -- molecules left
+       unrepaired where a deletion candidate was actually suppressed -- so a rise in
+       `repair-connected-rate` can be read against the repairs it gave up.
+    2. WHICH HEAD IS CHEAPEST TO MOVE. `edits-{charges,bonds,types}` counts the channel of
+       every accepted edit. This is head ATTRIBUTION from the model's own log-probabilities,
+       which is the only attribution available under de-novo evaluation, where the crystal
+       ligand is not the right answer for a freely generated molecule.
+
+    `rejected` (the search found a valence-valid assignment but RDKit still refused to build
+    it) and `cap-*` (the search was truncated by `max_edits` / `max_states`) are kept apart
+    from `unrepaired` on purpose: pooling them would let a silently truncated search read as
+    "nothing was repairable".
+
+    PURE MEASUREMENT: it consumes integers the builder counted anyway. With the repair off
+    every counter is 0 and the key set is unchanged, so it would be safe to register
+    unconditionally -- a key set that appears and disappears with a flag breaks the panel.
+
+    NOT CURRENTLY REGISTERED anywhere. In this repo the repair is an INFERENCE-only knob:
+    it is threaded through `load_model` / `load_mol_model`, and the training path
+    (`build_model`) never sets the hparam, so a validation-loop metric would log zeros for
+    ever. The generation entrypoints report the same counters directly from
+    `MolBuilder.repair_stats` via `flowr.gen.utils.print_repair_stats`. This class is here
+    for the case where the repair is enabled during validation; wiring it means adding it
+    beside the other metrics in `fm_pocket` / `fm_mol` and calling
+    `update(self.builder.repair_stats)` in `on_validation_epoch_end`.
+    """
+
+    full_state_update = False
+
+    #: Must equal `MolBuilder.reset_repair_stats`'s key set exactly; pinned by a test.
+    COUNTERS = (
+        "attempted",
+        "repaired",
+        "repaired_ok",
+        "repaired_disconnected",
+        "unrepaired",
+        "rejected",
+        "cap_states",
+        "cap_edits",
+        "edits_charges",
+        "edits_bonds",
+        "edits_types",
+        "edits_bond_deletions",
+        "unrepaired_deletion_blocked",
+    )
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # DDP CONTRACT: counts, so "sum" on every state. A "mean" would divide each rank's
+        # count by world_size and an 8-GPU eval would under-report 8x silently.
+        for name in self.COUNTERS:
+            self.add_state(name, default=torch.tensor(0), dist_reduce_fx="sum")
+
+    def update(self, stats) -> None:
+        """Add one tally -- typically `MolBuilder.repair_stats` for the epoch.
+
+        Adds rather than replaces, so a per-batch caller does not silently overwrite the
+        earlier batches.
+        """
+        unknown = sorted(set(stats) - set(self.COUNTERS))
+        if unknown:
+            raise ValueError(f"unknown repair counter(s) {unknown}")
+        for name in self.COUNTERS:
+            count = int(stats.get(name, 0))
+            if count:
+                setattr(self, name, getattr(self, name) + count)
+
+    def compute(self) -> dict[str, torch.Tensor]:
+        out = {
+            f"repair-{name.replace('_', '-')}": getattr(self, name).float()
+            for name in self.COUNTERS
+        }
+        # Zeros, never NaN, on an epoch that attempted nothing: a NaN poisons the logged
+        # series and is indistinguishable from a real regression on a wandb plot.
+        attempted = self.attempted.float()
+        repaired = self.repaired.float()
+        out["repair-accept-rate"] = repaired / (
+            attempted if float(attempted) > 0 else torch.ones_like(attempted)
+        )
+        out["repair-connected-rate"] = self.repaired_ok.float() / (
+            repaired if float(repaired) > 0 else torch.ones_like(repaired)
+        )
+        return out

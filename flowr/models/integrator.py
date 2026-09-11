@@ -1,7 +1,11 @@
+import logging
+
 import torch
 from torch import pi
 
 import flowr.util.functional as smolF
+
+logger = logging.getLogger(__name__)
 
 _T = torch.Tensor
 _BatchT = dict[str, _T]
@@ -66,6 +70,7 @@ class Integrator:
         bond_mask_index=None,
         use_sde_simulation=False,
         use_cosine_scheduler=False,
+        cat_noise_euler_guard=False,
         eps=1e-5,
     ):
 
@@ -86,6 +91,8 @@ class Integrator:
         self.bond_mask_index = bond_mask_index
         self.use_sde_simulation = use_sde_simulation
         self.use_cosine_scheduler = use_cosine_scheduler
+        self.cat_noise_euler_guard = cat_noise_euler_guard
+        self._guard_warned = False
         self.eps = eps
 
         if self.use_cosine_scheduler:
@@ -108,6 +115,7 @@ class Integrator:
             "integration-coord-noise-scale": self.coord_noise_level,
             "use-sde-simulation": self.use_sde_simulation,
             "use-cosine-scheduler": self.use_cosine_scheduler,
+            "cat-noise-euler-guard": self.cat_noise_euler_guard,
         }
 
     def coord_step(
@@ -355,6 +363,36 @@ class Integrator:
 
         return updated
 
+    def _warn_if_guard_is_not_terminal(self, times, noise, n_categories, step_size):
+        """Say so, once, when the guard stops being a TERMINAL guard.
+
+        The condition is stated in continuous time -- `1 - t > step * (1 + noise * K)` --
+        so with a uniform step it silences the last `~K` steps of many. But under a
+        non-uniform schedule (`--ode_sampling_strategy log`) the step grows as `1 - t`
+        shrinks, so `(1 - t) / step` is roughly CONSTANT along the trajectory and the
+        condition becomes all-or-nothing: below roughly `K + 1` steps it is false
+        everywhere and `--cat_sampling_noise_level` is silently a no-op. That may even be
+        the right call -- the Euler step really is invalid at that resolution -- but it is
+        not what "terminal guard" leads anyone to expect, so it must not be silent.
+        """
+        if self._guard_warned:
+            return
+        # Mid-trajectory suppression is the tell: more than half the time still to run.
+        if not bool(((noise == 0) & (times < 0.5)).any()):
+            return
+        self._guard_warned = True
+        logger.warning(
+            "cat_noise_euler_guard suppressed the categorical noise with more than half "
+            "the trajectory remaining (n_categories=%d, step_size=%.4g, "
+            "cat_noise_level=%s). This is no longer a terminal guard: at this step "
+            "resolution the condition 1-t > step*(1+noise*K) is false almost everywhere, "
+            "so cat_sampling_noise_level is effectively 0. Use more integration steps, or "
+            "a linear ode_sampling_strategy, if that is not what you intended.",
+            n_categories,
+            float(step_size) if not torch.is_tensor(step_size) else float(step_size.reshape(-1)[0]),
+            self.cat_noise_level,
+        )
+
     def _uniform_sample_step(
         self, curr_dist, pred_dist, t, step_size, symmetrize: bool = False
     ):
@@ -367,7 +405,40 @@ class Integrator:
         ones = [1] * (len(pred_dist.shape) - 1)
         times = t.view(-1, *ones).clamp(min=self.eps, max=1.0 - self.eps)
         noise = torch.zeros_like(times)
-        noise[times + step_size < 1.0] = self.cat_noise_level
+        # How much time the step needs before the uniform-noise term stops being a valid
+        # Euler step.
+        #
+        # There are two distinct effects, and it is worth keeping them apart because they
+        # behave differently:
+        #
+        #  * `second_term` adds `step_size * noise * p_current` to EVERY category, so even a
+        #    perfectly converged prediction leaks `(K-1) * noise / N` of probability off its
+        #    own diagonal on every noisy step -- 14% per step at K=15, N=100. This part is
+        #    CONSTANT in t: it is not a terminal effect at all, and the guard silences only
+        #    the tail of it.
+        #  * As `1 - t` shrinks, `mult` grows without bound, and for an UNCONVERGED
+        #    prediction the off-diagonal mass reaches 1. `diags` is then floored at exactly
+        #    zero and the sampler is FORCED off the current category -- starved, not merely
+        #    perturbed. This is the terminal effect, and it is what the condition below
+        #    bounds: `1 - t > step_size * (1 + noise * K)` is the p_current -> 0 case, i.e.
+        #    the earliest time any category can be starved.
+        #
+        # So the guard is sized by the second effect and incidentally truncates the first.
+        # It scales itself per feature (5 for bonds, 8 for charges, 15/16 for atomics) with
+        # no hand-tuned constant, because `n_categories` is read from the tensor.
+        #
+        # Stated in continuous time, which makes it schedule-agnostic -- but that also means
+        # a coarse or non-uniform (`log`) schedule can make it true nowhere; see
+        # `_warn_if_guard_is_not_terminal`.
+        #
+        # Default OFF: `guard` is then `step_size` and the comparison is the expression
+        # this sampler has always used, which silences the LAST step only.
+        guard = step_size
+        if self.cat_noise_euler_guard:
+            guard = step_size * (1.0 + self.cat_noise_level * n_categories)
+        noise[times + guard < 1.0] = self.cat_noise_level
+        if self.cat_noise_euler_guard:
+            self._warn_if_guard_is_not_terminal(times, noise, n_categories, step_size)
 
         # Off-diagonal step probs
         mult = (1 + noise + (noise * (n_categories - 1) * times)) / (1 - times)

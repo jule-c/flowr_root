@@ -306,6 +306,21 @@ class LigandCFM(pl.LightningModule):
             vocab_hybridization=vocab_hybridization,
             vocab_aromatic=vocab_aromatic,
             save_dir=self.hparams.save_dir,
+            # Inference-time decode repair. `.get()` because the TRAINING path never sets
+            # these keys, and `self.hparams` raises on a missing attribute.
+            ligand_valence_repair=self.hparams.get("ligand_valence_repair", False),
+            ligand_valence_repair_allow_bond_deletion=self.hparams.get(
+                "ligand_valence_repair_allow_bond_deletion", False
+            ),
+            ligand_valence_repair_max_edits=self.hparams.get(
+                "ligand_valence_repair_max_edits", 2
+            ),
+            ligand_valence_repair_top_k=self.hparams.get(
+                "ligand_valence_repair_top_k", 4
+            ),
+            ligand_valence_repair_max_states=self.hparams.get(
+                "ligand_valence_repair_max_states", 200
+            ),
         )
         self.integrator = integrator
         self.builder = builder
@@ -766,7 +781,8 @@ class LigandCFM(pl.LightningModule):
             if self.gen_dist_metrics is not None:
                 self.gen_dist_metrics.update(gen_mols)
             if self.graph_inpainting:
-                true_mols = self._generate_mols(data)
+                # GROUND TRUTH -- never let the decode repair rewrite it.
+                true_mols = self._generate_mols(data, valence_repair=False)
                 if self.hparams.remove_hs:
                     true_mols = [Chem.RemoveHs(mol) for mol in true_mols]
                 self.docking_metrics.update(gen_mols, true_mols)
@@ -1233,7 +1249,7 @@ class LigandCFM(pl.LightningModule):
             )
         return predicted
 
-    def _generate_mols(self, generated, scale=1.0, sanitise=True):
+    def _generate_mols(self, generated, scale=1.0, sanitise=True, valence_repair=None):
         coords = generated["coords"] * scale
         atom_dists = generated["atomics"]
         bond_dists = generated["bonds"]
@@ -1247,6 +1263,7 @@ class LigandCFM(pl.LightningModule):
             bond_dists=bond_dists,
             charge_dists=charge_dists,
             sanitise=sanitise,
+            valence_repair=valence_repair,
         )
         return mols
 

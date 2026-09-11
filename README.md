@@ -291,6 +291,55 @@ sbatch scripts/generate_pdb.sl
   model loader is an integration point rather than a shipped model -- it warns and raises
   unless you override `ADMEFilter._load_model()` with your own loader.
 
+**Decode and Sampler Options:**
+
+Defaults: the valence repair is **on**, bond deletion is **forbidden**, the sampler guard is
+**off**. Measured on 1500 generations (ptp1b, seed 42, 100 steps), turning the repair on
+produced *the baseline population plus four molecules* — nothing altered, nothing dropped —
+because it is gated on a build that already failed. The four rescues were indistinguishable
+from the rest of the population (26.8 vs 27.1 heavy atoms, MW 440 vs 431, 3.0 vs 3.0 rings,
+all single-fragment).
+
+- `--ligand_valence_repair` / `--no_ligand_valence_repair`: **ON by default.** When a generated
+  ligand's argmax decode *fails to build*, re-decode it to the model's own
+  highest-joint-probability assignment that satisfies the RDKit-probed valence limits. The atom-type, charge and bond heads are argmaxed independently, so nothing
+  otherwise stops that combination naming an impossible atom (three single bonds and one double
+  on a neutral carbon is a valence of 5, and the build returns `None`).
+  It is constrained decoding, not a rendering fix: an element, a charge or a bond order can
+  come back different from the argmax. But because it runs only on a build that already
+  returned `None`, it can only **add** molecules — it cannot alter or drop one that built. It
+  never consults ground truth, never infers bonds from geometry, never deletes an atom or picks
+  a fragment, and is never applied to reference ligands. Pass `--no_ligand_valence_repair` for
+  the raw argmax decode.
+- `--ligand_valence_repair_allow_bond_deletion`: Let the repair escape an over-valence by
+  *deleting* a bond rather than demoting it. Off by default: "no bond" is a bond class like any
+  other, so deletion is often the cheapest escape — and it can split the molecule, converting a
+  valence failure into a disconnected one. That lifts plain validity but **not** fully-connected
+  validity. With the flag off the repair keeps triple→double→single and forbids anything→none.
+- `--ligand_valence_repair_max_edits` (2), `--ligand_valence_repair_top_k` (4),
+  `--ligand_valence_repair_max_states` (200): search bounds. A bound that binds leaves the
+  molecule **unrepaired**, is counted, and warns once — a truncated search must not read as
+  "everything repairable was repaired". The counters are printed at the end of a run and saved
+  as `out_dict["repair_stats"]`.
+- `--cat_noise_euler_guard`: **Off by default** — unlike the repair it changes *every*
+  trajectory rather than only failed builds (≈35% of generated molecules differ), and on the
+  evidence so far its benefit is not established (6→2 build failures in 1500, Fisher p = 0.29).
+  Silence the categorical sampling noise over the terminal window
+  where the Euler step stops being a valid probability step (`1-t <= step*(1+noise*K)`). Without
+  it, a converged prediction is still kicked off its own argmax at `(K-1)*noise/steps` per step —
+  about 14% per step for atom types at the default 100 steps and `--cat_sampling_noise_level 1`.
+  Note the condition is stated in continuous time, so with few integration steps or
+  `--ode_sampling_strategy log` it can silence the *whole* trajectory rather than a terminal
+  window; it warns once when that happens.
+
+**Measuring a change to either of the above:** generation emits no `val-*` metric, and the
+`Validity rate:` it prints is *fully-connected* validity alone, which cannot separate a valence
+failure from a disconnection. Use `python -m flowr.eval.evaluate_build <save_dir> [<save_dir> ...]`,
+which reads the run's own `n_sampled` / `n_fc_valid` and reports the yield, the fragment
+breakdown and the repair counters. Run the arms **without** `--filter_valid_unique`, and pair
+them with `--max_sample_iter 0` so both burn the identical seed over the identical number of
+attempts (`--sample_n_molecules_per_target` *replicates the target*, so it is the attempt count).
+
 - **Output**: Generated ligands are saved as an SDF file at the specified location (save_dir) alongside the extracted pockets. The SDF file also contains predicted affinity values (pIC50, pKi, pKd, pEC50)
 - **Runtime**: Depends on system size, hardware specs. and batch size, but roughly 15s for 100 ligands on an H100 GPU.
 

@@ -637,6 +637,21 @@ class LigandPocketCFM(pl.LightningModule):
             vocab_aromatic=vocab_aromatic,
             pocket_noise=self.pocket_noise,
             save_dir=self.hparams.save_dir,
+            # Inference-time decode repair. `.get()` because the TRAINING path never sets
+            # these keys, and `self.hparams` raises on a missing attribute.
+            ligand_valence_repair=self.hparams.get("ligand_valence_repair", False),
+            ligand_valence_repair_allow_bond_deletion=self.hparams.get(
+                "ligand_valence_repair_allow_bond_deletion", False
+            ),
+            ligand_valence_repair_max_edits=self.hparams.get(
+                "ligand_valence_repair_max_edits", 2
+            ),
+            ligand_valence_repair_top_k=self.hparams.get(
+                "ligand_valence_repair_top_k", 4
+            ),
+            ligand_valence_repair_max_states=self.hparams.get(
+                "ligand_valence_repair_max_states", 200
+            ),
         )
 
         self.integrator = integrator
@@ -2358,7 +2373,9 @@ class LigandPocketCFM(pl.LightningModule):
 
         return predicted
 
-    def _generate_mols(self, generated, scale=1.0, sanitise=True, add_hs=False):
+    def _generate_mols(
+        self, generated, scale=1.0, sanitise=True, add_hs=False, valence_repair=None
+    ):
         coords = generated["coords"] * scale
         atom_dists = generated["atomics"]
         bond_dists = generated["bonds"]
@@ -2375,6 +2392,7 @@ class LigandPocketCFM(pl.LightningModule):
             hybridization_dists=hybridization_dists,
             sanitise=sanitise,
             add_hs=add_hs,
+            valence_repair=valence_repair,
         )
 
         # affinity: TensorDict | None = generated.get("affinity", None)
