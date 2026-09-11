@@ -85,23 +85,43 @@ def evaluate_run(run_dir: Path) -> dict[str, Any]:
     if not files:
         raise FileNotFoundError(f"no samples*.pt under {run_dir}")
     mols: list = []
+    sampled = 0
+    prefiltered = None
+    repair: dict | None = None
     for path in files:
         payload = torch.load(path, weights_only=False)
         mols.extend(_flatten(payload.get("gen_ligs", [])))
+        sampled += int(payload.get("n_sampled") or 0)
+        if payload.get("prefiltered") is not None:
+            prefiltered = bool(payload["prefiltered"]) or bool(prefiltered)
+        if payload.get("repair_stats"):
+            repair = payload["repair_stats"]
     counts = census(mols)
-    return {
+    result = {
         "run": str(run_dir),
         "files": [f.name for f in files],
         **counts,
         **rates(counts),
+        "n_sampled": sampled,
+        "prefiltered": prefiltered,
+        "repair_stats": repair,
     }
+    # `sanitize_list` keeps only `mol_is_valid(..., connected=True)`, and it runs whether or
+    # not --filter_valid_unique was passed. So the saved population is ALWAYS fully-connected
+    # valid and the census above reads 100% on every run. The only honest rate is the YIELD:
+    # survivors over what the model actually produced, which `n_sampled` preserves.
+    if sampled:
+        result["yield"] = counts["fc_valid"] / sampled
+        result["lost"] = sampled - counts["fc_valid"]
+    return result
 
 
 def _row(result: dict[str, Any]) -> str:
+    sampled = result.get("n_sampled") or 0
     return (
-        f"{Path(result['run']).name[:34]:<34} {result['total']:>7} "
-        f"{result['failed']:>7} {result['disconnected']:>7} {result['fc_valid']:>8} "
-        f"{result['validity']:>9.4f} {result['fc_validity']:>12.4f}"
+        f"{Path(result['run']).name[:30]:<30} {sampled:>9} {result['fc_valid']:>9} "
+        f"{result.get('lost', 0):>6} "
+        f"{(result.get('yield') or 0.0):>8.4f} {result['disconnected']:>8}"
     )
 
 
@@ -116,8 +136,7 @@ if __name__ == "__main__":
     results = [evaluate_run(Path(d)) for d in args.run_dirs]
 
     header = (
-        f"{'run':<34} {'total':>7} {'failed':>7} {'disconn':>7} {'fc_valid':>8} "
-        f"{'validity':>9} {'fc_validity':>12}"
+        f"{'run':<30} {'n_sampled':>9} {'fc_valid':>9} {'lost':>6} {'yield':>8} {'disconn':>8}"
     )
     print(header)
     print("-" * len(header))
@@ -128,10 +147,29 @@ if __name__ == "__main__":
         a, b = results
         print()
         print(f"delta ({Path(b['run']).name} - {Path(a['run']).name}):")
-        print(f"  validity     {b['validity'] - a['validity']:+.4f}")
-        print(f"  fc_validity  {b['fc_validity'] - a['fc_validity']:+.4f}")
-        print(f"  failed       {b['failed'] - a['failed']:+d}")
-        print(f"  disconnected {b['disconnected'] - a['disconnected']:+d}")
+        print(f"  yield        {(b.get('yield') or 0) - (a.get('yield') or 0):+.4f}")
+        print(f"  fc_valid     {b['fc_valid'] - a['fc_valid']:+d}")
+        print(f"  lost         {(b.get('lost') or 0) - (a.get('lost') or 0):+d}")
+        if (b.get("n_sampled") or 0) != (a.get("n_sampled") or 0):
+            print("  WARNING: the arms did not sample the same number of molecules, so the")
+            print("           counts are not directly comparable -- compare yield instead.")
+
+    for result in results:
+        if result.get("repair_stats"):
+            r = result["repair_stats"]
+            print(
+                f"\n{Path(result['run']).name}: valence repair "
+                f"{r['repaired']}/{r['attempted']} repaired "
+                f"({r['repaired_ok']} connected, {r['repaired_disconnected']} disconnected), "
+                f"{r['unrepaired']} unrepairable, {r['rejected']} rejected, "
+                f"bond deletions {r['edits_bond_deletions']}, "
+                f"caps {r['cap_states']}/{r['cap_edits']}"
+            )
+    if any(r.get("prefiltered") for r in results):
+        print(
+            "\nNOTE: at least one run used --filter_valid_unique, so its population was "
+            "filtered in-loop and its yield understates what the model produced."
+        )
 
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(results, indent=2))

@@ -332,6 +332,15 @@ def evaluate(args):
     out_dict["ref_lig_with_hs"] = ref_lig_with_hs
     out_dict["ref_pdb"] = ref_pdb
     out_dict["ref_pdb_with_hs"] = ref_pdb_with_hs
+    # Yield of the run, which was otherwise discarded: `num_sampled_ligands` counts what the
+    # model actually produced and `gen_ligs` only what survived `sanitize_list`, which keeps
+    # `mol_is_valid(..., connected=True)` alone. Without both numbers the delivered file
+    # cannot say whether a build-failure change moved anything -- every molecule in it is
+    # fully-connected valid by construction. Only meaningful with --filter_valid_unique off;
+    # with it on, the in-loop filter has already run and `n_sampled` counts survivors.
+    out_dict["n_sampled"] = num_sampled_ligands
+    out_dict["n_fc_valid"] = len(all_gen_ligs)
+    out_dict["prefiltered"] = bool(args.filter_valid_unique)
     out_dict["run_time"] = run_time
     out_dict["repair_stats"] = util.repair_stats_summary(model)
     print(
