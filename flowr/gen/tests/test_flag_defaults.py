@@ -33,6 +33,7 @@ FLAGS = (
     "--ligand_valence_repair_top_k",
     "--ligand_valence_repair_max_states",
     "--cat_noise_euler_guard",
+    "--no_cat_noise_euler_guard",
 )
 
 
@@ -79,15 +80,20 @@ class ShippedDefaultsTests(unittest.TestCase):
             # deleting is often the cheapest escape from an over-valence -- and it can split
             # the molecule, trading a valence failure for a disconnected one.
             self.assertFalse(args.ligand_valence_repair_allow_bond_deletion)
-            # The guard is OFF: it changes every trajectory, not just failed builds, and its
-            # benefit is not yet established.
-            self.assertFalse(args.cat_noise_euler_guard)
+            # The guard is ON as a correctness fix, not for a measured gain: over 4000
+            # generations it moved neither build yield (35 -> 36 failures) nor PoseBusters
+            # validity (0.9963 -> 0.9963). The Euler step genuinely is not a valid
+            # probability step in the window it silences, and at low integration counts
+            # that window is a large fraction of the trajectory.
+            self.assertTrue(args.cat_noise_euler_guard)
             self.assertEqual(args.ligand_valence_repair_max_edits, 2)
             self.assertEqual(args.ligand_valence_repair_top_k, 4)
             self.assertEqual(args.ligand_valence_repair_max_states, 200)
 
             sys.argv = list(argv) + ["--no_ligand_valence_repair"]
             self.assertFalse(get_args().ligand_valence_repair)
+            sys.argv = list(argv) + ["--no_cat_noise_euler_guard"]
+            self.assertFalse(get_args().cat_noise_euler_guard)
         finally:
             sys.argv = old
 
@@ -112,7 +118,8 @@ class ShippedDefaultsTests(unittest.TestCase):
         self.assertEqual(
             calls["--ligand_valence_repair_allow_bond_deletion"], ("store_true", "<absent>")
         )
-        self.assertEqual(calls["--cat_noise_euler_guard"], ("store_true", "<absent>"))
+        self.assertEqual(calls["--cat_noise_euler_guard"], ("store_true", True))
+        self.assertEqual(calls["--no_cat_noise_euler_guard"], ("store_false", "<absent>"))
 
 
 if __name__ == "__main__":

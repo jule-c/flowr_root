@@ -1732,7 +1732,7 @@ def load_model(
         type_mask_index=type_mask_index,
         bond_mask_index=bond_mask_index,
         use_cosine_scheduler=args.use_cosine_scheduler,
-        cat_noise_euler_guard=getattr(args, "cat_noise_euler_guard", False),
+        cat_noise_euler_guard=getattr(args, "cat_noise_euler_guard", True),
     )
     _ckpt = ckpt_path if ckpt_path is not None else args.ckpt_path
     fm_model = CFM.load_from_checkpoint(
@@ -2208,7 +2208,7 @@ def load_mol_model(
         type_mask_index=type_mask_index,
         bond_mask_index=bond_mask_index,
         use_cosine_scheduler=args.use_cosine_scheduler,
-        cat_noise_euler_guard=getattr(args, "cat_noise_euler_guard", False),
+        cat_noise_euler_guard=getattr(args, "cat_noise_euler_guard", True),
     )
 
     # Initialize the ligand flow model

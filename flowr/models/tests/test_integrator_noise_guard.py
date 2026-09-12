@@ -54,7 +54,13 @@ def _flips(integrator, t, seed=0):
 
 
 class TerminalNoiseGuardTests(unittest.TestCase):
-    def test_guard_defaults_to_off(self):
+    def test_the_integrator_primitive_still_defaults_to_off(self):
+        """The library primitive stays explicit; the opinion lives at the CLI.
+
+        `load_model` always sets the key, so inference gets the guard; `build_model`
+        (training) never sets it and therefore keeps the historical sampler. Same layering
+        as `MolBuilder.ligand_valence_repair`.
+        """
         self.assertFalse(Integrator(steps=N).cat_noise_euler_guard)
 
     def test_without_the_guard_a_converged_prediction_is_still_kicked_near_t1(self):

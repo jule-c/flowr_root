@@ -294,11 +294,24 @@ sbatch scripts/generate_pdb.sl
 **Decode and Sampler Options:**
 
 Defaults: the valence repair is **on**, bond deletion is **forbidden**, the sampler guard is
-**off**. Measured on 1500 generations (ptp1b, seed 42, 100 steps), turning the repair on
-produced *the baseline population plus four molecules* — nothing altered, nothing dropped —
-because it is gated on a build that already failed. The four rescues were indistinguishable
-from the rest of the population (26.8 vs 27.1 heavy atoms, MW 440 vs 431, 3.0 vs 3.0 rings,
-all single-fragment).
+**on**.
+
+Measured with a 2x2 factorial (repair x guard) over four targets, 1000 generations each at a
+fixed seed and a fixed attempt count — 4000 attempts per arm:
+
+| arm | build failures | PoseBusters validity |
+|---|---|---|
+| neither | 35 | 0.9963 |
+| **repair** | **2** (Fisher p = 9.6e-09) | 0.9969 |
+| guard | 36 (p = 1.000) | 0.9963 |
+| both | 4 | 0.9975 |
+
+The repair rescued 33 of 35 failures, on every target, with **zero bond deletions** and no
+quality cost — it does not buy molecules by lowering their standard. The guard moved neither
+number; it is on as a **correctness fix**, not for a measured gain (the Euler step genuinely
+is not a valid probability step in the window it silences, and at low integration counts that
+window is a large fraction of the trajectory). Disable either with `--no_ligand_valence_repair`
+/ `--no_cat_noise_euler_guard`.
 
 - `--ligand_valence_repair` / `--no_ligand_valence_repair`: **ON by default.** When a generated
   ligand's argmax decode *fails to build*, re-decode it to the model's own
@@ -321,9 +334,10 @@ all single-fragment).
   molecule **unrepaired**, is counted, and warns once — a truncated search must not read as
   "everything repairable was repaired". The counters are printed at the end of a run and saved
   as `out_dict["repair_stats"]`.
-- `--cat_noise_euler_guard`: **Off by default** — unlike the repair it changes *every*
-  trajectory rather than only failed builds (≈35% of generated molecules differ), and on the
-  evidence so far its benefit is not established (6→2 build failures in 1500, Fisher p = 0.29).
+- `--cat_noise_euler_guard` / `--no_cat_noise_euler_guard`: **ON by default.** Note it changes
+  *every* trajectory rather than only failed builds (≈35% of generated molecules differ), and
+  in the factorial above it changed neither build yield nor PoseBusters validity. It is on
+  because the correction is right, not because it measurably helps at 100 steps.
   Silence the categorical sampling noise over the terminal window
   where the Euler step stops being a valid probability step (`1-t <= step*(1+noise*K)`). Without
   it, a converged prediction is still kicked off its own argmax at `(K-1)*noise/steps` per step —
