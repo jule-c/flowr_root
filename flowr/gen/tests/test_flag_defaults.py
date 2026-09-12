@@ -122,5 +122,66 @@ class ShippedDefaultsTests(unittest.TestCase):
         self.assertEqual(calls["--no_cat_noise_euler_guard"], ("store_false", "<absent>"))
 
 
+class EveryConstructionSiteTests(unittest.TestCase):
+    """The knobs must reach EVERY model, not just the generation entrypoints.
+
+    The gap this pins: `load_model` (inference) and `build_model` (training) are separate
+    constructors. If only the first carries the settings, the in-training VALIDATION panel
+    samples and builds molecules differently from the shipped entrypoints -- so its validity
+    is not the validity anyone actually gets, and a training curve and a test-split number
+    disagree for a reason that has nothing to do with the model.
+    """
+
+    SCRIPTUTIL = REPO / "flowr/scriptutil.py"
+    TRAINERS = ["flowr/train.py", "flowr/train_mol.py", "flowr/finetune.py"]
+
+    def test_every_integrator_construction_passes_the_guard(self):
+        tree = ast.parse(self.SCRIPTUTIL.read_text())
+        sites = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "Integrator"
+        ]
+        self.assertGreaterEqual(len(sites), 5, "expected 2 inference + 3 training sites")
+        for i, node in enumerate(sites):
+            with self.subTest(site=i, line=node.lineno):
+                names = {k.arg for k in node.keywords}
+                self.assertIn(
+                    "cat_noise_euler_guard", names,
+                    f"Integrator at scriptutil.py:{node.lineno} does not pass the guard",
+                )
+
+    def test_every_model_hparams_dict_carries_the_repair_settings(self):
+        """Both inference loaders and all three training builders."""
+        text = self.SCRIPTUTIL.read_text()
+        self.assertGreaterEqual(
+            text.count('"ligand_valence_repair"'), 5,
+            "expected the repair key in 2 inference loaders + 3 training builders",
+        )
+        self.assertGreaterEqual(
+            text.count('"ligand_valence_repair_allow_bond_deletion"'), 5
+        )
+
+    def test_the_training_entrypoints_expose_the_flags(self):
+        for path in self.TRAINERS:
+            with self.subTest(entrypoint=path):
+                calls = _add_argument_calls(path)
+                self.assertEqual(calls.get("--ligand_valence_repair"), ("store_true", True))
+                self.assertEqual(
+                    calls.get("--no_ligand_valence_repair"), ("store_false", "<absent>")
+                )
+                self.assertEqual(calls.get("--cat_noise_euler_guard"), ("store_true", True))
+                self.assertEqual(
+                    calls.get("--no_cat_noise_euler_guard"), ("store_false", "<absent>")
+                )
+                # deletion stays forbidden on the training side too
+                self.assertEqual(
+                    calls.get("--ligand_valence_repair_allow_bond_deletion"),
+                    ("store_true", "<absent>"),
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

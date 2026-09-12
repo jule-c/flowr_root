@@ -306,6 +306,15 @@ fixed seed and a fixed attempt count — 4000 attempts per arm:
 | guard | 36 (p = 1.000) | 0.9963 |
 | both | 4 | 0.9975 |
 
+These defaults apply to **every** model construction, not just the generation scripts: both
+inference loaders (so all six generation entrypoints, both prediction entrypoints, `flowr_vis`
+and active learning), and all three training builders — so the **in-training validation panel
+builds and samples the same way generation does**. Without that the panel reports a validity
+the shipped entrypoints never produce, which is one reason a training curve and a test-split
+number disagree. Note this does change validation metrics for a training run, and therefore
+anything selecting checkpoints off them; `--no_ligand_valence_repair` /
+`--no_cat_noise_euler_guard` are available on `train.py`, `train_mol.py` and `finetune.py` too.
+
 The repair rescued 33 of 35 failures, on every target, with **zero bond deletions** and no
 quality cost — it does not buy molecules by lowering their standard. The guard moved neither
 number; it is on as a **correctness fix**, not for a measured gain (the Euler step genuinely
