@@ -6,7 +6,7 @@
 
 This is a research repository introducing FLOWR.root.
 
-**⚠️ PLEASE NOTE:** Due to computational constraints, the joint affinity and ligand generation model is not fully converged. As shown in the paper, it nevertheless reaches state-of-the-art performance across benchmarks, but we'd expect substantially better results with extended training (we found, e.g., that clash count can be a problem on OOD data, while less so in the fully converged structure-only model - a fully converged, generation-only model trained on SPINDR is also provided; see [Checkpoints](#checkpoints)). Also note, the affinity head is accurate in-distribution; on out-of-distribution data, e.g. OOD in-series compounds, it should be combined with LoRA adaptation (as described in the paper and fully supported by the code in this repo). The FLOWR.ui provides almost all functionalities of the model accessible via browser - use Claude/Codex to set it up for you in a few minutes, no code needed.
+**⚠️ PLEASE NOTE:** Due to computational constraints, the joint affinity and ligand generation model is not fully converged. As shown in the paper, it nevertheless reaches state-of-the-art performance across benchmarks, but we'd expect substantially better results with extended training (we found, e.g., that clash count can be a problem on OOD data, while less so in the fully converged structure-only model - a fully converged, structure-only model trained on SPINDR is also provided; see [Checkpoints](#checkpoints)). Also note, the affinity head is accurate in-distribution; on out-of-distribution data, e.g. OOD in-series compounds, it should be combined with LoRA adaptation (as described in the paper and fully supported by the code in this repo). The FLOWR.ui provides almost all functionalities of the model accessible via browser - use Claude/Codex to set it up for you in a few minutes, no code needed.
 
 ---
 
@@ -263,7 +263,7 @@ sbatch scripts/generate_pdb.sl
 - `--compute_interactions`: Needed for interaction_conditional (using ProLIF to extract interactions)
 - `--filter_cond_substructure`: Filter to ensure inpainting constraint is satisfied
 
-**⚠️ Diversity filtering starves inpainting runs:** diversity filtering is a poor fit for the modes above: constrained outputs are similar by construction - every molecule keeps the same fixed core - so nearly all pairs exceed the Tanimoto threshold and get discarded. Measured on 1iep with the `--diversity_threshold 0.7` that `scripts/generate_pdb.sl` used to ship, substructure inpainting produced 20 valid, fully substructure-matching molecules per iteration yet finished with 2 ligands after 11 iterations (411 s), versus 8-20 molecules in a third of the time without the filter. That script now ships `--diversity_threshold 0.95`, which only drops near-duplicates and is safe for the de-novo run it performs by default. **When you enable any inpainting mode, delete the `--filter_diversity` and `--diversity_threshold` lines from the command entirely.**
+** Diversity filtering might starve inpainting runs:** diversity filtering might be a poor fit for the modes above: constrained outputs are similar by construction - every molecule keeps the same fixed core - so often pairs exceed the Tanimoto threshold and get discarded. Set, e.g., `--diversity_threshold 0.95`, which only drops near-duplicates. So, **when you enable any inpainting mode, either drop `--filter_diversity` and/or set `--diversity_threshold` according to your needs.**
 
 **Prior Options:**
 
@@ -293,60 +293,25 @@ sbatch scripts/generate_pdb.sl
 
 **Decode and Sampler Options:**
 
-Defaults: the valence repair is **on**, bond deletion is **forbidden**, the sampler guard is
-**on**.
-
-Measured with a 2x2 factorial (repair x guard) over four targets, 1000 generations each at a
-fixed seed and a fixed attempt count — 4000 attempts per arm:
-
-| arm | build failures | PoseBusters validity |
-|---|---|---|
-| neither | 35 | 0.9963 |
-| **repair** | **2** (Fisher p = 9.6e-09) | 0.9969 |
-| guard | 36 (p = 1.000) | 0.9963 |
-| both | 4 | 0.9975 |
-
-These defaults apply to **every** model construction, not just the generation scripts: both
-inference loaders (so all six generation entrypoints, both prediction entrypoints, `flowr_vis`
-and active learning), and all three training builders — so the **in-training validation panel
-builds and samples the same way generation does**. Without that the panel reports a validity
-the shipped entrypoints never produce, which is one reason a training curve and a test-split
-number disagree. Note this does change validation metrics for a training run, and therefore
-anything selecting checkpoints off them; `--no_ligand_valence_repair` /
-`--no_cat_noise_euler_guard` are available on `train.py`, `train_mol.py` and `finetune.py` too.
-
-The repair rescued 33 of 35 failures, on every target, with **zero bond deletions** and no
-quality cost — it does not buy molecules by lowering their standard. The guard moved neither
-number; it is on as a **correctness fix**, not for a measured gain (the Euler step genuinely
-is not a valid probability step in the window it silences, and at low integration counts that
-window is a large fraction of the trajectory). Disable either with `--no_ligand_valence_repair`
+ Disable either with `--no_ligand_valence_repair`
 / `--no_cat_noise_euler_guard`.
 
 - `--ligand_valence_repair` / `--no_ligand_valence_repair`: **ON by default.** When a generated
   ligand's argmax decode *fails to build*, re-decode it to the model's own
   highest-joint-probability assignment that satisfies the RDKit-probed valence limits. The atom-type, charge and bond heads are argmaxed independently, so nothing
-  otherwise stops that combination naming an impossible atom (three single bonds and one double
-  on a neutral carbon is a valence of 5, and the build returns `None`).
+  otherwise stops that combination naming an impossible atom.
   It is constrained decoding, not a rendering fix: an element, a charge or a bond order can
-  come back different from the argmax. But because it runs only on a build that already
-  returned `None`, it can only **add** molecules — it cannot alter or drop one that built. It
-  never consults ground truth, never infers bonds from geometry, never deletes an atom or picks
-  a fragment, and is never applied to reference ligands. Pass `--no_ligand_valence_repair` for
-  the raw argmax decode.
+  come back different from the argmax.
 - `--ligand_valence_repair_allow_bond_deletion`: Let the repair escape an over-valence by
   *deleting* a bond rather than demoting it. Off by default: "no bond" is a bond class like any
   other, so deletion is often the cheapest escape — and it can split the molecule, converting a
-  valence failure into a disconnected one. That lifts plain validity but **not** fully-connected
-  validity. With the flag off the repair keeps triple→double→single and forbids anything→none.
+  valence failure into a disconnected one.
 - `--ligand_valence_repair_max_edits` (2), `--ligand_valence_repair_top_k` (4),
   `--ligand_valence_repair_max_states` (200): search bounds. A bound that binds leaves the
   molecule **unrepaired**, is counted, and warns once — a truncated search must not read as
   "everything repairable was repaired". The counters are printed at the end of a run and saved
   as `out_dict["repair_stats"]`.
-- `--cat_noise_euler_guard` / `--no_cat_noise_euler_guard`: **ON by default.** Note it changes
-  *every* trajectory rather than only failed builds (≈35% of generated molecules differ), and
-  in the factorial above it changed neither build yield nor PoseBusters validity. It is on
-  because the correction is right, not because it measurably helps at 100 steps.
+- `--cat_noise_euler_guard` / `--no_cat_noise_euler_guard`: **ON by default.**
   Silence the categorical sampling noise over the terminal window
   where the Euler step stops being a valid probability step (`1-t <= step*(1+noise*K)`). Without
   it, a converged prediction is still kicked off its own argmax at `(K-1)*noise/steps` per step —
@@ -355,13 +320,6 @@ window is a large fraction of the trajectory). Disable either with `--no_ligand_
   `--ode_sampling_strategy log` it can silence the *whole* trajectory rather than a terminal
   window; it warns once when that happens.
 
-**Measuring a change to either of the above:** generation emits no `val-*` metric, and the
-`Validity rate:` it prints is *fully-connected* validity alone, which cannot separate a valence
-failure from a disconnection. Use `python -m flowr.eval.evaluate_build <save_dir> [<save_dir> ...]`,
-which reads the run's own `n_sampled` / `n_fc_valid` and reports the yield, the fragment
-breakdown and the repair counters. Run the arms **without** `--filter_valid_unique`, and pair
-them with `--max_sample_iter 0` so both burn the identical seed over the identical number of
-attempts (`--sample_n_molecules_per_target` *replicates the target*, so it is the attempt count).
 
 - **Output**: Generated ligands are saved as an SDF file at the specified location (save_dir) alongside the extracted pockets. The SDF file also contains predicted affinity values (pIC50, pKi, pKd, pEC50)
 - **Runtime**: Depends on system size, hardware specs. and batch size, but roughly 15s for 100 ligands on an H100 GPU.
