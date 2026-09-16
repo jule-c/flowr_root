@@ -498,6 +498,22 @@ if __name__ == "__main__":
     parser.add_argument("--linker_inpainting", action="store_true")
     parser.add_argument("--core_growing", action="store_true")
     parser.add_argument("--use_cosine_scheduler", action="store_true")
+
+    # Inference-time decode repair and sampler guard. Declared here so the in-training
+    # VALIDATION panel can be made to match -- or deliberately not match -- what the
+    # generation entrypoints deliver. Same defaults as those entrypoints.
+    parser.add_argument("--ligand_valence_repair", dest="ligand_valence_repair",
+                        action="store_true", default=True)
+    parser.add_argument("--no_ligand_valence_repair", dest="ligand_valence_repair",
+                        action="store_false")
+    parser.add_argument("--ligand_valence_repair_allow_bond_deletion", action="store_true")
+    parser.add_argument("--ligand_valence_repair_max_edits", type=int, default=2)
+    parser.add_argument("--ligand_valence_repair_top_k", type=int, default=4)
+    parser.add_argument("--ligand_valence_repair_max_states", type=int, default=200)
+    parser.add_argument("--cat_noise_euler_guard", dest="cat_noise_euler_guard",
+                        action="store_true", default=True)
+    parser.add_argument("--no_cat_noise_euler_guard", dest="cat_noise_euler_guard",
+                        action="store_false")
     parser.add_argument(
         "--categorical_strategy", type=str, default=DEFAULT_CATEGORICAL_STRATEGY
     )

@@ -260,11 +260,20 @@ def get_args():
 
     # Inference-time sampler guard and decode repair. Every one of these defaults OFF, so a
     # command line that does not name them behaves exactly as before.
-    parser.add_argument("--cat_noise_euler_guard", action="store_true",
-        help="Silence the categorical sampling noise over the terminal window where the "
-             "Euler step stops being a valid probability step (1-t <= step*(1+noise*K)). "
-             "Without it a converged prediction is still kicked off its argmax at a rate "
-             "of (K-1)*noise/steps per step, which corrupts the input to the final passes.")
+    parser.add_argument("--cat_noise_euler_guard", dest="cat_noise_euler_guard",
+        action="store_true", default=True,
+        help="ON BY DEFAULT. Silence the categorical sampling noise over the terminal "
+             "window where the Euler step stops being a valid probability step "
+             "(1-t <= step*(1+noise*K)). Without it a converged prediction is still kicked "
+             "off its own argmax at (K-1)*noise/steps per step. Measured over 4000 "
+             "generations it changed neither build yield nor PoseBusters validity, so it is "
+             "on as a correctness fix rather than for a measured gain. Disable with "
+             "--no_cat_noise_euler_guard.")
+    parser.add_argument("--no_cat_noise_euler_guard", dest="cat_noise_euler_guard",
+        action="store_false",
+        help="Keep the historical sampler: uniform noise on every step but the last, "
+             "including the terminal window where the Euler step is not a valid "
+             "probability step.")
     parser.add_argument("--ligand_valence_repair", dest="ligand_valence_repair",
         action="store_true", default=True,
         help="ON BY DEFAULT. When a generated ligand's argmax decode FAILS to build, "
